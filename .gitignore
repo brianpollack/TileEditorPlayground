@@ -1,0 +1,39 @@
+.DS_Store
+
+# Secrets and local machine config
+.env
+.env.*
+!.env.example
+.npmrc
+**/.npmrc
+*.local
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Generated project output
+output/
+keep/
+fail/
+reports/
+report.html
+openrouter/models.json
+*.log
+*.tgz
+
+# React/Vite app under tile_server_19
+tile_server_19/node_modules/
+tile_server_19/dist/
+tile_server_19/.vite/
+tile_server_19/exports/
+tile_server_19/data/temp/

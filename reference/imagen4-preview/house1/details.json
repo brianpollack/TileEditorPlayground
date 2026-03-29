@@ -1,0 +1,31 @@
+{
+  "assistantText": "",
+  "cost": null,
+  "example2ImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/imagen4-preview/house1/example2.png",
+  "executionTimeMs": 9486,
+  "executionTimeSeconds": 9.486,
+  "exampleImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/imagen4-preview/house1/example.png",
+  "extractImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/imagen4-preview/house1/extract.png",
+  "generatedAt": "2026-03-25T23:43:03.362Z",
+  "localDate": "3/25/2026",
+  "localTime": "19:43:03",
+  "generationStats": {
+    "has_nsfw_concepts": null,
+    "requestId": "019d2761-30c9-7330-94ab-6ad5d54ddf86",
+    "seed": null,
+    "timings": null
+  },
+  "modelRequested": "fal-ai/imagen4/preview",
+  "modelReturned": "fal-ai/imagen4/preview",
+  "outputDirectory": "/Users/brian/Projects/GameTiles/output/house_simple/imagen4-preview/house1",
+  "output128ImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/imagen4-preview/house1/output128.png",
+  "outputImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/imagen4-preview/house1/output.png",
+  "outputTextPath": null,
+  "promptFile": "/Users/brian/Projects/GameTiles/prompts/house1.md",
+  "promptLength": 493,
+  "promptPreview": "Draw a cozy medieval style police station in a TOP DOWN 3/4 VIEW centered on a grass field.\n\nA seamless, tileable texture of a grassy field. Stylized 2D, hand-painted, cozy farming exploration RPG style. Top-down 3/4 perspective.\n\nUse vibra",
+  "provider": "fal",
+  "requestId": "019d2761-30c9-7330-94ab-6ad5d54ddf86",
+  "status": "success",
+  "usage": null
+}

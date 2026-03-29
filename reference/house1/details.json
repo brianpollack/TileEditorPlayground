@@ -1,0 +1,33 @@
+{
+  "assistantText": "Draw a cozy medieval style police station in a TOP DOWN 3/4 VIEW centered on a grass field.\n\nA seamless, tileable texture of a grassy field. Stylized 2D, hand-painted, cozy farming exploration RPG style. Top-down 3/4 perspective.\n\nUse vibrant, soft greens approximating #6FAF4B, #7EC850, and #4F8F3A. Do not use harsh colors, dark browns, or blacks.\n\nA single building showing the complete front view of the building and the roof which is how Pixel Art style Top Down Three-Quarter view works.",
+  "cost": null,
+  "example2ImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/flux-pro-v1-1/house1/example2.png",
+  "executionTimeMs": 8182,
+  "executionTimeSeconds": 8.182,
+  "exampleImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/flux-pro-v1-1/house1/example.png",
+  "extractImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/flux-pro-v1-1/house1/extract.png",
+  "generatedAt": "2026-03-25T23:51:07.025Z",
+  "localDate": "3/25/2026",
+  "localTime": "19:51:07",
+  "generationStats": {
+    "has_nsfw_concepts": [
+      false
+    ],
+    "requestId": "019d2768-96c8-7102-8d36-6dd3d03088e3",
+    "seed": 301487866,
+    "timings": {}
+  },
+  "modelRequested": "fal-ai/flux-pro/v1.1",
+  "modelReturned": "fal-ai/flux-pro/v1.1",
+  "outputDirectory": "/Users/brian/Projects/GameTiles/output/house_simple/flux-pro-v1-1/house1",
+  "output128ImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/flux-pro-v1-1/house1/output128.png",
+  "outputImagePath": "/Users/brian/Projects/GameTiles/output/house_simple/flux-pro-v1-1/house1/output.png",
+  "outputTextPath": "/Users/brian/Projects/GameTiles/output/house_simple/flux-pro-v1-1/house1/output.txt",
+  "promptFile": "/Users/brian/Projects/GameTiles/prompts/house1.md",
+  "promptLength": 493,
+  "promptPreview": "Draw a cozy medieval style police station in a TOP DOWN 3/4 VIEW centered on a grass field.\n\nA seamless, tileable texture of a grassy field. Stylized 2D, hand-painted, cozy farming exploration RPG style. Top-down 3/4 perspective.\n\nUse vibra",
+  "provider": "fal",
+  "requestId": "019d2768-96c8-7102-8d36-6dd3d03088e3",
+  "status": "success",
+  "usage": null
+}

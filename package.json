@@ -1,0 +1,51 @@
+{
+  "name": "gametiles",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GameTiles Node.js TypeScript project scaffold.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "cleanup": "tsx src/cleanup-output.ts",
+    "dev": "tsx watch src/index.ts",
+    "gen": "tsx src/run-gen.ts",
+    "gen:image": "tsx src/genImage.ts",
+    "gen:keep-report": "tsx src/gen_keep_report.ts",
+    "generate:test": "tsx src/run-pipeline.ts",
+    "keep": "tsx src/keep-output.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "models:refresh": "tsx src/run-pipeline.ts --models-only",
+    "tile:build": "npm --prefix tile_server_19 run build",
+    "tile:dev": "npm --prefix tile_server_19 run dev",
+    "tile:preview": "npm --prefix tile_server_19 run preview",
+    "tile:typecheck": "npm --prefix tile_server_19 run typecheck",
+    "typecheck": "tsc --project tsconfig.json --noEmit && npm --prefix tile_server_19 run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.5.0",
+    "@types/pngjs": "^6.0.5",
+    "eslint": "^10.1.0",
+    "globals": "^17.4.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.1"
+  },
+  "dependencies": {
+    "@fal-ai/client": "^1.9.5",
+    "@openrouter/sdk": "^0.9.11",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "dotenv": "^17.3.1",
+    "esbuild": "^0.27.4",
+    "jimp": "^1.6.0",
+    "pngjs": "^7.0.0",
+    "rc-dock": "^4.0.0-alpha.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  }
+}
