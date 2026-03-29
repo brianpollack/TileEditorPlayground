@@ -50,6 +50,7 @@ Relevant entry points:
 Tiles are stored as `TileRecord` objects.
 
 - `name`: display name
+- `path`: library folder path such as `layer_5` or `layer_5/consumables`
 - `slug`: unique stable id
 - `source`: source image path used for slicing
 - `slots`: fixed-length array of 5 slot records
@@ -80,10 +81,18 @@ Important: `pixels` is the flattened composite, but Paint Mode also preserves th
 
 Maps are stored as `MapRecord` objects.
 
-- `cells`: 2D array of tile slugs
+- `layers`: fixed-length array of 9 map layers, each a 2D array of tile placements
+- `cells`: flattened composite view derived from the visible layer stack for compatibility
 - `width`, `height`: normalized dimensions
 - `name`, `slug`
 - `updatedAt`
+
+Persisted map JSON files use a compact disk format:
+
+- `tileMap`: numeric id lookup where each id represents one tile path plus one saved option set
+- `layers`: 9 layer grids that store tile ids, with `0` meaning empty
+- `cells` is not written to disk; it is derived when the file is loaded
+- `data/maps/starter-camp.jsonschema` documents the on-disk format
 
 ### Clipboard Slots
 
@@ -125,7 +134,8 @@ The app does not edit server data directly in the UI. Instead, `TileServerApp` o
 The main draft stores are:
 
 - `draftSlotsByTileSlug`
-- `draftCellsByMapSlug`
+- `draftLayersByMapSlug`
+- `mapDesignerUiStateByMapSlug`
 - `paintEditorUiStateById`
 - `clipboardSlotsState`
 
@@ -156,7 +166,8 @@ Restored values include:
 - clipboard slots
 - selected clipboard slot index
 - clipboard manager open state
-- map draft cells
+- map draft layers
+- map designer zoom and scroll state
 - paint editor UI state by session id
 
 This restoration is intentionally narrower than full app serialization. The server snapshot still supplies canonical tile and map records.
@@ -210,7 +221,7 @@ Mode routing details:
 
 Useful query params:
 
-- `?edit=<tileSlug>`
+- `?edit=<layerPath>/<tileSlug>`
 - `?map=<mapSlug>`
 - `?brush=<tileSlug>`
 - `?image=<workspace-relative-image-path>`
@@ -228,6 +239,7 @@ Main file:
 Purpose:
 
 - create and select tile records
+- browse the folder-based tile library with layer breadcrumbs
 - load a source image
 - choose a capture rectangle
 - fill any of the 5 slots from the current source selection
@@ -237,6 +249,19 @@ Purpose:
 
 Key behavior:
 
+- the library root starts with `layer_0` through `layer_8`
+- root layer labels are:
+  - `0 - Base Terrain`
+  - `1 - Decoration`
+  - `2 - Environmental`
+  - `3 - Non moveable items`
+  - `4 - Critters`
+  - `5 - Items`
+  - `6 - Actors and Characters`
+  - `7 - Effects`
+  - `8 - Other`
+- tiles are organized by `TileRecord.path` instead of encoding categories in the tile name
+- the library browser shows subfolders first and tiles second in the same list
 - source images can come from local file upload or `?image=...`
 - the selection rectangle snaps near tile borders through `snapToTileBorder`
 - the `main` slot forces full `128x128`
@@ -269,24 +294,26 @@ Purpose:
 
 - create map records
 - choose a brush tile or eraser
-- paint tiles directly onto a grid canvas
+- paint tiles directly onto a layered grid canvas
 - save maps as JSON files
 
 Key behavior:
 
-- map drafts live in `draftCellsByMapSlug`
+- map drafts live in layered form and preserve 9 stackable layers
 - actual writes happen only on `Save Map`
-- erasing is implemented by setting the cell slug to `""`
+- erasing is implemented by setting the active layer cell to empty
 - the brush palette uses each tile's main slot preview
+- brush effects can combine flip, rotation, multiply, and color options before painting
 - canvas scale is visual only; it does not change map dimensions
-- hover state highlights the active cell
+- hover state highlights the active cell and summarizes any saved effects on that stack position
+- the map workspace includes a composite preview plus a per-layer rail modeled after Paint Mode
 
 Map rules:
 
 - grids are rectangular and normalized
 - map dimensions are clamped between 1 and 200
 - blank cells are allowed
-- cells store tile slugs, not embedded images
+- cells store tile placements and options, not embedded images
 
 Agent notes:
 
@@ -309,8 +336,7 @@ Purpose:
 Layer model:
 
 - every slot has 5 layers
-- `Layer 0` is the original captured image and is read-only
-- `Layers 1-4` are editable overlays
+- all 5 layers are selectable and editable in Paint Mode
 - saving Paint Mode rebuilds both:
   - `layers`: per-layer PNG data URLs
   - `pixels`: flattened combined slot image
@@ -319,7 +345,6 @@ Tools:
 
 - pencil
 - brush
-- edger
 - eraser
 - eyedropper
 - marquee
@@ -330,7 +355,6 @@ Keyboard shortcuts:
 
 - `P`: pencil
 - `B`: brush
-- `G`: edger
 - `E`: eraser
 - `I`: eyedropper
 - `M`: marquee
@@ -349,7 +373,8 @@ Paint behavior:
 Clipboard behavior inside Paint Mode:
 
 - marquee selection copies visible pixels into the clipboard manager
-- stamp uses the currently selected clipboard slot and pastes it into the active editable layer
+- stamp uses the currently selected clipboard slot and pastes it into the active selected layer
+- Edger is a confirmed action under Color Selection that rebuilds the selected layer from the composited layers beneath it
 - if the clipboard manager is closed, Paint Mode opens it automatically
 - copy targets the selected clipboard slot when possible
 
@@ -361,7 +386,6 @@ Save behavior:
 Agent notes:
 
 - do not treat `pixels` as the source of truth once layers exist
-- preserve `Layer 0` read-only behavior unless intentionally redesigning the editor
 - if changing zoom or canvas size logic, preserve scroll anchoring behavior
 - keep `buildSlotRecordFromCanvases` and preview rendering in sync
 
@@ -373,6 +397,7 @@ Paint performance notes:
 - overlay state such as marquee boxes and stamp hover should repaint only the main editor canvas
 - layer previews and final previews should redraw only when actual pixel content changes or slot data is loaded
 - local paint commits should avoid a PNG decode and layer reload round-trip when the live canvases already hold the same pixels
+- successful saves should update the saved tile record without replacing identical live draft layers in Paint Mode
 
 ## Clipboard Manager
 

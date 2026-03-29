@@ -38,4 +38,16 @@
     border: 0;
     font-family: var(--font-serif);
   }
+
+  a[href],
+  button:not(:disabled),
+  summary,
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
 }

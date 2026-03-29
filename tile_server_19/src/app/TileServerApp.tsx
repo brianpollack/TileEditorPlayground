@@ -8,13 +8,17 @@ import { FontAwesomeIcon } from "../components/FontAwesomeIcon";
 import { MapDesigner } from "../components/MapDesigner";
 import { PaintMode } from "../components/PaintMode";
 import { TileWorkshop } from "../components/TileWorkshop";
-import { SLOT_LAYER_COUNT } from "../lib/constants";
+import { MAP_LAYER_COUNT, SLOT_LAYER_COUNT } from "../lib/constants";
 import { loadImageFromUrl, revokeObjectUrl } from "../lib/images";
-import { normalizeMapCells } from "../lib/map";
+import { clampMapScalePercent, normalizeMapLayers } from "../lib/map";
 import { describeSlot, getSlotIndex, normalizeSlotRecords, type SlotKey } from "../lib/slots";
+import { normalizeTileLibraryPath } from "../lib/tileLibrary";
 import { StudioProvider } from "./StudioContext";
 import type {
   ClipboardSlotRecord,
+  MapLayerStack,
+  MapDesignerUiState,
+  PaintLayerIndex,
   MapRecord,
   PaintEditorSession,
   PaintEditorUiState,
@@ -184,14 +188,39 @@ function getHashForView(view: StudioView) {
   return view === "map-designer" ? "#/map" : "#/tile";
 }
 
-function getInitialTileSlug(tileRecords: TileRecord[], preferredSlug: string) {
-  const normalizedPreferredSlug = preferredSlug.trim();
+function getSerializedEditParam(tileRecord: TileRecord | null) {
+  if (!tileRecord) {
+    return "";
+  }
+
+  return normalizeTileLibraryPath(`${tileRecord.path}/${tileRecord.slug}`);
+}
+
+function getInitialTileSlug(tileRecords: TileRecord[], preferredEditParam: string) {
+  const normalizedPreferredEditParam = normalizeTileLibraryPath(preferredEditParam.trim());
+
+  if (normalizedPreferredEditParam.includes("/")) {
+    const preferredPathSegments = normalizedPreferredEditParam.split("/");
+    const preferredSlug = preferredPathSegments.at(-1) ?? "";
+    const preferredPath = preferredPathSegments.slice(0, -1).join("/");
+    const matchedTile = tileRecords.find(
+      (tileRecord) =>
+        tileRecord.slug === preferredSlug &&
+        normalizeTileLibraryPath(tileRecord.path) === preferredPath
+    );
+
+    if (matchedTile) {
+      return matchedTile.slug;
+    }
+  }
+
+  const normalizedPreferredSlug = preferredEditParam.trim();
 
   if (normalizedPreferredSlug && tileRecords.some((tileRecord) => tileRecord.slug === normalizedPreferredSlug)) {
     return normalizedPreferredSlug;
   }
 
-  return tileRecords[0]?.slug ?? "";
+  return "";
 }
 
 function getInitialMapSlug(mapRecords: MapRecord[], preferredSlug: string) {
@@ -262,16 +291,11 @@ function normalizePaintEditorUiState(
       typeof paintEditorUiState?.paintColor === "string" && paintEditorUiState.paintColor.trim()
         ? paintEditorUiState.paintColor
         : DEFAULT_PAINT_COLOR,
-    selectedLayerIndex:
-      paintEditorUiState?.selectedLayerIndex === 1 ||
-      paintEditorUiState?.selectedLayerIndex === 2 ||
-      paintEditorUiState?.selectedLayerIndex === 3 ||
-      paintEditorUiState?.selectedLayerIndex === 4
-        ? paintEditorUiState.selectedLayerIndex
-        : DEFAULT_PAINT_LAYER_INDEX,
+    selectedLayerIndex: [0, 1, 2, 3, 4].includes(paintEditorUiState?.selectedLayerIndex ?? -1)
+      ? (paintEditorUiState?.selectedLayerIndex as PaintLayerIndex)
+      : DEFAULT_PAINT_LAYER_INDEX,
     selectedTool:
       paintEditorUiState?.selectedTool === "brush" ||
-      paintEditorUiState?.selectedTool === "edger" ||
       paintEditorUiState?.selectedTool === "eraser" ||
       paintEditorUiState?.selectedTool === "eyedropper" ||
       paintEditorUiState?.selectedTool === "fill" ||
@@ -287,6 +311,41 @@ function normalizePaintEditorUiState(
   };
 }
 
+function normalizeMapDesignerUiState(
+  mapDesignerUiState: Partial<MapDesignerUiState> | undefined
+): MapDesignerUiState {
+  const layerVisibilities = Array.isArray(mapDesignerUiState?.layerVisibilities)
+    ? mapDesignerUiState.layerVisibilities.slice(0, MAP_LAYER_COUNT)
+    : [];
+
+  while (layerVisibilities.length < MAP_LAYER_COUNT) {
+    layerVisibilities.push(1);
+  }
+
+  return {
+    activeLayerIndex:
+      typeof mapDesignerUiState?.activeLayerIndex === "number" &&
+      Number.isFinite(mapDesignerUiState.activeLayerIndex)
+        ? Math.max(0, Math.min(MAP_LAYER_COUNT - 1, Math.round(mapDesignerUiState.activeLayerIndex)))
+        : 0,
+    layerVisibilities: layerVisibilities.map((value) =>
+      typeof value === "number" && Number.isFinite(value) ? value : 1
+    ),
+    scrollLeft:
+      typeof mapDesignerUiState?.scrollLeft === "number" && Number.isFinite(mapDesignerUiState.scrollLeft)
+        ? Math.max(0, mapDesignerUiState.scrollLeft)
+        : 0,
+    scrollTop:
+      typeof mapDesignerUiState?.scrollTop === "number" && Number.isFinite(mapDesignerUiState.scrollTop)
+        ? Math.max(0, mapDesignerUiState.scrollTop)
+        : 0,
+    zoomPercent:
+      typeof mapDesignerUiState?.zoomPercent === "number" && Number.isFinite(mapDesignerUiState.zoomPercent)
+        ? clampMapScalePercent(mapDesignerUiState.zoomPercent)
+        : null
+  };
+}
+
 interface TileServerAppProps {
   clipboardSlots: Array<ClipboardSlotRecord | null>;
   initialEditTileSlug: string;
@@ -296,6 +355,7 @@ interface TileServerAppProps {
   initialPaintEditors: string;
   initialBrushTileSlug: string;
   maps: MapRecord[];
+  tileLibraryFolders: string[];
   tiles: TileRecord[];
 }
 
@@ -308,11 +368,13 @@ export function TileServerApp({
   initialPaintEditors,
   initialBrushTileSlug,
   maps,
+  tileLibraryFolders,
   tiles
 }: TileServerAppProps) {
   const initialPaintSessions = parsePaintEditorList(initialPaintEditors, tiles);
   const [mapRecords, setMapRecords] = useState(maps);
   const [tileRecords, setTileRecords] = useState(tiles);
+  const [tileLibraryFolderPaths, setTileLibraryFolderPaths] = useState(tileLibraryFolders);
   const [activeView, setActiveView] = useState<StudioViewId>(() =>
     getInitialActiveView(initialMode, initialPaintSessions)
   );
@@ -339,11 +401,14 @@ export function TileServerApp({
   const lastProcessedClipboardImageRef = useRef("");
   const clipboardPersistAbortRef = useRef<AbortController | null>(null);
   const [paintEditorUiStateById, setPaintEditorUiStateById] = useState<Record<string, PaintEditorUiState>>({});
-  const [draftCellsByMapSlug, setDraftCellsByMapSlug] = useState<Record<string, string[][]>>(() =>
+  const [mapDesignerUiStateByMapSlug, setMapDesignerUiStateByMapSlug] = useState<
+    Record<string, MapDesignerUiState>
+  >({});
+  const [draftLayersByMapSlug, setDraftLayersByMapSlug] = useState<Record<string, MapLayerStack>>(() =>
     Object.fromEntries(
       maps.map((mapRecord) => [
         mapRecord.slug,
-        normalizeMapCells(mapRecord.cells, mapRecord.width, mapRecord.height)
+        normalizeMapLayers(mapRecord.layers, mapRecord.width, mapRecord.height, mapRecord.cells)
       ])
     )
   );
@@ -363,9 +428,11 @@ export function TileServerApp({
     }
 
     const url = new URL(window.location.href);
+    const activeTileRecord = tileRecords.find((tileRecord) => tileRecord.slug === tileSlug) ?? null;
+    const serializedEditParam = getSerializedEditParam(activeTileRecord);
 
-    if (tileSlug) {
-      url.searchParams.set("edit", tileSlug);
+    if (serializedEditParam) {
+      url.searchParams.set("edit", serializedEditParam);
     } else {
       url.searchParams.delete("edit");
     }
@@ -400,17 +467,25 @@ export function TileServerApp({
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }
 
-  function getMapDraftCells(
+  function getMapDraftLayers(
     mapSlug: string,
-    fallbackCells: string[][] | undefined,
+    fallbackLayers: MapLayerStack | undefined,
     width?: number,
     height?: number
-  ) {
+  ): MapLayerStack {
     if (!mapSlug) {
-      return normalizeMapCells(fallbackCells, width, height);
+      return normalizeMapLayers(fallbackLayers, width, height);
     }
 
-    return draftCellsByMapSlug[mapSlug] ?? normalizeMapCells(fallbackCells, width, height);
+    return draftLayersByMapSlug[mapSlug] ?? normalizeMapLayers(fallbackLayers, width, height);
+  }
+
+  function getMapDesignerUiState(mapSlug: string) {
+    if (!mapSlug) {
+      return normalizeMapDesignerUiState(undefined);
+    }
+
+    return normalizeMapDesignerUiState(mapDesignerUiStateByMapSlug[mapSlug]);
   }
 
   function getPaintEditorUiState(sessionId: string) {
@@ -431,14 +506,28 @@ export function TileServerApp({
     }));
   }
 
-  function setMapDraftCells(mapSlug: string, cells: string[][], width?: number, height?: number) {
+  function setMapDesignerUiState(mapSlug: string, nextState: Partial<MapDesignerUiState>) {
     if (!mapSlug) {
       return;
     }
 
-    setDraftCellsByMapSlug((currentDrafts) => ({
+    setMapDesignerUiStateByMapSlug((currentState) => ({
+      ...currentState,
+      [mapSlug]: normalizeMapDesignerUiState({
+        ...currentState[mapSlug],
+        ...nextState
+      })
+    }));
+  }
+
+  function setMapDraftLayers(mapSlug: string, layers: MapLayerStack, width?: number, height?: number) {
+    if (!mapSlug) {
+      return;
+    }
+
+    setDraftLayersByMapSlug((currentDrafts) => ({
       ...currentDrafts,
-      [mapSlug]: normalizeMapCells(cells, width, height)
+      [mapSlug]: normalizeMapLayers(layers, width, height)
     }));
   }
 
@@ -611,6 +700,10 @@ export function TileServerApp({
   }, [tiles]);
 
   useEffect(() => {
+    setTileLibraryFolderPaths(tileLibraryFolders);
+  }, [tileLibraryFolders]);
+
+  useEffect(() => {
     if (hasRestoredStudioStateRef.current || typeof window === "undefined") {
       return;
     }
@@ -628,8 +721,10 @@ export function TileServerApp({
       const parsedState = JSON.parse(storedState) as Partial<{
         activeMapSlug: string;
         clipboardSlots: Array<ClipboardSlotRecord | null>;
+        draftLayersByMapSlug: Record<string, MapLayerStack>;
         draftCellsByMapSlug: Record<string, string[][]>;
         isClipboardManagerOpen: boolean;
+        mapDesignerUiStateByMapSlug: Record<string, Partial<MapDesignerUiState>>;
         mapBrushTileSlug: string;
         paintEditorUiStateById: Record<string, Partial<PaintEditorUiState>>;
         selectedClipboardSlotIndex: number | null;
@@ -666,18 +761,23 @@ export function TileServerApp({
         setSelectedClipboardSlotIndex(parsedState.selectedClipboardSlotIndex);
       }
 
-      if (parsedState.draftCellsByMapSlug && typeof parsedState.draftCellsByMapSlug === "object") {
-        setDraftCellsByMapSlug((currentDrafts) => {
+      if (
+        (parsedState.draftLayersByMapSlug && typeof parsedState.draftLayersByMapSlug === "object") ||
+        (parsedState.draftCellsByMapSlug && typeof parsedState.draftCellsByMapSlug === "object")
+      ) {
+        setDraftLayersByMapSlug((currentDrafts) => {
           const nextDrafts = { ...currentDrafts };
 
           for (const mapRecord of mapRecords) {
+            const storedLayers = parsedState.draftLayersByMapSlug?.[mapRecord.slug];
             const storedCells = parsedState.draftCellsByMapSlug?.[mapRecord.slug];
 
-            if (storedCells) {
-              nextDrafts[mapRecord.slug] = normalizeMapCells(
-                storedCells,
+            if (storedLayers || storedCells) {
+              nextDrafts[mapRecord.slug] = normalizeMapLayers(
+                storedLayers,
                 mapRecord.width,
-                mapRecord.height
+                mapRecord.height,
+                storedCells
               );
             }
           }
@@ -692,6 +792,20 @@ export function TileServerApp({
             Object.entries(parsedState.paintEditorUiStateById).map(([sessionId, paintEditorUiState]) => [
               sessionId,
               normalizePaintEditorUiState(paintEditorUiState)
+            ])
+          )
+        );
+      }
+
+      if (
+        parsedState.mapDesignerUiStateByMapSlug &&
+        typeof parsedState.mapDesignerUiStateByMapSlug === "object"
+      ) {
+        setMapDesignerUiStateByMapSlug(
+          Object.fromEntries(
+            Object.entries(parsedState.mapDesignerUiStateByMapSlug).map(([mapSlug, mapDesignerUiState]) => [
+              mapSlug,
+              normalizeMapDesignerUiState(mapDesignerUiState)
             ])
           )
         );
@@ -724,11 +838,15 @@ export function TileServerApp({
 
   useEffect(() => {
     setActiveTileSlug((currentSlug) => {
+      if (currentSlug === "") {
+        return currentSlug;
+      }
+
       if (tileRecords.some((tileRecord) => tileRecord.slug === currentSlug)) {
         return currentSlug;
       }
 
-      return tileRecords[0]?.slug ?? "";
+      return "";
     });
 
     setMapBrushTileSlug((currentSlug) => {
@@ -745,13 +863,13 @@ export function TileServerApp({
   }, [tileRecords]);
 
   useEffect(() => {
-    setDraftCellsByMapSlug((currentDrafts) => {
-      const nextDrafts: Record<string, string[][]> = {};
+    setDraftLayersByMapSlug((currentDrafts) => {
+      const nextDrafts: Record<string, MapLayerStack> = {};
 
       for (const mapRecord of mapRecords) {
         nextDrafts[mapRecord.slug] =
           currentDrafts[mapRecord.slug] ??
-          normalizeMapCells(mapRecord.cells, mapRecord.width, mapRecord.height);
+          normalizeMapLayers(mapRecord.layers, mapRecord.width, mapRecord.height, mapRecord.cells);
       }
 
       return nextDrafts;
@@ -800,7 +918,7 @@ export function TileServerApp({
 
   useEffect(() => {
     syncLocationState(activeTileSlug, activeView, paintEditors, activeMapSlug, mapBrushTileSlug);
-  }, [activeMapSlug, activeTileSlug, activeView, mapBrushTileSlug, paintEditors]);
+  }, [activeMapSlug, activeTileSlug, activeView, mapBrushTileSlug, paintEditors, tileRecords]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -818,8 +936,9 @@ export function TileServerApp({
     const nextState = {
       activeMapSlug,
       clipboardSlots: clipboardSlotsState,
-      draftCellsByMapSlug,
+      draftLayersByMapSlug,
       isClipboardManagerOpen,
+      mapDesignerUiStateByMapSlug,
       mapBrushTileSlug,
       paintEditorUiStateById,
       selectedClipboardSlotIndex
@@ -829,9 +948,10 @@ export function TileServerApp({
   }, [
     activeMapSlug,
     clipboardSlotsState,
-    draftCellsByMapSlug,
+    draftLayersByMapSlug,
     isClipboardManagerOpen,
     isStudioStateRestored,
+    mapDesignerUiStateByMapSlug,
     mapBrushTileSlug,
     paintEditorUiStateById,
     selectedClipboardSlotIndex
@@ -949,10 +1069,16 @@ export function TileServerApp({
         activeMapSlug,
         activeTile,
         activeTileSlug,
+        addTileLibraryFolder: (folderPath) => {
+          setTileLibraryFolderPaths((currentFolders) =>
+            currentFolders.includes(folderPath) ? currentFolders : [...currentFolders, folderPath].sort()
+          );
+        },
         clearClipboardSlot,
         clipboardStatus,
         clipboardSlots: clipboardSlotsState,
-        getMapDraftCells,
+        getMapDesignerUiState,
+        getMapDraftLayers,
         getPaintEditorUiState,
         getTileDraftSlots,
         initialImagePath,
@@ -964,12 +1090,14 @@ export function TileServerApp({
         selectedClipboardSlotIndex,
         setActiveMapSlug,
         setClipboardManagerOpen,
+        setMapDesignerUiState,
         setPaintEditorUiState,
         setSelectedClipboardSlotIndex,
-        setMapDraftCells,
+        setMapDraftLayers,
         setActiveTileSlug: handleSetActiveTileSlug,
         setMapBrushTileSlug,
         setTileDraftSlots,
+        tileLibraryFolders: tileLibraryFolderPaths,
         tiles: tileRecords,
         updateTileDraftSlot,
         upsertMap: (mapRecord) => {

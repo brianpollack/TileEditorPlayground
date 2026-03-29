@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "starter-camp.jsonschema",
+  "title": "Tile Server 19 Map File",
+  "description": "Compact persisted map format with a shared tileMap lookup and 9 ordered layer grids. Files store numeric tile ids on the grid and resolve them through tileMap entries that capture both the tile path and any saved render options.",
+  "$comment": "JSON Schema does not support ordinary source comments inside JSON, so descriptions and $comment fields are used here as inline documentation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "name",
+    "slug",
+    "width",
+    "height",
+    "updatedAt",
+    "tileMap",
+    "layers"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Schema reference for this persisted map file."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable map title shown in the editor."
+    },
+    "slug": {
+      "type": "string",
+      "description": "Stable map identifier used for file naming and routing."
+    },
+    "width": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Map width in tiles. Each layer row should have this many columns."
+    },
+    "height": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Map height in tiles. Each layer should have this many rows."
+    },
+    "updatedAt": {
+      "type": "string",
+      "description": "Last updated timestamp stored as an ISO string."
+    },
+    "tileMap": {
+      "type": "object",
+      "description": "Lookup table from numeric tile ids to tile references. Each reference stores the full tile path plus any saved flip, rotation, multiply, or color options. Layer grids store only the numeric ids, so repeated tile+option combinations are written once here and referenced many times from the layer cells.",
+      "$comment": "Ids are string keys in JSON object form, but the layer cells store those ids as integers. Id 0 is reserved and means the cell is empty, so tileMap keys start at 1.",
+      "examples": [
+        {
+          "1": {
+            "tile": "layer_0/grass/generic",
+            "options": {
+              "color": false,
+              "colorValue": "#ffffff",
+              "flipHorizontal": false,
+              "flipVertical": false,
+              "multiply": false,
+              "rotate180": false,
+              "rotate270": false,
+              "rotate90": false
+            }
+          },
+          "2": {
+            "tile": "layer_3/walls/brick-edge-left",
+            "options": {
+              "color": true,
+              "colorValue": "#f4c95d",
+              "flipHorizontal": true,
+              "flipVertical": false,
+              "multiply": true,
+              "rotate180": false,
+              "rotate270": false,
+              "rotate90": true
+            }
+          }
+        }
+      ],
+      "propertyNames": {
+        "pattern": "^[1-9][0-9]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/tileReference"
+      }
+    },
+    "layers": {
+      "type": "array",
+      "description": "Ordered stack of 9 map layers. Lower indexes render first and higher indexes render on top. Each cell stores an integer tile id that resolves through tileMap. Use 0 for an empty cell.",
+      "$comment": "Layer meaning by index: 0 Base Terrain, 1 Decoration, 2 Environmental, 3 Non moveable items, 4 Critters, 5 Items, 6 Actors and Characters, 7 Effects, 8 Other.",
+      "minItems": 9,
+      "maxItems": 9,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/layerGrid",
+          "description": "Layer 0 - Base Terrain"
+        },
+        {
+          "$ref": "#/$defs/layerGrid",
+          "description": "Layer 1 - Decoration"
+        },
+        {
+          "$ref": "#/$defs/layerGrid",
+          "description": "Layer 2 - Environmental"
+        },
+        {
+          "$ref": "#/$defs/layerGrid",
+          "description": "Layer 3 - Non moveable items"
+        },
+        {
+          "$ref": "#/$defs/layerGrid",
+          "description": "Layer 4 - Critters"
+        },
+        {
+          "$ref": "#/$defs/layerGrid",
+          "description": "Layer 5 - Items"
+        },
+        {
+          "$ref": "#/$defs/layerGrid",
+          "description": "Layer 6 - Actors and Characters"
+        },
+        {
+          "$ref": "#/$defs/layerGrid",
+          "description": "Layer 7 - Effects"
+        },
+        {
+          "$ref": "#/$defs/layerGrid",
+          "description": "Layer 8 - Other"
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "layerGrid": {
+      "type": "array",
+      "description": "A single map layer grid. Each row is an array of tile ids. Every non-zero id must exist as a key in tileMap.",
+      "items": {
+        "type": "array",
+        "description": "One row in the layer grid.",
+        "items": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tile id reference. 0 means empty. Positive integers must resolve through tileMap."
+        }
+      }
+    },
+    "tileOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "color",
+        "colorValue",
+        "flipHorizontal",
+        "flipVertical",
+        "multiply",
+        "rotate180",
+        "rotate270",
+        "rotate90"
+      ],
+      "properties": {
+        "color": {
+          "type": "boolean"
+        },
+        "colorValue": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "flipHorizontal": {
+          "type": "boolean"
+        },
+        "flipVertical": {
+          "type": "boolean"
+        },
+        "multiply": {
+          "type": "boolean"
+        },
+        "rotate180": {
+          "type": "boolean"
+        },
+        "rotate270": {
+          "type": "boolean"
+        },
+        "rotate90": {
+          "type": "boolean"
+        }
+      }
+    },
+    "tileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tile",
+        "options"
+      ],
+      "properties": {
+        "tile": {
+          "type": "string",
+          "pattern": "^layer_[0-8](?:/[A-Za-z0-9_-]+)+$",
+          "description": "Full tile path in layer/folder/tile form."
+        },
+        "options": {
+          "$ref": "#/$defs/tileOptions"
+        }
+      }
+    }
+  }
+}

@@ -9,6 +9,7 @@ import {
 } from "../lib/serverStore";
 import { normalizeMapDimension } from "../lib/map";
 import { normalizeUnderscoreName } from "../lib/naming";
+import type { MapLayerStack } from "../types";
 
 export async function createMapAction(name: string, width: number, height: number) {
   const nextName = normalizeUnderscoreName(name);
@@ -31,8 +32,8 @@ export async function createMapAction(name: string, width: number, height: numbe
 }
 
 export async function saveMapAction(input: {
-  cells: string[][];
   height: number;
+  layers: MapLayerStack;
   name: string;
   slug: string;
   width: number;
@@ -40,7 +41,7 @@ export async function saveMapAction(input: {
   const nextMap = normalizeMapPayload(
     input.name,
     input.slug,
-    input.cells,
+    input.layers,
     input.width,
     input.height
   );

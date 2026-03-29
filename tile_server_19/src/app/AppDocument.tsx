@@ -1,4 +1,9 @@
-import { readClipboardSlots, readMapRecords, readTileRecords } from "../lib/serverStore";
+import {
+  readClipboardSlots,
+  readMapRecords,
+  readTileLibraryFolders,
+  readTileRecords
+} from "../lib/serverStore";
 import { getThemeCssText } from "../styles/theme";
 import { TileServerApp } from "./TileServerApp";
 import "../styles/app.css";
@@ -10,6 +15,7 @@ interface AppDocumentProps {
 export default async function AppDocument({ requestUrl }: AppDocumentProps) {
   const url = new URL(requestUrl);
   const clipboardSlots = await readClipboardSlots();
+  const tileLibraryFolders = await readTileLibraryFolders();
   const tiles = await readTileRecords();
   const maps = await readMapRecords();
   const initialBrushTileSlug = url.searchParams.get("brush")?.trim() ?? "";
@@ -41,9 +47,10 @@ export default async function AppDocument({ requestUrl }: AppDocumentProps) {
           initialMapSlug={initialMapSlug}
           initialMode={initialMode}
           initialPaintEditors={initialPaintEditors}
-          maps={maps}
-          tiles={tiles}
-        />
+        maps={maps}
+        tileLibraryFolders={tileLibraryFolders}
+        tiles={tiles}
+      />
       </body>
     </html>
   );

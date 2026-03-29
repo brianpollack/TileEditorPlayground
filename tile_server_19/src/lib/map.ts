@@ -1,14 +1,43 @@
 import {
   MAP_DEFAULT_GRID_SIZE,
+  MAP_LAYER_COUNT,
   MAP_MAX_SCALE_PERCENT,
   MAP_MIN_SCALE_PERCENT,
   TILE_SIZE
 } from "./constants";
 import { theme } from "../styles/theme";
-import type { TileCell, TileRecord } from "../types";
+import type {
+  MapLayerCell,
+  MapLayerGrid,
+  MapLayerStack,
+  MapTileOptions,
+  MapTilePlacement,
+  TileCell,
+  TileRecord
+} from "../types";
 
 const MAP_MIN_GRID_SIZE = 1;
 const MAP_MAX_GRID_SIZE = 200;
+const DEFAULT_MAP_COLOR = "#ffffff";
+
+function normalizeHexColor(value: string | undefined) {
+  const trimmedValue = value?.trim() ?? "";
+
+  if (/^#[0-9a-f]{6}$/iu.test(trimmedValue)) {
+    return trimmedValue.toLowerCase();
+  }
+
+  if (/^#[0-9a-f]{3}$/iu.test(trimmedValue)) {
+    return `#${trimmedValue
+      .slice(1)
+      .split("")
+      .map((character) => `${character}${character}`)
+      .join("")
+      .toLowerCase()}`;
+  }
+
+  return DEFAULT_MAP_COLOR;
+}
 
 export function normalizeMapDimension(value: number | string | undefined) {
   const numericValue =
@@ -21,16 +50,105 @@ export function normalizeMapDimension(value: number | string | undefined) {
   return Math.min(MAP_MAX_GRID_SIZE, Math.max(MAP_MIN_GRID_SIZE, Math.round(numericValue)));
 }
 
-export function createEmptyMapCells(width = MAP_DEFAULT_GRID_SIZE, height = MAP_DEFAULT_GRID_SIZE) {
+export function normalizeMapTileOptions(options: Partial<MapTileOptions> | undefined): MapTileOptions {
+  return {
+    color: options?.color === true,
+    colorValue: normalizeHexColor(options?.colorValue),
+    flipHorizontal: options?.flipHorizontal === true,
+    flipVertical: options?.flipVertical === true,
+    multiply: options?.multiply === true,
+    rotate180: options?.rotate180 === true,
+    rotate270: options?.rotate270 === true,
+    rotate90: options?.rotate90 === true
+  };
+}
+
+export function createMapTilePlacement(
+  tileSlug: string,
+  options?: Partial<MapTileOptions>
+): MapTilePlacement | null {
+  const normalizedTileSlug = tileSlug.trim();
+
+  if (!normalizedTileSlug) {
+    return null;
+  }
+
+  return {
+    options: normalizeMapTileOptions(options),
+    tileSlug: normalizedTileSlug
+  };
+}
+
+export function normalizeMapLayerCell(cell: unknown): MapLayerCell {
+  if (typeof cell === "string") {
+    return createMapTilePlacement(cell);
+  }
+
+  if (!cell || typeof cell !== "object") {
+    return null;
+  }
+
+  const candidate = cell as Partial<MapTilePlacement>;
+  return createMapTilePlacement(candidate.tileSlug ?? "", candidate.options);
+}
+
+export function serializeMapTileOptionsKey(options: Partial<MapTileOptions> | undefined) {
+  const normalizedOptions = normalizeMapTileOptions(options);
+  return JSON.stringify(normalizedOptions);
+}
+
+export function describeMapTileOptions(options: Partial<MapTileOptions> | undefined) {
+  const normalizedOptions = normalizeMapTileOptions(options);
+  const labels: string[] = [];
+
+  if (normalizedOptions.flipHorizontal) {
+    labels.push("Flip Horizontal");
+  }
+
+  if (normalizedOptions.flipVertical) {
+    labels.push("Flip Vertical");
+  }
+
+  if (normalizedOptions.rotate90) {
+    labels.push("Rotate 90");
+  }
+
+  if (normalizedOptions.rotate180) {
+    labels.push("Rotate 180");
+  }
+
+  if (normalizedOptions.rotate270) {
+    labels.push("Rotate 270");
+  }
+
+  if (normalizedOptions.multiply) {
+    labels.push(`Multiply ${normalizedOptions.colorValue}`);
+  }
+
+  if (normalizedOptions.color) {
+    labels.push(`Color ${normalizedOptions.colorValue}`);
+  }
+
+  return labels;
+}
+
+export function createEmptyMapCells(
+  width = MAP_DEFAULT_GRID_SIZE,
+  height = MAP_DEFAULT_GRID_SIZE
+): MapLayerGrid {
   const normalizedWidth = normalizeMapDimension(width);
   const normalizedHeight = normalizeMapDimension(height);
 
   return Array.from({ length: normalizedHeight }, () =>
-    Array.from({ length: normalizedWidth }, () => "")
+    Array.from({ length: normalizedWidth }, () => null)
   );
 }
 
-export function getMapDimensions(cells: string[][] | undefined) {
+export function createEmptyMapLayers(width = MAP_DEFAULT_GRID_SIZE, height = MAP_DEFAULT_GRID_SIZE): MapLayerStack {
+  return Array.from({ length: MAP_LAYER_COUNT }, () => createEmptyMapCells(width, height));
+}
+
+export function getMapDimensions(cells: Array<Array<MapLayerCell | string | null>> | undefined) {
   if (!Array.isArray(cells) || cells.length === 0) {
     return {
       height: MAP_DEFAULT_GRID_SIZE,
@@ -54,10 +172,10 @@ export function getMapDimensions(cells: string[][] | undefined) {
 }
 
 export function normalizeMapCells(
-  cells: string[][] | undefined,
+  cells: Array<Array<MapLayerCell | string | null>> | undefined,
   width?: number,
   height?: number
-) {
+): MapLayerGrid {
   const inferredDimensions = getMapDimensions(cells);
   const normalizedWidth = normalizeMapDimension(width ?? inferredDimensions.width);
   const normalizedHeight = normalizeMapDimension(height ?? inferredDimensions.height);
@@ -71,11 +189,82 @@ export function normalizeMapCells(
     const safeRow = Array.isArray(row) ? row.slice(0, normalizedWidth) : [];
 
     while (safeRow.length < normalizedWidth) {
-      safeRow.push("");
+      safeRow.push(null);
     }
 
-    return safeRow.map((cell) => (typeof cell === "string" ? cell : ""));
+    return safeRow.map((cell) => normalizeMapLayerCell(cell));
   });
+}
+
+export function getMapLayerDimensions(
+  layers: Array<Array<Array<MapLayerCell | string | null>>> | undefined,
+  fallbackCells?: string[][]
+) {
+  if (!Array.isArray(layers) || layers.length === 0) {
+    return getMapDimensions(fallbackCells);
+  }
+
+  return layers.reduce(
+    (currentDimensions, layerCells) => {
+      const nextDimensions = getMapDimensions(layerCells);
+
+      return {
+        height: Math.max(currentDimensions.height, nextDimensions.height),
+        width: Math.max(currentDimensions.width, nextDimensions.width)
+      };
+    },
+    getMapDimensions(fallbackCells)
+  );
+}
+
+export function normalizeMapLayers(
+  layers: Array<Array<Array<MapLayerCell | string | null>>> | undefined,
+  width?: number,
+  height?: number,
+  fallbackCells?: string[][]
+): MapLayerStack {
+  const inferredDimensions = getMapLayerDimensions(layers, fallbackCells);
+  const normalizedWidth = normalizeMapDimension(width ?? inferredDimensions.width);
+  const normalizedHeight = normalizeMapDimension(height ?? inferredDimensions.height);
+  const safeLayers = Array.from({ length: MAP_LAYER_COUNT }, (_, layerIndex) =>
+    Array.isArray(layers) ? layers[layerIndex] : undefined
+  );
+
+  return safeLayers.map((layerCells, layerIndex) =>
+    normalizeMapCells(
+      Array.isArray(layerCells) ? layerCells : layerIndex === 0 ? fallbackCells : undefined,
+      normalizedWidth,
+      normalizedHeight
+    )
+  );
+}
+
+export function flattenMapLayers(
+  layers: Array<Array<Array<MapLayerCell | string | null>>> | undefined,
+  width?: number,
+  height?: number
+) {
+  const normalizedLayers = normalizeMapLayers(layers, width, height);
+  const normalizedWidth = normalizedLayers[0]?.[0]?.length ?? normalizeMapDimension(width);
+  const normalizedHeight = normalizedLayers[0]?.length ?? normalizeMapDimension(height);
+  const flattenedCells = Array.from({ length: normalizedHeight }, () =>
+    Array.from({ length: normalizedWidth }, () => "")
+  );
+
+  for (let tileY = 0; tileY < normalizedHeight; tileY += 1) {
+    for (let tileX = 0; tileX < normalizedWidth; tileX += 1) {
+      for (let layerIndex = MAP_LAYER_COUNT - 1; layerIndex >= 0; layerIndex -= 1) {
+        const placement = normalizedLayers[layerIndex]?.[tileY]?.[tileX];
+
+        if (placement?.tileSlug) {
+          flattenedCells[tileY][tileX] = placement.tileSlug;
+          break;
+        }
+      }
+    }
+  }
+
+  return flattenedCells;
 }
 
 export function clampMapScalePercent(scalePercent: number) {

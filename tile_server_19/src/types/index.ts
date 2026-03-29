@@ -16,7 +16,6 @@ export interface PaintEditorSession {
 
 export type PaintToolId =
   | "brush"
-  | "edger"
   | "eraser"
   | "eyedropper"
   | "fill"
@@ -24,16 +23,47 @@ export type PaintToolId =
   | "pencil"
   | "stamp";
 
+export type PaintLayerIndex = 0 | 1 | 2 | 3 | 4;
+
 export interface PaintEditorUiState {
   layerVisibilities: number[];
   paintColor: string;
-  selectedLayerIndex: 1 | 2 | 3 | 4;
+  selectedLayerIndex: PaintLayerIndex;
   selectedTool: PaintToolId;
   zoomPercent: number;
 }
 
+export interface MapDesignerUiState {
+  activeLayerIndex: number;
+  layerVisibilities: number[];
+  scrollLeft: number;
+  scrollTop: number;
+  zoomPercent: number | null;
+}
+
+export interface MapTileOptions {
+  color: boolean;
+  colorValue: string;
+  flipHorizontal: boolean;
+  flipVertical: boolean;
+  multiply: boolean;
+  rotate180: boolean;
+  rotate270: boolean;
+  rotate90: boolean;
+}
+
+export interface MapTilePlacement {
+  options: MapTileOptions;
+  tileSlug: string;
+}
+
+export type MapLayerCell = MapTilePlacement | null;
+export type MapLayerGrid = MapLayerCell[][];
+export type MapLayerStack = MapLayerGrid[];
+
 export interface TileRecord {
   name: string;
+  path: string;
   slug: string;
   source: string;
   slots: Array<SlotRecord | null>;
@@ -43,6 +73,7 @@ export interface TileRecord {
 export interface MapRecord {
   cells: string[][];
   height: number;
+  layers: MapLayerStack;
   name: string;
   slug: string;
   updatedAt: string;

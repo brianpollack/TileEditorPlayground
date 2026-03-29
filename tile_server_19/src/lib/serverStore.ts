@@ -8,16 +8,26 @@ import { PNG } from "pngjs";
 import { MAP_DEFAULT_GRID_SIZE, SLOT_COUNT, TILE_SIZE } from "./constants";
 import {
   createEmptyMapCells,
-  getMapDimensions,
-  normalizeMapCells,
-  normalizeMapDimension
+  createEmptyMapLayers,
+  createMapTilePlacement,
+  flattenMapLayers,
+  getMapLayerDimensions,
+  normalizeMapLayers,
+  normalizeMapDimension,
+  normalizeMapTileOptions,
+  serializeMapTileOptionsKey
 } from "./map";
+import { normalizeUnderscoreName } from "./naming";
 import { normalizeSlotRecords } from "./slots";
+import { normalizeTileLibraryPath, normalizeTileRecordPath, TILE_LIBRARY_LAYERS } from "./tileLibrary";
 import type {
   ClipboardSlotRecord,
   ExportArtifact,
   LoadedImagePayload,
+  MapLayerStack,
   MapRecord,
+  MapTileOptions,
+  MapTilePlacement,
   SlotRecord,
   TileRecord
 } from "../types";
@@ -33,6 +43,27 @@ const LEGACY_TILE_DB_PATH = path.join(WORKSPACE_ROOT, "tile_server", "all_tiles.
 const EXPORTS_DIR = path.join(APP_ROOT, "exports");
 const IMAGE_EXTENSIONS = new Set([".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 const THUMBNAIL_TILE_SIZE = 16;
+const MAP_SCHEMA_REF = "./starter-camp.jsonschema";
+
+type StoredMapCell = number | string | null;
+type StoredMapTileReference =
+  | string
+  | {
+      options?: Partial<MapTileOptions>;
+      tile?: string;
+    };
+
+interface StoredMapRecord {
+  $schema?: string;
+  cells?: string[][];
+  height?: number;
+  layers?: StoredMapCell[][][];
+  name?: string;
+  slug?: string;
+  tileMap?: Record<string, StoredMapTileReference>;
+  updatedAt?: string;
+  width?: number;
+}
 
 function slugifyName(name: string) {
   const slug = name
@@ -52,6 +83,24 @@ function getSafeProjectPath(projectPath: string) {
   }
 
   return resolvedPath;
+}
+
+async function readTileLibraryFoldersRecursively(
+  relativePath: string,
+  collectedPaths: Set<string>
+) {
+  const absolutePath = getSafeProjectPath(relativePath);
+  const entries = await readdir(absolutePath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const childPath = normalizeTileRecordPath(path.posix.join(relativePath, entry.name));
+    collectedPaths.add(childPath);
+    await readTileLibraryFoldersRecursively(childPath, collectedPaths);
+  }
 }
 
 function getImageMimeType(filePath: string) {
@@ -90,6 +139,7 @@ function isTileRecord(candidate: unknown): candidate is TileRecord {
 function normalizeTileRecord(record: TileRecord): TileRecord {
   return {
     name: record.name.trim(),
+    path: normalizeTileRecordPath(record.path),
     slug: record.slug.trim(),
     source: record.source.trim(),
     slots: normalizeSlotRecords(record.slots),
@@ -98,13 +148,15 @@ function normalizeTileRecord(record: TileRecord): TileRecord {
 }
 
 function normalizeMapRecord(record: MapRecord): MapRecord {
-  const dimensions = getMapDimensions(record.cells);
+  const dimensions = getMapLayerDimensions(record.layers, record.cells);
   const width = normalizeMapDimension(record.width ?? dimensions.width);
   const height = normalizeMapDimension(record.height ?? dimensions.height);
+  const layers = normalizeMapLayers(record.layers, width, height, record.cells);
 
   return {
-    cells: normalizeMapCells(record.cells, width, height),
+    cells: flattenMapLayers(layers, width, height),
     height,
+    layers,
     name: record.name.trim(),
     slug: record.slug.trim(),
     updatedAt: record.updatedAt || new Date().toISOString(),
@@ -112,8 +164,162 @@ function normalizeMapRecord(record: MapRecord): MapRecord {
   };
 }
 
+function getSlugFromStoredTileReference(reference: string | undefined) {
+  const normalizedReference = normalizeTileLibraryPath(reference ?? "");
+  const segments = normalizedReference.split("/").filter(Boolean);
+  return segments.at(-1) ?? (reference?.trim() ?? "");
+}
+
+function normalizeStoredMapTileReferenceOptions(options: Partial<MapTileOptions> | undefined) {
+  return normalizeMapTileOptions(options);
+}
+
+function decodeStoredMapTileReference(reference: StoredMapTileReference | undefined): MapTilePlacement | null {
+  if (!reference) {
+    return null;
+  }
+
+  if (typeof reference === "string") {
+    return createMapTilePlacement(getSlugFromStoredTileReference(reference));
+  }
+
+  return createMapTilePlacement(
+    getSlugFromStoredTileReference(reference.tile),
+    normalizeStoredMapTileReferenceOptions(reference.options)
+  );
+}
+
+function buildStoredMapTileReference(
+  tilePath: string,
+  options: Partial<MapTileOptions> | undefined
+): Exclude<StoredMapTileReference, string> {
+  return {
+    options: normalizeStoredMapTileReferenceOptions(options),
+    tile: tilePath
+  };
+}
+
+function decodeStoredMapCell(cell: StoredMapCell, tileMap: Record<string, StoredMapTileReference>) {
+  if (cell === null || cell === 0 || cell === "0" || cell === "") {
+    return null;
+  }
+
+  if (typeof cell === "number") {
+    return decodeStoredMapTileReference(tileMap[String(cell)]);
+  }
+
+  const trimmedCell = cell.trim();
+
+  if (!trimmedCell) {
+    return null;
+  }
+
+  if (trimmedCell in tileMap) {
+    return decodeStoredMapTileReference(tileMap[trimmedCell]);
+  }
+
+  if (trimmedCell.includes("/")) {
+    return createMapTilePlacement(getSlugFromStoredTileReference(trimmedCell));
+  }
+
+  return createMapTilePlacement(trimmedCell);
+}
+
+function decodeStoredMapLayers(
+  layers: StoredMapRecord["layers"],
+  tileMap: Record<string, StoredMapTileReference>
+): MapLayerStack | undefined {
+  if (!Array.isArray(layers)) {
+    return undefined;
+  }
+
+  return layers.map((layerRows) =>
+    Array.isArray(layerRows)
+      ? layerRows.map((row) =>
+          Array.isArray(row) ? row.map((cell) => decodeStoredMapCell(cell as StoredMapCell, tileMap)) : []
+        )
+      : []
+  );
+}
+
+function parseStoredMapRecord(record: StoredMapRecord): MapRecord {
+  const tileMap = record.tileMap && typeof record.tileMap === "object" ? record.tileMap : {};
+
+  return normalizeMapRecord({
+    cells: Array.isArray(record.cells) ? record.cells : undefined,
+    height: record.height ?? MAP_DEFAULT_GRID_SIZE,
+    layers: decodeStoredMapLayers(record.layers, tileMap),
+    name: typeof record.name === "string" ? record.name : "",
+    slug: typeof record.slug === "string" ? record.slug : "",
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
+    width: record.width ?? MAP_DEFAULT_GRID_SIZE
+  } as MapRecord);
+}
+
+function buildStoredMapRecord(mapRecord: MapRecord, tileRecords: TileRecord[]): StoredMapRecord {
+  const normalized = normalizeMapRecord(mapRecord);
+  const tilePathBySlug = new Map(
+    tileRecords.map((tileRecord) => [
+      tileRecord.slug,
+      normalizeTileLibraryPath(`${tileRecord.path}/${tileRecord.slug}`)
+    ])
+  );
+  const tileIdByReference = new Map<string, number>();
+  const tileMap: Record<string, StoredMapTileReference> = {};
+  let nextTileId = 1;
+
+  const storedLayers = normalized.layers.map((layerRows) =>
+    layerRows.map((row) =>
+      row.map((placement) => {
+        if (!placement?.tileSlug) {
+          return 0;
+        }
+
+        const tilePath = tilePathBySlug.get(placement.tileSlug) ?? placement.tileSlug;
+        const referenceKey = `${tilePath}:${serializeMapTileOptionsKey(placement.options)}`;
+        const existingTileId = tileIdByReference.get(referenceKey);
+
+        if (existingTileId) {
+          return existingTileId;
+        }
+
+        const tileId = nextTileId;
+        nextTileId += 1;
+        tileIdByReference.set(referenceKey, tileId);
+        tileMap[String(tileId)] = buildStoredMapTileReference(tilePath, placement.options);
+        return tileId;
+      })
+    )
+  );
+
+  return {
+    $schema: MAP_SCHEMA_REF,
+    height: normalized.height,
+    layers: storedLayers,
+    name: normalized.name,
+    slug: normalized.slug,
+    tileMap,
+    updatedAt: normalized.updatedAt,
+    width: normalized.width
+  };
+}
+
+async function writeStoredMapFile(mapRecord: MapRecord) {
+  const normalized = normalizeMapRecord(mapRecord);
+  const tileRecords = await readTileRecords();
+  const storedRecord = buildStoredMapRecord(normalized, tileRecords);
+  const filePath = path.join(MAPS_DIR, `${normalized.slug}.json`);
+
+  await writeFile(filePath, `${JSON.stringify(storedRecord, null, 2)}\n`, "utf8");
+}
+
 async function ensureTileDatabase() {
   await mkdir(DATA_DIR, { recursive: true });
+  await Promise.all(
+    TILE_LIBRARY_LAYERS.map((layer) =>
+      mkdir(path.join(WORKSPACE_ROOT, layer.folder), { recursive: true })
+    )
+  );
 
   if (existsSync(TILE_DB_PATH)) {
     return;
@@ -137,15 +343,16 @@ async function ensureStarterMap() {
   }
 
   const starterMap: MapRecord = {
-    cells: createEmptyMapCells(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE),
+    cells: flattenMapLayers(createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE)),
     height: MAP_DEFAULT_GRID_SIZE,
+    layers: createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE),
     name: "Starter Camp",
     slug: "starter-camp",
     updatedAt: new Date().toISOString(),
     width: MAP_DEFAULT_GRID_SIZE
   };
 
-  await writeFile(starterMapPath, `${JSON.stringify(starterMap, null, 2)}\n`, "utf8");
+  await writeStoredMapFile(starterMap);
 }
 
 function normalizeClipboardSlot(slot: unknown): ClipboardSlotRecord | null {
@@ -225,7 +432,57 @@ export async function readTileRecords() {
 
 export async function writeTileRecords(tileRecords: TileRecord[]) {
   await ensureTileDatabase();
-  await writeFile(TILE_DB_PATH, `${JSON.stringify(tileRecords, null, 2)}\n`, "utf8");
+  await writeFile(
+    TILE_DB_PATH,
+    `${JSON.stringify(tileRecords.map(normalizeTileRecord), null, 2)}\n`,
+    "utf8"
+  );
+}
+
+export async function readTileLibraryFolders() {
+  await ensureTileDatabase();
+  const folderPaths = new Set<string>(TILE_LIBRARY_LAYERS.map((layer) => layer.folder));
+
+  for (const layer of TILE_LIBRARY_LAYERS) {
+    await readTileLibraryFoldersRecursively(layer.folder, folderPaths);
+  }
+
+  return Array.from(folderPaths).sort((left, right) => left.localeCompare(right));
+}
+
+export async function ensureTileLibraryFolder(relativePath: string) {
+  const normalizedPath = normalizeTileRecordPath(relativePath);
+  await ensureTileDatabase();
+  await mkdir(getSafeProjectPath(normalizedPath), { recursive: true });
+  return normalizedPath;
+}
+
+export async function createTileRecord(name: string, tilePath: string) {
+  const nextName = normalizeUnderscoreName(name);
+  const nextPath = normalizeTileLibraryPath(tilePath);
+
+  if (!nextName) {
+    throw new Error("Tile name is required.");
+  }
+
+  if (!nextPath) {
+    throw new Error("Choose a tile library folder before creating a tile.");
+  }
+
+  const tileRecords = await readTileRecords();
+  const nextTile = normalizeTilePayload(
+    nextName,
+    nextPath,
+    createUniqueSlug(tileRecords, nextName),
+    "",
+    normalizeSlotRecords(undefined),
+    ""
+  );
+
+  tileRecords.push(nextTile);
+  await writeTileRecords(tileRecords);
+
+  return nextTile;
 }
 
 export async function readMapRecords() {
@@ -237,7 +494,7 @@ export async function readMapRecords() {
       .map(async (entry) => {
         const filePath = path.join(MAPS_DIR, entry.name);
         const fileContents = await readFile(filePath, "utf8");
-        return normalizeMapRecord(JSON.parse(fileContents) as MapRecord);
+        return parseStoredMapRecord(JSON.parse(fileContents) as StoredMapRecord);
       })
   );
 
@@ -246,10 +503,7 @@ export async function readMapRecords() {
 
 export async function writeMapRecord(mapRecord: MapRecord) {
   await ensureStarterMap();
-  const normalized = normalizeMapRecord(mapRecord);
-  const filePath = path.join(MAPS_DIR, `${normalized.slug}.json`);
-
-  await writeFile(filePath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+  await writeStoredMapFile(mapRecord);
 }
 
 export function createUniqueSlug(records: Array<{ slug: string }>, name: string) {
@@ -387,8 +641,9 @@ export function createMapRecord(
   const normalizedHeight = normalizeMapDimension(height);
 
   return {
-    cells: createEmptyMapCells(normalizedWidth, normalizedHeight),
+    cells: flattenMapLayers(createEmptyMapLayers(normalizedWidth, normalizedHeight)),
     height: normalizedHeight,
+    layers: createEmptyMapLayers(normalizedWidth, normalizedHeight),
     name,
     slug,
     updatedAt: new Date().toISOString(),
@@ -398,6 +653,7 @@ export function createMapRecord(
 
 export function normalizeTilePayload(
   name: string,
+  path: string,
   slug: string,
   source: string,
   slots: Array<SlotRecord | null>,
@@ -405,6 +661,7 @@ export function normalizeTilePayload(
 ): TileRecord {
   return {
     name: name.trim(),
+    path: normalizeTileRecordPath(path),
     slug: slug.trim(),
     source: source.trim(),
     slots: normalizeSlotRecords(slots),
@@ -415,17 +672,19 @@ export function normalizeTilePayload(
 export function normalizeMapPayload(
   name: string,
   slug: string,
-  cells: string[][],
+  layers: MapLayerStack,
   width?: number,
   height?: number
 ): MapRecord {
-  const dimensions = getMapDimensions(cells);
+  const dimensions = getMapLayerDimensions(layers);
   const normalizedWidth = normalizeMapDimension(width ?? dimensions.width);
   const normalizedHeight = normalizeMapDimension(height ?? dimensions.height);
+  const normalizedLayers = normalizeMapLayers(layers, normalizedWidth, normalizedHeight);
 
   return {
-    cells: normalizeMapCells(cells, normalizedWidth, normalizedHeight),
+    cells: flattenMapLayers(normalizedLayers, normalizedWidth, normalizedHeight),
     height: normalizedHeight,
+    layers: normalizedLayers,
     name: name.trim(),
     slug: slug.trim(),
     updatedAt: new Date().toISOString(),

@@ -5,6 +5,8 @@ import { createContext, useContext } from "react";
 import type { SlotKey } from "../lib/slots";
 import type {
   ClipboardSlotRecord,
+  MapLayerStack,
+  MapDesignerUiState,
   MapRecord,
   PaintEditorUiState,
   SlotRecord,
@@ -17,15 +19,17 @@ export interface StudioContextValue {
   activeMapSlug: string;
   activeTile: TileRecord | null;
   activeTileSlug: string;
+  addTileLibraryFolder(folderPath: string): void;
   clearClipboardSlot(index: number): void;
   clipboardStatus: string;
   clipboardSlots: Array<ClipboardSlotRecord | null>;
-  getMapDraftCells(
+  getMapDesignerUiState(mapSlug: string): MapDesignerUiState;
+  getMapDraftLayers(
     mapSlug: string,
-    fallbackCells: string[][] | undefined,
+    fallbackLayers: MapLayerStack | undefined,
     width?: number,
     height?: number
-  ): string[][];
+  ): MapLayerStack;
   getPaintEditorUiState(sessionId: string): PaintEditorUiState;
   getTileDraftSlots(tileSlug: string, fallbackSlots: Array<SlotRecord | null> | undefined): Array<SlotRecord | null>;
   initialImagePath: string;
@@ -37,12 +41,14 @@ export interface StudioContextValue {
   selectedClipboardSlotIndex: number | null;
   setActiveMapSlug(mapSlug: string): void;
   setClipboardManagerOpen(isOpen: boolean): void;
+  setMapDesignerUiState(mapSlug: string, nextState: Partial<MapDesignerUiState>): void;
   setPaintEditorUiState(sessionId: string, nextState: Partial<PaintEditorUiState>): void;
   setSelectedClipboardSlotIndex(index: number | null): void;
-  setMapDraftCells(mapSlug: string, cells: string[][], width?: number, height?: number): void;
+  setMapDraftLayers(mapSlug: string, layers: MapLayerStack, width?: number, height?: number): void;
   setActiveTileSlug(tileSlug: string): void;
   setMapBrushTileSlug(tileSlug: string): void;
   setTileDraftSlots(tileSlug: string, slotRecords: Array<SlotRecord | null>): void;
+  tileLibraryFolders: string[];
   tiles: TileRecord[];
   updateTileDraftSlot(tileSlug: string, slotKey: SlotKey, slotRecord: SlotRecord | null): void;
   upsertMap(mapRecord: MapRecord): void;

@@ -6,6 +6,9 @@ import {
 } from "@vitejs/plugin-rsc/rsc";
 
 import AppDocument from "../app/AppDocument";
+import { createTileRecord } from "../lib/serverStore";
+
+const CREATE_TILE_PATH = "/__tiles/create";
 
 function getHtmlRequestUrl(request: Request) {
   const url = new URL(request.url);
@@ -19,6 +22,20 @@ function getHtmlRequestUrl(request: Request) {
 
 export default async function handler(request: Request) {
   const requestUrl = new URL(request.url);
+
+  if (request.method === "POST" && requestUrl.pathname === CREATE_TILE_PATH) {
+    try {
+      const requestBody = (await request.json()) as Partial<{ name: string; path: string }>;
+      const createdTile = await createTileRecord(requestBody.name ?? "", requestBody.path ?? "");
+
+      return Response.json(createdTile);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Could not create tile.";
+
+      return Response.json({ error: message }, { status: 400 });
+    }
+  }
+
   const isAction = request.method === "POST";
   const isRscRequest =
     requestUrl.pathname.endsWith(".rsc") ||

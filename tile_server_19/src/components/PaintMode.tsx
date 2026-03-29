@@ -26,13 +26,12 @@ import {
   describeSlot,
   getSlotIndex,
   normalizeSlotLayers,
-  normalizeSlotRecords,
   type SlotKey
 } from "../lib/slots";
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
-import type { PaintEditorSession, PaintToolId } from "../types";
+import type { PaintEditorSession, PaintLayerIndex, PaintToolId } from "../types";
 
 type PaintTool = PaintToolId;
 type MarqueeSelection = {
@@ -57,7 +56,6 @@ const PAINT_SCALE = 6;
 const PAINT_ZOOM_MAX_PERCENT = 300;
 const PAINT_ZOOM_MIN_PERCENT = 50;
 const PAINT_ZOOM_STEP_PERCENT = 10;
-const EDITABLE_LAYERS = [1, 2, 3, 4] as const;
 const FIXED_QUICK_COLORS = ["#000000", "#ffffff"];
 const FALLBACK_QUICK_COLORS = [
   "#142127",
@@ -95,8 +93,6 @@ function getPaintToolDescription(tool: PaintTool | null | undefined) {
   switch (tool) {
     case "brush":
       return "Brush (B) paints a small 3x3 area on the active layer.";
-    case "edger":
-      return "Edger (G) trims 2 pixels from every outer edge of the active layer and Lanczos-upscales it back to full size when you click the canvas.";
     case "eraser":
       return "Eraser (E) clears pixels from the active layer.";
     case "eyedropper":
@@ -104,7 +100,7 @@ function getPaintToolDescription(tool: PaintTool | null | undefined) {
     case "fill":
       return "Fill floods a connected area on the active layer with the current color.";
     case "marquee":
-      return "Marquee (M) drags a box and copies the visible pixels into the clipboard manager.";
+      return "Marquee (M) drags a box, then lets you copy [C] or erase [E] the selected region.";
     case "pencil":
       return "Pencil (P) draws single pixels on the active layer.";
     case "stamp":
@@ -225,6 +221,10 @@ function lanczosKernel(distance: number, radius: number) {
 
 function clampChannel(value: number) {
   return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function clampEdgerTrimPixels(value: number) {
+  return Math.max(1, Math.min(Math.floor(TILE_SIZE / 2) - 1, Math.floor(value)));
 }
 
 function resampleImageDataLanczos(
@@ -372,7 +372,7 @@ interface PaintWorkspaceProps {
   onZoomOut: () => void;
   preview128CanvasRef: { current: HTMLCanvasElement | null };
   preview64CanvasRef: { current: HTMLCanvasElement | null };
-  selectedLayerIndex: 1 | 2 | 3 | 4;
+  selectedLayerIndex: PaintLayerIndex;
   selectedTool: PaintTool;
   zoomPercent: number;
 }
@@ -481,7 +481,6 @@ const PaintWorkspace = memo(function PaintWorkspace({
 
         {Array.from({ length: SLOT_LAYER_COUNT }, (_, layerIndex) => {
           const selected = selectedLayerIndex === layerIndex;
-          const editable = layerIndex > 0;
 
           return (
             <div
@@ -494,10 +493,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
             >
               <div className="flex items-center justify-between gap-2">
                 <button
-                  className={`text-left text-xs font-extrabold uppercase tracking-[0.12em] ${
-                    editable ? "text-[#142127]" : "text-[#4a6069]"
-                  }`}
-                  disabled={!editable}
+                  className="text-left text-xs font-extrabold uppercase tracking-[0.12em] text-[#142127]"
                   onClick={() => {
                     onSelectLayer(layerIndex);
                   }}
@@ -505,33 +501,28 @@ const PaintWorkspace = memo(function PaintWorkspace({
                 >
                   Layer {layerIndex}
                 </button>
-                {editable ? (
-                  <button
-                    className="grid h-6 w-6 place-items-center border border-[#c3d0cb] text-[#4a6069] transition hover:border-[#d88753] hover:text-[#d88753]"
-                    onClick={() => {
-                      onClearLayer(layerIndex);
-                    }}
-                    title={`Clear Layer ${layerIndex}`}
-                    type="button"
-                  >
-                    <FontAwesomeIcon className="h-3.5 w-3.5" icon={faTrashCan} />
-                  </button>
-                ) : null}
+                <button
+                  className="grid h-6 w-6 place-items-center border border-[#c3d0cb] text-[#4a6069] transition hover:border-[#d88753] hover:text-[#d88753]"
+                  onClick={() => {
+                    onClearLayer(layerIndex);
+                  }}
+                  title={`Clear Layer ${layerIndex}`}
+                  type="button"
+                >
+                  <FontAwesomeIcon className="h-3.5 w-3.5" icon={faTrashCan} />
+                </button>
               </div>
               <div className="flex items-start gap-2">
                 <button
                   className={`grid w-fit place-items-center border transition ${
-                    editable
-                      ? selected
-                        ? "border-[#d88753]"
-                        : "border-[#c3d0cb] hover:border-[#4b86ff]"
-                      : "border-[#c3d0cb]"
+                    selected
+                      ? "border-[#d88753]"
+                      : "border-[#c3d0cb] hover:border-[#4b86ff]"
                   }`}
-                  disabled={!editable}
                   onClick={() => {
                     onSelectLayer(layerIndex);
                   }}
-                  title={editable ? `Select Layer ${layerIndex}` : `Layer ${layerIndex} preview`}
+                  title={`Select Layer ${layerIndex}`}
                   type="button"
                 >
                   <canvas
@@ -612,6 +603,8 @@ export function PaintMode({ session }: PaintModeProps) {
   );
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isEdgerConfirmOpen, setIsEdgerConfirmOpen] = useState(false);
+  const [edgerTrimPixelsInput, setEdgerTrimPixelsInput] = useState(String(EDGER_TRIM_PIXELS));
   const [marqueeSelection, setMarqueeSelection] = useState<MarqueeSelection | null>(null);
   const [stampPreview, setStampPreview] = useState<StampPreview | null>(null);
   const [stampSource, setStampSource] = useState<LoadedStampSource | null>(null);
@@ -667,7 +660,7 @@ export function PaintMode({ session }: PaintModeProps) {
   function updatePaintEditorUiState(nextState: Partial<{
     layerVisibilities: number[];
     paintColor: string;
-    selectedLayerIndex: 1 | 2 | 3 | 4;
+    selectedLayerIndex: PaintLayerIndex;
     selectedTool: PaintTool;
     zoomPercent: number;
   }>) {
@@ -675,12 +668,12 @@ export function PaintMode({ session }: PaintModeProps) {
   }
 
   function handleSelectLayer(layerIndex: number) {
-    if (layerIndex <= 0) {
+    if (layerIndex < 0 || layerIndex >= SLOT_LAYER_COUNT) {
       return;
     }
 
     updatePaintEditorUiState({
-      selectedLayerIndex: layerIndex as 1 | 2 | 3 | 4
+      selectedLayerIndex: layerIndex as PaintLayerIndex
     });
   }
 
@@ -751,6 +744,10 @@ export function PaintMode({ session }: PaintModeProps) {
   function setCurrentMarqueeSelection(nextSelection: MarqueeSelection | null) {
     marqueeSelectionRef.current = nextSelection;
     setMarqueeSelection(nextSelection);
+  }
+
+  function clearMarqueeSelection() {
+    setCurrentMarqueeSelection(null);
   }
 
   function getNormalizedMarqueeSelection(selection: MarqueeSelection) {
@@ -1018,6 +1015,24 @@ export function PaintMode({ session }: PaintModeProps) {
     return normalizeSlotLayers(nextLayers, nextLayers[0] ?? "");
   }
 
+  function buildCompositeImageDataForEdger() {
+    const compositeCanvas = document.createElement("canvas");
+    ensureCanvasSize(compositeCanvas, TILE_SIZE, TILE_SIZE);
+    const compositeContext = compositeCanvas.getContext("2d");
+
+    if (!compositeContext) {
+      return null;
+    }
+
+    drawComposite(
+      compositeContext,
+      Array.from({ length: selectedLayerIndex }, (_, layerIndex) => layerIndex),
+      () => 1
+    );
+
+    return compositeContext.getImageData(0, 0, TILE_SIZE, TILE_SIZE);
+  }
+
   function buildSlotRecordFromCanvases() {
     const nextLayers = getNormalizedLayersFromCanvases();
 
@@ -1173,10 +1188,25 @@ export function PaintMode({ session }: PaintModeProps) {
     );
   }, [selectedClipboardSlot, selectedClipboardSlotIndex, selectedLayerIndex, selectedTool, stampSource]);
 
+  useEffect(() => {
+    if (selectedTool !== "marquee") {
+      return;
+    }
+
+    if (!marqueeSelection || marqueeSelectingRef.current) {
+      return;
+    }
+
+    const normalizedSelection = getNormalizedMarqueeSelection(marqueeSelection);
+    setPaintStatus(
+      `Marquee selected ${normalizedSelection.width}x${normalizedSelection.height} pixels. Press [C] to copy to clipboard or [E] to erase from Layer ${selectedLayerIndex}.`
+    );
+  }, [marqueeSelection, selectedLayerIndex, selectedTool]);
+
   function setActiveTool(nextTool: PaintTool) {
     if (nextTool !== "marquee") {
       marqueeSelectingRef.current = false;
-      setCurrentMarqueeSelection(null);
+      clearMarqueeSelection();
     }
 
     if (nextTool !== "stamp") {
@@ -1262,6 +1292,23 @@ export function PaintMode({ session }: PaintModeProps) {
         return;
       }
 
+      if (selectedTool === "marquee" && !marqueeSelectingRef.current && marqueeSelectionRef.current) {
+        switch (event.key.toLowerCase()) {
+          case "c":
+            event.preventDefault();
+            if (copyMarqueeSelectionToClipboard(marqueeSelectionRef.current)) {
+              clearMarqueeSelection();
+            }
+            return;
+          case "e":
+            event.preventDefault();
+            eraseMarqueeSelectionFromLayer(marqueeSelectionRef.current);
+            return;
+          default:
+            break;
+        }
+      }
+
       switch (event.key.toLowerCase()) {
         case "p":
           event.preventDefault();
@@ -1270,10 +1317,6 @@ export function PaintMode({ session }: PaintModeProps) {
         case "b":
           event.preventDefault();
           setActiveTool("brush");
-          break;
-        case "g":
-          event.preventDefault();
-          setActiveTool("edger");
           break;
         case "e":
           event.preventDefault();
@@ -1309,7 +1352,7 @@ export function PaintMode({ session }: PaintModeProps) {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [selectedTool, zoomPercent]);
+  }, [selectedLayerIndex, selectedTool, zoomPercent]);
 
   useEffect(() => {
     const nextAnchor = pendingZoomAnchorRef.current;
@@ -1440,14 +1483,8 @@ export function PaintMode({ session }: PaintModeProps) {
     redrawAllCanvases();
   }
 
-  function applyEdgerToCurrentLayer() {
+  function applyEdgerToCurrentLayer(trimPixels: number) {
     const layerCanvas = getLayerCanvas(selectedLayerIndex);
-
-    if (isCanvasBlank(layerCanvas)) {
-      setPaintStatus(`Layer ${selectedLayerIndex} is empty, so Edger has nothing to process.`);
-      return;
-    }
-
     const context = layerCanvas.getContext("2d");
 
     if (!context) {
@@ -1455,32 +1492,55 @@ export function PaintMode({ session }: PaintModeProps) {
       return;
     }
 
-    const croppedSize = TILE_SIZE - EDGER_TRIM_PIXELS * 2;
+    const sourceImageData = buildCompositeImageDataForEdger();
+
+    if (!sourceImageData) {
+      setPaintStatus("Could not build the source image for Edger.");
+      return;
+    }
+
+    const croppedSize = TILE_SIZE - trimPixels * 2;
 
     if (croppedSize <= 0) {
       setPaintStatus("Edger could not trim this layer safely.");
       return;
     }
+    const sourceCanvas = document.createElement("canvas");
+    ensureCanvasSize(sourceCanvas, TILE_SIZE, TILE_SIZE);
+    const sourceContext = sourceCanvas.getContext("2d");
 
-    const croppedImageData = context.getImageData(
-      EDGER_TRIM_PIXELS,
-      EDGER_TRIM_PIXELS,
+    if (!sourceContext) {
+      setPaintStatus("Could not prepare the source canvas for Edger.");
+      return;
+    }
+
+    sourceContext.putImageData(sourceImageData, 0, 0);
+
+    const croppedSourceImageData = sourceContext.getImageData(
+      trimPixels,
+      trimPixels,
       croppedSize,
       croppedSize
     );
-    const resampledImageData = resampleImageDataLanczos(
-      croppedImageData,
-      TILE_SIZE,
-      TILE_SIZE,
-      LANCZOS_RADIUS
-    );
+    const resampledImageData = resampleImageDataLanczos(croppedSourceImageData, TILE_SIZE, TILE_SIZE, LANCZOS_RADIUS);
 
     context.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
     context.putImageData(resampledImageData, 0, 0);
     redrawAllCanvases();
     commitLayerChange(
-      `Edger processed ${session.title} Layer ${selectedLayerIndex} by trimming ${EDGER_TRIM_PIXELS}px from each side and resampling back to ${TILE_SIZE}x${TILE_SIZE}.`
+      `Edger rebuilt Layer ${selectedLayerIndex} from the layers below it, trimming ${trimPixels}px from each side and resampling back to ${TILE_SIZE}x${TILE_SIZE}.`
     );
+  }
+
+  function handleConfirmEdger() {
+    const parsedTrimPixels = Number.parseInt(edgerTrimPixelsInput, 10);
+    const trimPixels = clampEdgerTrimPixels(
+      Number.isFinite(parsedTrimPixels) ? parsedTrimPixels : EDGER_TRIM_PIXELS
+    );
+
+    setEdgerTrimPixelsInput(String(trimPixels));
+    setIsEdgerConfirmOpen(false);
+    applyEdgerToCurrentLayer(trimPixels);
   }
 
   function stampClipboardPixels(pixelX: number, pixelY: number) {
@@ -1536,7 +1596,7 @@ export function PaintMode({ session }: PaintModeProps) {
 
     if (!compositeContext) {
       setPaintStatus("Could not prepare the selection for the clipboard.");
-      return;
+      return false;
     }
 
     drawComposite(compositeContext, getVisibleEditorLayerIndices(), () => 1);
@@ -1548,7 +1608,7 @@ export function PaintMode({ session }: PaintModeProps) {
 
     if (!selectionContext) {
       setPaintStatus("Could not prepare the selection for the clipboard.");
-      return;
+      return false;
     }
 
     selectionContext.clearRect(0, 0, normalizedSelection.width, normalizedSelection.height);
@@ -1575,13 +1635,36 @@ export function PaintMode({ session }: PaintModeProps) {
 
     if (!copyResult.ok || typeof copyResult.slotIndex !== "number") {
       setPaintStatus("Clipboard manager is full. Clear a slot or choose an existing slot first.");
-      return;
+      return false;
     }
 
     setPaintStatus(
       `Copied ${normalizedSelection.width}x${normalizedSelection.height} pixels to clipboard slot ${
         copyResult.slotIndex + 1
       }.`
+    );
+    return true;
+  }
+
+  function eraseMarqueeSelectionFromLayer(selection: MarqueeSelection) {
+    const normalizedSelection = getNormalizedMarqueeSelection(selection);
+    const context = getSelectedLayerContext();
+
+    if (!context) {
+      setPaintStatus("Could not erase the selected marquee area.");
+      return;
+    }
+
+    context.clearRect(
+      normalizedSelection.left,
+      normalizedSelection.top,
+      normalizedSelection.width,
+      normalizedSelection.height
+    );
+    clearMarqueeSelection();
+    redrawAllCanvases();
+    commitLayerChange(
+      `Erased ${normalizedSelection.width}x${normalizedSelection.height} pixels from ${session.title} Layer ${selectedLayerIndex}.`
     );
   }
 
@@ -1602,13 +1685,15 @@ export function PaintMode({ session }: PaintModeProps) {
 
     marqueeSelectingRef.current = false;
     const completedSelection = marqueeSelectionRef.current;
-    setCurrentMarqueeSelection(null);
 
     if (!completedSelection) {
       return;
     }
 
-    copyMarqueeSelectionToClipboard(completedSelection);
+    const normalizedSelection = getNormalizedMarqueeSelection(completedSelection);
+    setPaintStatus(
+      `Marquee selected ${normalizedSelection.width}x${normalizedSelection.height} pixels. Press [C] to copy to clipboard or [E] to erase from Layer ${selectedLayerIndex}.`
+    );
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
@@ -1619,11 +1704,6 @@ export function PaintMode({ session }: PaintModeProps) {
     if (selectedTool === "stamp") {
       updateStampPreviewFromPixel(pixelX, pixelY);
       stampClipboardPixels(pixelX, pixelY);
-      return;
-    }
-
-    if (selectedTool === "edger") {
-      applyEdgerToCurrentLayer();
       return;
     }
 
@@ -1783,7 +1863,10 @@ export function PaintMode({ session }: PaintModeProps) {
           });
 
           upsertTile(savedTile);
-          setTileDraftSlots(savedTile.slug, normalizeSlotRecords(savedTile.slots));
+          // Keep the live draft/canvas state in place after save. Replacing it with the
+          // server-returned slot payload can force a redundant layer reload even when the
+          // editor already holds the same pixels locally.
+          setTileDraftSlots(savedTile.slug, nextDraftSlots);
           setPaintStatus(
             `Saved ${savedTile.name} (${savedTile.slug}). Layer data and the combined slot image are now on the server.`
           );
@@ -1817,7 +1900,6 @@ export function PaintMode({ session }: PaintModeProps) {
             {[
               { icon: faPencil, id: "pencil" as const, label: "Pencil", shortcut: "P" },
               { icon: faBrush, id: "brush" as const, label: "Brush", shortcut: "B" },
-              { icon: faCropSimple, id: "edger" as const, label: "Edger", shortcut: "G" },
               { icon: faEraser, id: "eraser" as const, label: "Eraser", shortcut: "E" },
               { icon: faEyeDropper, id: "eyedropper" as const, label: "Color", shortcut: "I" },
               { icon: faVectorSquare, id: "marquee" as const, label: "Marquee", shortcut: "M" },
@@ -1853,6 +1935,34 @@ export function PaintMode({ session }: PaintModeProps) {
             })}
           </div>
 
+          {selectedTool === "marquee" && marqueeSelection && !marqueeSelectingRef.current ? (
+            <div className="grid gap-3 border border-[#c3d0cb]/75 bg-white/85 p-3">
+              <div className="text-sm font-semibold text-[#142127]">Marquee Selection</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  className="min-h-10 border border-[#c3d0cb] bg-white px-3 py-2 text-sm font-semibold text-[#142127] transition hover:border-[#4b86ff] hover:bg-white"
+                  onClick={() => {
+                    if (copyMarqueeSelectionToClipboard(marqueeSelection)) {
+                      clearMarqueeSelection();
+                    }
+                  }}
+                  type="button"
+                >
+                  Copy to Clipboard [C]
+                </button>
+                <button
+                  className="min-h-10 border border-[#c3d0cb] bg-white px-3 py-2 text-sm font-semibold text-[#142127] transition hover:border-[#d88753] hover:bg-white"
+                  onClick={() => {
+                    eraseMarqueeSelectionFromLayer(marqueeSelection);
+                  }}
+                  type="button"
+                >
+                  Erase [E]
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="grid gap-3 border border-[#c3d0cb]/75 bg-white/85 p-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-[#142127]">
               <FontAwesomeIcon className="h-4 w-4 text-[#4b86ff]" icon={faDroplet} />
@@ -1886,11 +1996,25 @@ export function PaintMode({ session }: PaintModeProps) {
             </div>
           </div>
 
+          <div className="grid gap-3 border border-[#c3d0cb]/75 bg-white/85 p-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#142127]">
+              <FontAwesomeIcon className="h-4 w-4 text-[#d88753]" icon={faCropSimple} />
+              Advanced Tools
+            </div>
+            <button
+              className="min-h-10 border border-[#c3d0cb] bg-white px-3 py-2 text-sm font-semibold text-[#142127] transition hover:border-[#d88753] hover:bg-white"
+              onClick={() => {
+                setIsEdgerConfirmOpen(true);
+              }}
+              type="button"
+            >
+              Run Edger On Layer {selectedLayerIndex}
+            </button>
+          </div>
+
           <div className="grid gap-2 border border-[#c3d0cb]/75 bg-white/85 p-3 text-sm text-[#4a6069]">
             <div className="font-semibold text-[#142127]">{session.title}</div>
-            <div>
-              Editing Layer {selectedLayerIndex}. Layer 0 is read-only and always contains the original capture.
-            </div>
+            <div>Editing Layer {selectedLayerIndex}.</div>
             <div>
               {slotRecord
                 ? `Original capture: ${slotRecord.size}px @ ${slotRecord.source_x}, ${slotRecord.source_y}`
@@ -1954,6 +2078,50 @@ export function PaintMode({ session }: PaintModeProps) {
           zoomPercent={zoomPercent}
         />
       </Panel>
+
+      {isEdgerConfirmOpen ? (
+        <div className="fixed inset-0 z-[120] grid place-items-center bg-[rgba(20,33,39,0.45)] p-4">
+          <div className="w-full max-w-md border border-[#c3d0cb] bg-[linear-gradient(180deg,rgba(255,253,248,0.99),rgba(255,251,244,0.97))] p-5 shadow-[0_24px_60px_rgba(20,33,39,0.28)]">
+            <div className="grid gap-3">
+              <div className="text-lg font-semibold text-[#142127]">Run Edger?</div>
+              <div className="text-sm text-[#4a6069]">
+                Are you sure you would like to run the Edger tool which will erase the contents of layer {selectedLayerIndex} and replace it with the new image?
+              </div>
+              <label className="grid gap-1 text-sm text-[#4a6069]">
+                <span className="font-semibold text-[#142127]">Edger Mode Size</span>
+                <input
+                  className="h-10 border border-[#c3d0cb] bg-white px-3 text-[#142127]"
+                  inputMode="numeric"
+                  min={1}
+                  onChange={(event) => {
+                    setEdgerTrimPixelsInput(event.currentTarget.value);
+                  }}
+                  type="number"
+                  value={edgerTrimPixelsInput}
+                />
+              </label>
+              <div className="flex justify-end gap-3">
+                <button
+                  className="min-h-10 border border-[#c3d0cb] bg-white px-4 py-2 text-sm font-semibold text-[#4a6069] transition hover:border-[#4b86ff] hover:text-[#142127]"
+                  onClick={() => {
+                    setIsEdgerConfirmOpen(false);
+                  }}
+                  type="button"
+                >
+                  No
+                </button>
+                <button
+                  className="min-h-10 border border-[#d88753] bg-[#d88753] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#c77641]"
+                  onClick={handleConfirmEdger}
+                  type="button"
+                >
+                  Yes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

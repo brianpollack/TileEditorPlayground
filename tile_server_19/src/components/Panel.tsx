@@ -8,6 +8,7 @@ interface PanelProps {
   className?: string;
   description?: string;
   footer?: React.ReactNode;
+  subheader?: React.ReactNode;
   title: string;
 }
 
@@ -17,6 +18,7 @@ export function Panel({
   className = "",
   description,
   footer,
+  subheader,
   title
 }: PanelProps) {
   const classes = [
@@ -28,7 +30,7 @@ export function Panel({
 
   return (
     <section className={classes}>
-      <PanelHeader actions={actions} description={description} title={title} />
+      <PanelHeader actions={actions} description={description} subheader={subheader} title={title} />
       <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 py-4">{children}</div>
       {footer ? (
         <footer className="border-t border-[#c3d0cb]/65 bg-[rgba(244,239,226,0.7)] px-4 py-4">
