@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, type Dirent } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +19,12 @@ import {
 } from "./map";
 import { normalizeUnderscoreName } from "./naming";
 import { normalizeSlotRecords } from "./slots";
-import { normalizeTileLibraryPath, normalizeTileRecordPath, TILE_LIBRARY_LAYERS } from "./tileLibrary";
+import {
+  normalizeTileLibraryPath,
+  normalizeTileRecordPath,
+  TILE_LIBRARY_LAYERS,
+  tileLibraryPathSupportsSprites
+} from "./tileLibrary";
 import type {
   ClipboardSlotRecord,
   ExportArtifact,
@@ -28,6 +33,7 @@ import type {
   MapRecord,
   MapTileOptions,
   MapTilePlacement,
+  SpriteRecord,
   SlotRecord,
   TileRecord
 } from "../types";
@@ -42,6 +48,7 @@ const TILE_DB_PATH = path.join(DATA_DIR, "all_tiles.json");
 const LEGACY_TILE_DB_PATH = path.join(WORKSPACE_ROOT, "tile_server", "all_tiles.json");
 const EXPORTS_DIR = path.join(APP_ROOT, "exports");
 const IMAGE_EXTENSIONS = new Set([".gif", ".jpeg", ".jpg", ".png", ".webp"]);
+const SPRITE_IMAGE_EXTENSION = ".png";
 const THUMBNAIL_TILE_SIZE = 16;
 const MAP_SCHEMA_REF = "./starter-camp.jsonschema";
 
@@ -65,6 +72,8 @@ interface StoredMapRecord {
   width?: number;
 }
 
+type StoredSpriteRecord = Omit<SpriteRecord, "path" | "thumbnail">;
+
 function slugifyName(name: string) {
   const slug = name
     .trim()
@@ -87,10 +96,18 @@ function getSafeProjectPath(projectPath: string) {
 
 async function readTileLibraryFoldersRecursively(
   relativePath: string,
-  collectedPaths: Set<string>
+  collectedPaths: Set<string>,
+  collectedSprites?: Map<string, SpriteRecord>
 ) {
   const absolutePath = getSafeProjectPath(relativePath);
   const entries = await readdir(absolutePath, { withFileTypes: true });
+
+  await ensureSpriteMetadataForDirectory(relativePath, entries);
+
+  if (collectedSprites) {
+    const refreshedEntries = await readdir(absolutePath, { withFileTypes: true });
+    await collectSpriteRecordsForDirectory(relativePath, refreshedEntries, collectedSprites);
+  }
 
   for (const entry of entries) {
     if (!entry.isDirectory()) {
@@ -99,7 +116,7 @@ async function readTileLibraryFoldersRecursively(
 
     const childPath = normalizeTileRecordPath(path.posix.join(relativePath, entry.name));
     collectedPaths.add(childPath);
-    await readTileLibraryFoldersRecursively(childPath, collectedPaths);
+    await readTileLibraryFoldersRecursively(childPath, collectedPaths, collectedSprites);
   }
 }
 
@@ -119,6 +136,219 @@ function getImageMimeType(filePath: string) {
   }
 
   return "image/png";
+}
+
+function getSpriteRecordKey(spriteRecord: Pick<SpriteRecord, "filename" | "path">) {
+  return `${normalizeTileRecordPath(spriteRecord.path)}/${spriteRecord.filename}`;
+}
+
+function sanitizeSpriteFilename(fileName: string) {
+  const parsed = path.parse(fileName.trim());
+  const extension = parsed.ext.toLowerCase();
+  const normalizedStem = normalizeUnderscoreName(parsed.name);
+
+  if (!normalizedStem) {
+    throw new Error("Sprite filename is required.");
+  }
+
+  if (extension !== SPRITE_IMAGE_EXTENSION) {
+    throw new Error("Sprite imports currently require a PNG file.");
+  }
+
+  return `${normalizedStem}${extension}`;
+}
+
+function createInitialSpriteRecord(relativePath: string, fileName: string, imageWidth: number, imageHeight: number) {
+  return normalizeSpriteRecord({
+    filename: fileName,
+    image_h: imageHeight,
+    image_w: imageWidth,
+    impassible: false,
+    is_flat: false,
+    item_id: 0,
+    mount_x: imageWidth / 2,
+    mount_y: imageHeight / 2,
+    name: path.parse(fileName).name,
+    offset_x: 0,
+    offset_y: 0,
+    path: relativePath,
+    thumbnail: "",
+    tile_h: imageHeight / TILE_SIZE,
+    tile_w: imageWidth / TILE_SIZE
+  });
+}
+
+function normalizeFiniteNumber(value: unknown, fallbackValue: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallbackValue;
+}
+
+function normalizeSpriteRecord(record: SpriteRecord): SpriteRecord {
+  const normalizedPath = normalizeTileRecordPath(record.path);
+  const normalizedFilename = sanitizeSpriteFilename(record.filename);
+  const imageWidth = Math.max(1, normalizeFiniteNumber(record.image_w, TILE_SIZE));
+  const imageHeight = Math.max(1, normalizeFiniteNumber(record.image_h, TILE_SIZE));
+
+  return {
+    filename: normalizedFilename,
+    image_h: imageHeight,
+    image_w: imageWidth,
+    impassible: Boolean(record.impassible),
+    is_flat: Boolean(record.is_flat),
+    item_id: Math.max(0, Math.round(normalizeFiniteNumber(record.item_id, 0))),
+    mount_x: normalizeFiniteNumber(record.mount_x, imageWidth / 2),
+    mount_y: normalizeFiniteNumber(record.mount_y, imageHeight / 2),
+    name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : path.parse(normalizedFilename).name,
+    offset_x: normalizeFiniteNumber(record.offset_x, 0),
+    offset_y: normalizeFiniteNumber(record.offset_y, 0),
+    path: normalizedPath,
+    thumbnail: typeof record.thumbnail === "string" ? record.thumbnail.trim() : "",
+    tile_h: normalizeFiniteNumber(record.tile_h, imageHeight / TILE_SIZE),
+    tile_w: normalizeFiniteNumber(record.tile_w, imageWidth / TILE_SIZE)
+  };
+}
+
+function parseSpriteRecord(relativePath: string, jsonFileName: string, candidate: unknown): SpriteRecord | null {
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+
+  const record = candidate as Partial<StoredSpriteRecord>;
+  const fallbackFilename = `${path.parse(jsonFileName).name}${SPRITE_IMAGE_EXTENSION}`;
+  const filename =
+    typeof record.filename === "string" && record.filename.trim() ? record.filename.trim() : fallbackFilename;
+
+  try {
+    return normalizeSpriteRecord({
+      filename,
+      image_h: normalizeFiniteNumber(record.image_h, TILE_SIZE),
+      image_w: normalizeFiniteNumber(record.image_w, TILE_SIZE),
+      impassible: Boolean(record.impassible),
+      is_flat: Boolean(record.is_flat),
+      item_id: normalizeFiniteNumber(record.item_id, 0),
+      mount_x: normalizeFiniteNumber(record.mount_x, normalizeFiniteNumber(record.image_w, TILE_SIZE) / 2),
+      mount_y: normalizeFiniteNumber(record.mount_y, normalizeFiniteNumber(record.image_h, TILE_SIZE) / 2),
+      name: typeof record.name === "string" ? record.name : path.parse(filename).name,
+      offset_x: normalizeFiniteNumber(record.offset_x, 0),
+      offset_y: normalizeFiniteNumber(record.offset_y, 0),
+      path: relativePath,
+      thumbnail: "",
+      tile_h: normalizeFiniteNumber(record.tile_h, normalizeFiniteNumber(record.image_h, TILE_SIZE) / TILE_SIZE),
+      tile_w: normalizeFiniteNumber(record.tile_w, normalizeFiniteNumber(record.image_w, TILE_SIZE) / TILE_SIZE)
+    });
+  } catch {
+    return null;
+  }
+}
+
+function serializeStoredSpriteRecord(spriteRecord: SpriteRecord): StoredSpriteRecord {
+  const normalized = normalizeSpriteRecord(spriteRecord);
+
+  return {
+    filename: normalized.filename,
+    image_h: normalized.image_h,
+    image_w: normalized.image_w,
+    impassible: normalized.impassible,
+    is_flat: normalized.is_flat,
+    item_id: normalized.item_id,
+    mount_x: normalized.mount_x,
+    mount_y: normalized.mount_y,
+    name: normalized.name,
+    offset_x: normalized.offset_x,
+    offset_y: normalized.offset_y,
+    tile_h: normalized.tile_h,
+    tile_w: normalized.tile_w
+  };
+}
+
+function getSpriteJsonPath(relativePath: string, spriteFileName: string) {
+  return path.posix.join(relativePath, `${path.parse(spriteFileName).name}.json`);
+}
+
+async function writeSpriteRecord(spriteRecord: SpriteRecord) {
+  const normalized = normalizeSpriteRecord(spriteRecord);
+  const jsonPath = getSafeProjectPath(getSpriteJsonPath(normalized.path, normalized.filename));
+  const storedRecord = serializeStoredSpriteRecord(normalized);
+
+  await writeFile(jsonPath, `${JSON.stringify(storedRecord, null, 2)}\n`, "utf8");
+}
+
+function getSpriteSizeFromBuffer(buffer: Buffer) {
+  const png = PNG.sync.read(buffer);
+  return { height: png.height, width: png.width };
+}
+
+function createSpriteThumbnailDataUrl(buffer: Buffer, fileName: string) {
+  const mimeType = getImageMimeType(fileName);
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+async function ensureSpriteMetadataForDirectory(relativePath: string, entries: Dirent[]) {
+  if (!tileLibraryPathSupportsSprites(relativePath)) {
+    return;
+  }
+
+  const jsonNames = new Set(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"))
+      .map((entry) => entry.name.toLowerCase())
+  );
+
+  for (const entry of entries) {
+    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== SPRITE_IMAGE_EXTENSION) {
+      continue;
+    }
+
+    const expectedJsonName = `${path.parse(entry.name).name}.json`.toLowerCase();
+
+    if (jsonNames.has(expectedJsonName)) {
+      continue;
+    }
+
+    const spritePath = path.posix.join(relativePath, entry.name);
+    const spriteBuffer = await readFile(getSafeProjectPath(spritePath));
+    const { height, width } = getSpriteSizeFromBuffer(spriteBuffer);
+    await writeSpriteRecord(createInitialSpriteRecord(relativePath, entry.name, width, height));
+  }
+}
+
+async function collectSpriteRecordsForDirectory(
+  relativePath: string,
+  entries: Dirent[],
+  collectedSprites: Map<string, SpriteRecord>
+) {
+  if (!tileLibraryPathSupportsSprites(relativePath)) {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== ".json") {
+      continue;
+    }
+
+    try {
+      const spriteJsonPath = getSafeProjectPath(path.posix.join(relativePath, entry.name));
+      const parsed = JSON.parse(await readFile(spriteJsonPath, "utf8")) as unknown;
+      const spriteRecord = parseSpriteRecord(relativePath, entry.name, parsed);
+
+      if (!spriteRecord) {
+        continue;
+      }
+
+      const spriteImagePath = getSafeProjectPath(path.posix.join(relativePath, spriteRecord.filename));
+
+      if (!existsSync(spriteImagePath)) {
+        continue;
+      }
+
+      const spriteBuffer = await readFile(spriteImagePath);
+      collectedSprites.set(getSpriteRecordKey(spriteRecord), {
+        ...spriteRecord,
+        thumbnail: createSpriteThumbnailDataUrl(spriteBuffer, spriteRecord.filename)
+      });
+    } catch {
+      continue;
+    }
+  }
 }
 
 function isTileRecord(candidate: unknown): candidate is TileRecord {
@@ -450,6 +680,22 @@ export async function readTileLibraryFolders() {
   return Array.from(folderPaths).sort((left, right) => left.localeCompare(right));
 }
 
+export async function readSpriteRecords() {
+  await ensureTileDatabase();
+  const spriteRecords = new Map<string, SpriteRecord>();
+
+  for (const layer of TILE_LIBRARY_LAYERS) {
+    await readTileLibraryFoldersRecursively(layer.folder, new Set<string>(), spriteRecords);
+  }
+
+  return Array.from(spriteRecords.values()).sort(
+    (left, right) =>
+      left.path.localeCompare(right.path) ||
+      left.name.localeCompare(right.name) ||
+      left.filename.localeCompare(right.filename)
+  );
+}
+
 export async function ensureTileLibraryFolder(relativePath: string) {
   const normalizedPath = normalizeTileRecordPath(relativePath);
   await ensureTileDatabase();
@@ -483,6 +729,88 @@ export async function createTileRecord(name: string, tilePath: string) {
   await writeTileRecords(tileRecords);
 
   return nextTile;
+}
+
+export async function importSpriteFile(file: File, spritePath: string) {
+  const normalizedPath = normalizeTileLibraryPath(spritePath);
+
+  if (!normalizedPath) {
+    throw new Error("Choose a tile library folder before importing a sprite.");
+  }
+
+  if (!tileLibraryPathSupportsSprites(normalizedPath)) {
+    throw new Error("Sprites can only be imported into layers above layer_0.");
+  }
+
+  await ensureTileLibraryFolder(normalizedPath);
+
+  const spriteFilename = sanitizeSpriteFilename(file.name);
+  const spriteImagePath = getSafeProjectPath(path.posix.join(normalizedPath, spriteFilename));
+  const spriteJsonPath = getSafeProjectPath(getSpriteJsonPath(normalizedPath, spriteFilename));
+
+  if (existsSync(spriteImagePath) || existsSync(spriteJsonPath)) {
+    throw new Error(`A sprite named ${spriteFilename} already exists in this folder.`);
+  }
+
+  const fileBuffer = Buffer.from(await file.arrayBuffer());
+  const { height, width } = getSpriteSizeFromBuffer(fileBuffer);
+
+  await writeFile(spriteImagePath, fileBuffer);
+
+  const spriteRecord = {
+    ...createInitialSpriteRecord(normalizedPath, spriteFilename, width, height),
+    thumbnail: createSpriteThumbnailDataUrl(fileBuffer, spriteFilename)
+  };
+  await writeSpriteRecord(spriteRecord);
+
+  return spriteRecord;
+}
+
+export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: File | null) {
+  const normalizedSprite = normalizeSpriteRecord(input);
+  const normalizedPath = normalizeTileLibraryPath(normalizedSprite.path);
+
+  if (!normalizedPath) {
+    throw new Error("Choose a tile library folder before saving a sprite.");
+  }
+
+  if (!tileLibraryPathSupportsSprites(normalizedPath)) {
+    throw new Error("Sprites can only be saved into layers above layer_0.");
+  }
+
+  const spriteImagePath = getSafeProjectPath(path.posix.join(normalizedPath, normalizedSprite.filename));
+  let thumbnailBuffer: Buffer | null = null;
+  let nextSprite = normalizedSprite;
+
+  if (replacementFile) {
+    if (path.extname(replacementFile.name).toLowerCase() !== SPRITE_IMAGE_EXTENSION) {
+      throw new Error("Sprite replacement images currently require a PNG file.");
+    }
+
+    thumbnailBuffer = Buffer.from(await replacementFile.arrayBuffer());
+    const { height, width } = getSpriteSizeFromBuffer(thumbnailBuffer);
+
+    await writeFile(spriteImagePath, thumbnailBuffer);
+
+    nextSprite = normalizeSpriteRecord({
+      ...normalizedSprite,
+      image_h: height,
+      image_w: width
+    });
+  } else {
+    if (!existsSync(spriteImagePath)) {
+      throw new Error("Sprite image file is missing on disk.");
+    }
+
+    thumbnailBuffer = await readFile(spriteImagePath);
+  }
+
+  await writeSpriteRecord(nextSprite);
+
+  return {
+    ...nextSprite,
+    thumbnail: createSpriteThumbnailDataUrl(thumbnailBuffer, nextSprite.filename)
+  };
 }
 
 export async function readMapRecords() {

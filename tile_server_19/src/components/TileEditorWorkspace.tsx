@@ -8,6 +8,11 @@ import { describeSlot, type SlotKey } from "../lib/slots";
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
+import {
+  canvasViewportClass,
+  modalSurfaceClass,
+  secondaryButtonClass
+} from "./uiStyles";
 import type { SlotRecord, TileRecord } from "../types";
 
 const SELECTOR_SIZES = [128, 64, 32, 16] as const;
@@ -161,7 +166,7 @@ function TileEditorWorkspaceImpl({
           })}
         </div>
 
-        <div className="relative flex min-h-[24rem] items-center justify-center overflow-auto border border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(244,239,226,0.82),rgba(215,236,233,0.36))]">
+        <div className={`relative flex min-h-[24rem] items-center justify-center ${canvasViewportClass}`}>
           <canvas
             className={`${sourceImage ? "block" : "hidden"} max-w-full bg-[#0d161b] [image-rendering:pixelated]`}
             onClick={onSourceCanvasClick}
@@ -306,7 +311,7 @@ function TileEditorWorkspaceImpl({
 
       {slotPendingClear && activeTile ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-[#0d161b]/55 px-4">
-          <div className="w-full max-w-md border border-[#c3d0cb]/75 bg-[linear-gradient(180deg,rgba(255,253,248,0.98),rgba(255,253,248,0.94))] p-5 shadow-[0_18px_40px_rgba(20,33,39,0.24)]">
+          <div className={`${modalSurfaceClass} max-w-md p-5`}>
             <div className="grid gap-2">
               <h3 className="font-serif text-[1.45rem] text-[#142127]">Clear Slot?</h3>
               <p className="text-sm leading-6 text-[#4a6069]">
@@ -316,7 +321,7 @@ function TileEditorWorkspaceImpl({
             </div>
             <div className="mt-5 flex justify-end gap-3">
               <button
-                className="min-h-10 border border-[#c3d0cb] bg-white/92 px-4 py-2 text-sm font-semibold text-[#142127] transition hover:bg-white"
+                className={secondaryButtonClass}
                 onClick={onCancelClearSlot}
                 type="button"
               >

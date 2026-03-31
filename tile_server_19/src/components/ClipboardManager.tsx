@@ -5,6 +5,11 @@ import { faClipboard, faTrashCan } from "@awesome.me/kit-a62459359b/icons/classi
 
 import { useStudio } from "../app/StudioContext";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
+import {
+  closeButtonClass,
+  floatingPanelSurfaceClass,
+  iconButtonClass
+} from "./uiStyles";
 
 const DEFAULT_PANEL_HEIGHT = 420;
 const DEFAULT_PANEL_WIDTH = 448;
@@ -121,7 +126,7 @@ export function ClipboardManager() {
 
   return (
     <div
-      className="fixed z-[80] w-[28rem] border border-[#c3d0cb] bg-[linear-gradient(180deg,rgba(255,253,248,0.98),rgba(255,253,248,0.94))] shadow-[0_24px_60px_rgba(20,33,39,0.28)]"
+      className={floatingPanelSurfaceClass}
       ref={containerRef}
       style={{ left: `${position.left}px`, top: `${position.top}px` }}
     >
@@ -142,7 +147,7 @@ export function ClipboardManager() {
           </div>
         </div>
         <button
-          className="min-h-9 min-w-9 border border-[#c3d0cb] bg-white/90 px-3 text-sm font-semibold text-[#4a6069] transition hover:border-[#d88753] hover:text-[#142127]"
+          className={closeButtonClass}
           onClick={() => {
             setClipboardManagerOpen(false);
           }}
@@ -158,7 +163,7 @@ export function ClipboardManager() {
             <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.08em] text-[#4a6069]">
               <span>Slot {index + 1}</span>
               <button
-                className="grid h-5 w-5 place-items-center border border-[#c3d0cb] text-[#4a6069] transition hover:border-[#d88753] hover:text-[#d88753] disabled:opacity-35"
+                className={`${iconButtonClass} h-5 w-5 disabled:opacity-35`}
                 disabled={!slot}
                 onClick={() => {
                   clearClipboardSlot(index);

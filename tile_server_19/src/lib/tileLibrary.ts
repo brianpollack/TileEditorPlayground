@@ -48,6 +48,16 @@ export function normalizeTileRecordPath(path: string | undefined) {
   return normalizeTileLibraryPath(path) || DEFAULT_TILE_LIBRARY_PATH;
 }
 
+export function getTileLibrarySpriteKey(path: string | undefined, filename: string | undefined) {
+  const normalizedFilename = typeof filename === "string" ? filename.trim() : "";
+
+  if (!normalizedFilename) {
+    return "";
+  }
+
+  return `${normalizeTileRecordPath(path)}/${normalizedFilename}`;
+}
+
 export function splitTileLibraryPath(path: string | undefined) {
   const normalized = normalizeTileLibraryPath(path);
   return normalized ? normalized.split("/") : [];
@@ -56,6 +66,16 @@ export function splitTileLibraryPath(path: string | undefined) {
 export function getTileLibraryLayer(path: string | undefined) {
   const [layerFolder] = splitTileLibraryPath(path);
   return TILE_LIBRARY_LAYERS.find((layer) => layer.folder === layerFolder) ?? null;
+}
+
+export function tileLibraryPathSupportsSprites(path: string | undefined) {
+  const layer = getTileLibraryLayer(path);
+
+  if (!layer) {
+    return false;
+  }
+
+  return layer.index > 0;
 }
 
 export function getTileLibraryLayerLabel(layer: TileLibraryLayer) {

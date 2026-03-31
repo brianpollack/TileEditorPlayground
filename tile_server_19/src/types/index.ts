@@ -70,6 +70,24 @@ export interface TileRecord {
   thumbnail: string;
 }
 
+export interface SpriteRecord {
+  filename: string;
+  image_h: number;
+  image_w: number;
+  impassible: boolean;
+  is_flat: boolean;
+  item_id: number;
+  mount_x: number;
+  mount_y: number;
+  name: string;
+  offset_x: number;
+  offset_y: number;
+  path: string;
+  thumbnail: string;
+  tile_h: number;
+  tile_w: number;
+}
+
 export interface MapRecord {
   cells: string[][];
   height: number;

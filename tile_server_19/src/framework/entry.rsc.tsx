@@ -6,9 +6,12 @@ import {
 } from "@vitejs/plugin-rsc/rsc";
 
 import AppDocument from "../app/AppDocument";
-import { createTileRecord } from "../lib/serverStore";
+import { createTileRecord, importSpriteFile, saveSpriteRecord } from "../lib/serverStore";
+import type { SpriteRecord } from "../types";
 
 const CREATE_TILE_PATH = "/__tiles/create";
+const IMPORT_SPRITE_PATH = "/__tiles/import-sprite";
+const SAVE_SPRITE_PATH = "/__tiles/save-sprite";
 
 function getHtmlRequestUrl(request: Request) {
   const url = new URL(request.url);
@@ -31,6 +34,53 @@ export default async function handler(request: Request) {
       return Response.json(createdTile);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Could not create tile.";
+
+      return Response.json({ error: message }, { status: 400 });
+    }
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === IMPORT_SPRITE_PATH) {
+    try {
+      const formData = await request.formData();
+      const spriteFile = formData.get("file");
+      const spritePath = formData.get("path");
+
+      if (!(spriteFile instanceof File)) {
+        throw new Error("Choose a PNG file to import.");
+      }
+
+      if (typeof spritePath !== "string") {
+        throw new Error("Choose a tile library folder before importing a sprite.");
+      }
+
+      const importedSprite = await importSpriteFile(spriteFile, spritePath);
+
+      return Response.json(importedSprite);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Could not import sprite.";
+
+      return Response.json({ error: message }, { status: 400 });
+    }
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === SAVE_SPRITE_PATH) {
+    try {
+      const formData = await request.formData();
+      const replacementFile = formData.get("file");
+      const sprite = formData.get("sprite");
+
+      if (typeof sprite !== "string") {
+        throw new Error("Sprite payload is required.");
+      }
+
+      const savedSprite = await saveSpriteRecord(
+        JSON.parse(sprite) as SpriteRecord,
+        replacementFile instanceof File ? replacementFile : null
+      );
+
+      return Response.json(savedSprite);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Could not save sprite.";
 
       return Response.json({ error: message }, { status: 400 });
     }

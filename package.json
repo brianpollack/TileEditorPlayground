@@ -8,6 +8,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
+    "audio:test": "tsx audio_test.ts",
     "build": "tsc --project tsconfig.json",
     "cleanup": "tsx src/cleanup-output.ts",
     "dev": "tsx watch src/index.ts",
@@ -36,6 +37,7 @@
     "typescript-eslint": "^8.57.1"
   },
   "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.40.0",
     "@fal-ai/client": "^1.9.5",
     "@openrouter/sdk": "^0.9.11",
     "@types/react": "^19.2.14",

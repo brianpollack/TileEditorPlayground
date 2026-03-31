@@ -9,6 +9,7 @@ import type {
   MapDesignerUiState,
   MapRecord,
   PaintEditorUiState,
+  SpriteRecord,
   SlotRecord,
   TileRecord
 } from "../types";
@@ -17,6 +18,8 @@ export interface StudioContextValue {
   addClipboardSlot(image: string): { ok: boolean; slotIndex?: number };
   activeMap: MapRecord | null;
   activeMapSlug: string;
+  activeSprite: SpriteRecord | null;
+  activeSpriteKey: string;
   activeTile: TileRecord | null;
   activeTileSlug: string;
   addTileLibraryFolder(folderPath: string): void;
@@ -45,11 +48,14 @@ export interface StudioContextValue {
   setPaintEditorUiState(sessionId: string, nextState: Partial<PaintEditorUiState>): void;
   setSelectedClipboardSlotIndex(index: number | null): void;
   setMapDraftLayers(mapSlug: string, layers: MapLayerStack, width?: number, height?: number): void;
+  setActiveSpriteKey(spriteKey: string): void;
   setActiveTileSlug(tileSlug: string): void;
   setMapBrushTileSlug(tileSlug: string): void;
   setTileDraftSlots(tileSlug: string, slotRecords: Array<SlotRecord | null>): void;
+  sprites: SpriteRecord[];
   tileLibraryFolders: string[];
   tiles: TileRecord[];
+  upsertSprite(spriteRecord: SpriteRecord): void;
   updateTileDraftSlot(tileSlug: string, slotKey: SlotKey, slotRecord: SlotRecord | null): void;
   upsertMap(mapRecord: MapRecord): void;
   upsertTile(tileRecord: TileRecord): void;

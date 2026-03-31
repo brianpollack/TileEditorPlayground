@@ -1,6 +1,7 @@
 import {
   readClipboardSlots,
   readMapRecords,
+  readSpriteRecords,
   readTileLibraryFolders,
   readTileRecords
 } from "../lib/serverStore";
@@ -16,6 +17,7 @@ export default async function AppDocument({ requestUrl }: AppDocumentProps) {
   const url = new URL(requestUrl);
   const clipboardSlots = await readClipboardSlots();
   const tileLibraryFolders = await readTileLibraryFolders();
+  const sprites = await readSpriteRecords();
   const tiles = await readTileRecords();
   const maps = await readMapRecords();
   const initialBrushTileSlug = url.searchParams.get("brush")?.trim() ?? "";
@@ -24,6 +26,7 @@ export default async function AppDocument({ requestUrl }: AppDocumentProps) {
   const initialMapSlug = url.searchParams.get("map")?.trim() ?? "";
   const initialMode = url.searchParams.get("mode")?.trim() ?? "";
   const initialPaintEditors = url.searchParams.get("paint")?.trim() ?? "";
+  const initialSpriteKey = url.searchParams.get("sprite")?.trim() ?? "";
 
   return (
     <html lang="en">
@@ -47,10 +50,12 @@ export default async function AppDocument({ requestUrl }: AppDocumentProps) {
           initialMapSlug={initialMapSlug}
           initialMode={initialMode}
           initialPaintEditors={initialPaintEditors}
-        maps={maps}
-        tileLibraryFolders={tileLibraryFolders}
-        tiles={tiles}
-      />
+          initialSpriteKey={initialSpriteKey}
+          maps={maps}
+          sprites={sprites}
+          tileLibraryFolders={tileLibraryFolders}
+          tiles={tiles}
+        />
       </body>
     </html>
   );

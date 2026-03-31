@@ -50,6 +50,23 @@ import { useImageCache } from "../lib/useImageCache";
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
+import {
+  canvasViewportClass,
+  closeButtonClass,
+  compactTextInputClass,
+  iconButtonClass,
+  modalSurfaceClass,
+  previewCanvasClass,
+  previewSelectionButtonClass,
+  sectionCardClass,
+  secondaryButtonClass,
+  selectableCardClass,
+  selectablePanelClass,
+  statusChipClass,
+  textInputClass,
+  visibilityOptionButtonClass,
+  zoomButtonClass
+} from "./uiStyles";
 import type { MapTileOptions, TileCell, TileRecord } from "../types";
 
 const MAP_PREVIEW_SIZE = 128;
@@ -131,7 +148,7 @@ const MapWorkspace = memo(function MapWorkspace({
     <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_16rem]">
       <div className="grid min-h-0 content-start gap-3">
         <div
-          className="h-[clamp(28rem,70vh,58rem)] overflow-auto border border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(244,239,226,0.82),rgba(215,236,233,0.36))] p-4"
+          className={`${canvasViewportClass} h-[clamp(28rem,70vh,58rem)] p-4`}
           ref={mapFrameRef}
         >
           <canvas
@@ -148,12 +165,12 @@ const MapWorkspace = memo(function MapWorkspace({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex min-h-10 items-center bg-[#13262f]/8 px-3 py-2 text-sm leading-6 text-[#4a6069]">
+          <div className={statusChipClass}>
             {hoverLabel}
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <button
-              className="min-h-10 min-w-10 border border-[#c3d0cb] bg-white/92 px-3 py-2 text-sm font-semibold text-[#142127] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45"
+              className={zoomButtonClass}
               disabled={!canZoomIn}
               onClick={onZoomOut}
               type="button"
@@ -162,7 +179,7 @@ const MapWorkspace = memo(function MapWorkspace({
             </button>
             <span className="text-sm font-medium text-[#142127]">Scale {scalePercent}%</span>
             <button
-              className="min-h-10 min-w-10 border border-[#c3d0cb] bg-white/92 px-3 py-2 text-sm font-semibold text-[#142127] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45"
+              className={zoomButtonClass}
               disabled={!canZoomOut}
               onClick={onZoomIn}
               type="button"
@@ -174,12 +191,12 @@ const MapWorkspace = memo(function MapWorkspace({
       </div>
 
       <div className="grid content-start gap-4">
-        <div className="grid gap-2 border border-[#c3d0cb]/75 bg-white/88 p-3">
+        <div className={sectionCardClass}>
           <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
             Preview
           </div>
           <canvas
-            className="block h-32 w-32 border border-[#c3d0cb] [image-rendering:pixelated]"
+            className={`${previewCanvasClass} h-32 w-32`}
             ref={previewCanvasRef}
           />
         </div>
@@ -189,11 +206,7 @@ const MapWorkspace = memo(function MapWorkspace({
 
           return (
             <div
-              className={`grid gap-2 border p-3 transition ${
-                selected
-                  ? "border-[#d88753] bg-white shadow-[inset_0_0_0_1px_rgba(216,135,83,0.25)]"
-                  : "border-[#c3d0cb]/75 bg-white/88"
-              }`}
+              className={selectablePanelClass(selected)}
               key={layer.folder}
             >
               <div className="flex items-center justify-between gap-2">
@@ -207,7 +220,7 @@ const MapWorkspace = memo(function MapWorkspace({
                   {layer.index} - {layer.description}
                 </button>
                 <button
-                  className="grid h-6 w-6 place-items-center border border-[#c3d0cb] text-[#4a6069] transition hover:border-[#d88753] hover:text-[#d88753]"
+                  className={iconButtonClass}
                   onClick={() => {
                     onClearLayer(layerIndex);
                   }}
@@ -219,11 +232,7 @@ const MapWorkspace = memo(function MapWorkspace({
               </div>
               <div className="flex items-start gap-2">
                 <button
-                  className={`grid w-fit place-items-center border transition ${
-                    selected
-                      ? "border-[#d88753]"
-                      : "border-[#c3d0cb] hover:border-[#4b86ff]"
-                  }`}
+                  className={previewSelectionButtonClass(selected)}
                   onClick={() => {
                     onSelectLayer(layerIndex);
                   }}
@@ -243,11 +252,7 @@ const MapWorkspace = memo(function MapWorkspace({
 
                     return (
                       <button
-                        className={`flex min-h-7 items-center justify-center gap-1 border px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.04em] transition ${
-                          active
-                            ? "border-[#16324f] bg-[#16324f] text-white"
-                            : "border-[#c3d0cb] bg-white text-[#4a6069] hover:border-[#4b86ff] hover:text-[#142127]"
-                        }`}
+                        className={visibilityOptionButtonClass(active)}
                         key={option.label}
                         onClick={() => {
                           onSetLayerVisibility(layerIndex, option.value);
@@ -268,7 +273,7 @@ const MapWorkspace = memo(function MapWorkspace({
           );
         })}
 
-        <div className="grid gap-2 border border-[#c3d0cb]/75 bg-white/88 p-3">
+        <div className={sectionCardClass}>
           <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
             Active Layer
           </div>
@@ -1099,7 +1104,7 @@ export function MapDesigner() {
         >
           <div className="flex flex-wrap items-center gap-3">
             <input
-              className="min-h-11 min-w-[16rem] flex-1 border border-[#c3d0cb] bg-white/90 px-3 py-2 text-[#142127] outline-none transition focus:border-[#d88753]"
+              className={textInputClass}
               onChange={(event) => {
                 setMapQuery(event.currentTarget.value);
               }}
@@ -1110,11 +1115,10 @@ export function MapDesigner() {
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
             {filteredMaps.map((mapRecord) => (
               <button
-                className={`flex min-h-[4.5rem] flex-col justify-between gap-2 border px-3 py-3 text-left transition ${
-                  mapRecord.slug === activeMapSlug
-                    ? "border-[#d88753] bg-white shadow-[inset_0_0_0_1px_rgba(216,135,83,0.25)]"
-                    : "border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(255,253,248,0.96),rgba(244,239,226,0.84))] hover:border-[#d88753]/55 hover:bg-white"
-                }`}
+                className={`${selectableCardClass(
+                  mapRecord.slug === activeMapSlug,
+                  "border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(255,253,248,0.96),rgba(244,239,226,0.84))] hover:border-[#d88753]/55 hover:bg-white"
+                )} flex min-h-[4.5rem] flex-col justify-between gap-2 px-3 py-3 text-left`}
                 key={mapRecord.slug}
                 onClick={() => {
                   setActiveMapSlug(mapRecord.slug);
@@ -1145,7 +1149,7 @@ export function MapDesigner() {
               title="Brush Palette"
             >
               <div className="grid gap-4">
-              <div className="grid gap-3 border border-[#c3d0cb]/75 bg-white/88 p-3">
+              <div className={sectionCardClass}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
                     Brush Effects
@@ -1195,11 +1199,10 @@ export function MapDesigner() {
 
               <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
               <button
-                className={`grid justify-items-center gap-2 border bg-white/90 p-3 text-center transition ${
-                  mapBrushTileSlug === ""
-                    ? "border-[#d88753] bg-white shadow-[inset_0_0_0_1px_rgba(216,135,83,0.25)]"
-                    : "border-[#c3d0cb]/85 hover:border-[#d88753]/55 hover:bg-white"
-                }`}
+                className={`${selectableCardClass(
+                  mapBrushTileSlug === "",
+                  "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
+                )} grid justify-items-center gap-2 p-3 text-center`}
                 onClick={() => {
                   setMapBrushTileSlug("");
                 }}
@@ -1222,11 +1225,10 @@ export function MapDesigner() {
 
                 return (
                   <div
-                    className={`grid justify-items-center gap-2 border bg-white/90 p-3 text-center transition ${
-                      tileRecord.slug === mapBrushTileSlug
-                        ? "border-[#d88753] bg-white shadow-[inset_0_0_0_1px_rgba(216,135,83,0.25)]"
-                        : "border-[#c3d0cb]/85 hover:border-[#d88753]/55 hover:bg-white"
-                    }`}
+                    className={`${selectableCardClass(
+                      tileRecord.slug === mapBrushTileSlug,
+                      "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
+                    )} grid justify-items-center gap-2 p-3 text-center`}
                     key={tileRecord.slug}
                   >
                     <button
@@ -1293,7 +1295,7 @@ export function MapDesigner() {
             description={`Paint directly on the ${mapWidth}x${mapHeight} layered map canvas. The scale controls only change the viewing size.`}
             footer={
               <div className="flex flex-wrap items-center gap-3">
-                <div className="inline-flex min-h-10 items-center bg-[#13262f]/8 px-3 py-2 text-sm leading-6 text-[#4a6069]">
+                <div className={statusChipClass}>
                   {busyLabel
                     ? `${busyLabel}...`
                     : activeBrushTile
@@ -1402,7 +1404,7 @@ export function MapDesigner() {
             }}
           />
           <div className="flex min-h-full items-center justify-center">
-            <div className="relative w-full max-w-2xl border border-[#c3d0cb] bg-[linear-gradient(180deg,rgba(255,253,248,0.98),rgba(255,253,248,0.94))] shadow-[0_24px_60px_rgba(20,33,39,0.28)]">
+            <div className={`${modalSurfaceClass} relative max-w-2xl`}>
               <div className="border-b border-[#c3d0cb]/65 px-6 py-5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -1415,7 +1417,7 @@ export function MapDesigner() {
                     </p>
                   </div>
                   <button
-                    className="min-h-11 min-w-11 border border-[#c3d0cb] bg-white px-3 text-sm font-semibold text-[#4a6069] transition hover:border-[#d88753] hover:text-[#142127]"
+                    className={`${closeButtonClass} min-h-11 min-w-11 bg-white`}
                     onClick={() => {
                       setIsCreateDialogOpen(false);
                     }}
@@ -1436,7 +1438,7 @@ export function MapDesigner() {
                   </label>
                   <div className="flex flex-wrap items-center gap-3">
                     <input
-                      className="min-h-11 min-w-[14rem] flex-1 border border-[#c3d0cb] bg-white/90 px-3 py-2 text-[#142127] outline-none transition focus:border-[#d88753]"
+                      className={textInputClass}
                       id="new-map-name"
                       onChange={(event) => {
                         setNewMapName(event.currentTarget.value);
@@ -1452,7 +1454,7 @@ export function MapDesigner() {
                       value={newMapName}
                     />
                     <input
-                      className="min-h-11 w-24 border border-[#c3d0cb] bg-white/90 px-3 py-2 text-center text-[#142127] outline-none transition focus:border-[#d88753]"
+                      className={`${compactTextInputClass} w-24 text-center`}
                       inputMode="numeric"
                       onChange={(event) => {
                         setNewMapWidth(event.currentTarget.value);
@@ -1461,7 +1463,7 @@ export function MapDesigner() {
                       value={newMapWidth}
                     />
                     <input
-                      className="min-h-11 w-24 border border-[#c3d0cb] bg-white/90 px-3 py-2 text-center text-[#142127] outline-none transition focus:border-[#d88753]"
+                      className={`${compactTextInputClass} w-24 text-center`}
                       inputMode="numeric"
                       onChange={(event) => {
                         setNewMapHeight(event.currentTarget.value);
@@ -1486,7 +1488,7 @@ export function MapDesigner() {
 
               <div className="flex flex-wrap items-center justify-end gap-3 border-t border-[#c3d0cb]/65 bg-[rgba(244,239,226,0.58)] px-6 py-4">
                 <button
-                  className="min-h-11 border border-[#c3d0cb] bg-white px-4 py-2 font-semibold text-[#4a6069] transition hover:border-[#d88753] hover:text-[#142127]"
+                  className={secondaryButtonClass}
                   onClick={() => {
                     setIsCreateDialogOpen(false);
                   }}

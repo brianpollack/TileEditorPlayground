@@ -31,6 +31,19 @@ import {
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
+import {
+  canvasViewportClass,
+  compactTextInputClass,
+  previewCanvasClass,
+  previewSelectionButtonClass,
+  sectionCardClass,
+  secondaryButtonClass,
+  selectablePanelClass,
+  statusChipClass,
+  toolSectionCardClass,
+  visibilityOptionButtonClass,
+  zoomButtonClass
+} from "./uiStyles";
 import type { PaintEditorSession, PaintLayerIndex, PaintToolId } from "../types";
 
 type PaintTool = PaintToolId;
@@ -408,7 +421,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
     <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_16rem]">
       <div className="grid min-h-0 content-start gap-3">
         <div
-          className="h-[clamp(28rem,70vh,58rem)] overflow-auto border border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(244,239,226,0.82),rgba(215,236,233,0.36))] p-3"
+          className={`${canvasViewportClass} h-[clamp(28rem,70vh,58rem)] p-3`}
           ref={editorViewportRef}
         >
           <canvas
@@ -427,12 +440,12 @@ const PaintWorkspace = memo(function PaintWorkspace({
           />
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex min-h-10 items-center bg-[#13262f]/8 px-3 py-2 text-sm leading-6 text-[#4a6069]">
+          <div className={statusChipClass}>
             Zoom {zoomPercent}%
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <button
-              className="min-h-10 min-w-10 border border-[#c3d0cb] bg-white/92 px-3 py-2 text-sm font-semibold text-[#142127] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45"
+              className={zoomButtonClass}
               disabled={!canZoomIn}
               onClick={onZoomOut}
               type="button"
@@ -441,7 +454,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
             </button>
             <span className="text-sm font-medium text-[#142127]">Zoom {zoomPercent}% ([ / ])</span>
             <button
-              className="min-h-10 min-w-10 border border-[#c3d0cb] bg-white/92 px-3 py-2 text-sm font-semibold text-[#142127] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45"
+              className={zoomButtonClass}
               disabled={!canZoomOut}
               onClick={onZoomIn}
               type="button"
@@ -453,7 +466,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
       </div>
 
       <div className="grid content-start gap-4">
-        <div className="grid gap-2 border border-[#c3d0cb]/75 bg-white/88 p-3">
+        <div className={sectionCardClass}>
           <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
             Preview
           </div>
@@ -463,7 +476,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
                 128x128
               </div>
               <canvas
-                className="block h-32 w-32 border border-[#c3d0cb] [image-rendering:pixelated]"
+                className={`${previewCanvasClass} h-32 w-32`}
                 ref={preview128CanvasRef}
               />
             </div>
@@ -472,7 +485,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
                 64x64
               </div>
               <canvas
-                className="block h-16 w-16 border border-[#c3d0cb] [image-rendering:pixelated]"
+                className={`${previewCanvasClass} h-16 w-16`}
                 ref={preview64CanvasRef}
               />
             </div>
@@ -484,11 +497,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
 
           return (
             <div
-              className={`grid gap-2 border p-3 transition ${
-                selected
-                  ? "border-[#d88753] bg-white shadow-[inset_0_0_0_1px_rgba(216,135,83,0.25)]"
-                  : "border-[#c3d0cb]/75 bg-white/88"
-              }`}
+              className={selectablePanelClass(selected)}
               key={layerIndex}
             >
               <div className="flex items-center justify-between gap-2">
@@ -514,11 +523,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
               </div>
               <div className="flex items-start gap-2">
                 <button
-                  className={`grid w-fit place-items-center border transition ${
-                    selected
-                      ? "border-[#d88753]"
-                      : "border-[#c3d0cb] hover:border-[#4b86ff]"
-                  }`}
+                  className={previewSelectionButtonClass(selected)}
                   onClick={() => {
                     onSelectLayer(layerIndex);
                   }}
@@ -538,11 +543,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
 
                     return (
                       <button
-                        className={`flex min-h-7 items-center justify-center gap-1 border px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.04em] transition ${
-                          active
-                            ? "border-[#16324f] bg-[#16324f] text-white"
-                            : "border-[#c3d0cb] bg-white text-[#4a6069] hover:border-[#4b86ff] hover:text-[#142127]"
-                        }`}
+                        className={visibilityOptionButtonClass(active)}
                         key={option.label}
                         onClick={() => {
                           onSetLayerVisibility(layerIndex, option.value);
@@ -1936,7 +1937,7 @@ export function PaintMode({ session }: PaintModeProps) {
           </div>
 
           {selectedTool === "marquee" && marqueeSelection && !marqueeSelectingRef.current ? (
-            <div className="grid gap-3 border border-[#c3d0cb]/75 bg-white/85 p-3">
+            <div className={toolSectionCardClass}>
               <div className="text-sm font-semibold text-[#142127]">Marquee Selection</div>
               <div className="grid grid-cols-2 gap-2">
                 <button
@@ -1963,7 +1964,7 @@ export function PaintMode({ session }: PaintModeProps) {
             </div>
           ) : null}
 
-          <div className="grid gap-3 border border-[#c3d0cb]/75 bg-white/85 p-3">
+          <div className={toolSectionCardClass}>
             <div className="flex items-center gap-2 text-sm font-semibold text-[#142127]">
               <FontAwesomeIcon className="h-4 w-4 text-[#4b86ff]" icon={faDroplet} />
               Color Selection
@@ -1996,7 +1997,7 @@ export function PaintMode({ session }: PaintModeProps) {
             </div>
           </div>
 
-          <div className="grid gap-3 border border-[#c3d0cb]/75 bg-white/85 p-3">
+          <div className={toolSectionCardClass}>
             <div className="flex items-center gap-2 text-sm font-semibold text-[#142127]">
               <FontAwesomeIcon className="h-4 w-4 text-[#d88753]" icon={faCropSimple} />
               Advanced Tools
@@ -2012,7 +2013,7 @@ export function PaintMode({ session }: PaintModeProps) {
             </button>
           </div>
 
-          <div className="grid gap-2 border border-[#c3d0cb]/75 bg-white/85 p-3 text-sm text-[#4a6069]">
+          <div className={`${toolSectionCardClass} gap-2 text-sm text-[#4a6069]`}>
             <div className="font-semibold text-[#142127]">{session.title}</div>
             <div>Editing Layer {selectedLayerIndex}.</div>
             <div>
@@ -2090,7 +2091,7 @@ export function PaintMode({ session }: PaintModeProps) {
               <label className="grid gap-1 text-sm text-[#4a6069]">
                 <span className="font-semibold text-[#142127]">Edger Mode Size</span>
                 <input
-                  className="h-10 border border-[#c3d0cb] bg-white px-3 text-[#142127]"
+                  className={compactTextInputClass}
                   inputMode="numeric"
                   min={1}
                   onChange={(event) => {
@@ -2102,7 +2103,7 @@ export function PaintMode({ session }: PaintModeProps) {
               </label>
               <div className="flex justify-end gap-3">
                 <button
-                  className="min-h-10 border border-[#c3d0cb] bg-white px-4 py-2 text-sm font-semibold text-[#4a6069] transition hover:border-[#4b86ff] hover:text-[#142127]"
+                  className={secondaryButtonClass}
                   onClick={() => {
                     setIsEdgerConfirmOpen(false);
                   }}

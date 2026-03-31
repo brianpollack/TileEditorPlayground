@@ -12,7 +12,7 @@ import { MAP_LAYER_COUNT, SLOT_LAYER_COUNT } from "../lib/constants";
 import { loadImageFromUrl, revokeObjectUrl } from "../lib/images";
 import { clampMapScalePercent, normalizeMapLayers } from "../lib/map";
 import { describeSlot, getSlotIndex, normalizeSlotRecords, type SlotKey } from "../lib/slots";
-import { normalizeTileLibraryPath } from "../lib/tileLibrary";
+import { getTileLibrarySpriteKey, normalizeTileLibraryPath } from "../lib/tileLibrary";
 import { StudioProvider } from "./StudioContext";
 import type {
   ClipboardSlotRecord,
@@ -23,11 +23,12 @@ import type {
   PaintEditorSession,
   PaintEditorUiState,
   PaintToolId,
+  SpriteRecord,
   SlotRecord,
   TileRecord
 } from "../types";
 
-type StudioView = "tile-workshop" | "map-designer";
+type StudioView = "tile-workshop" | "sprite-editor" | "map-designer";
 type StudioViewId = StudioView | PaintEditorSession["id"];
 const CLIPBOARD_SLOT_COUNT = 10;
 const CLIPBOARD_SAVE_PATH = "/__clipboard/save";
@@ -106,12 +107,17 @@ function parsePaintEditorList(serializedPaintEditors: string, tileRecords: TileR
 
 function getInitialActiveView(
   serializedMode: string,
-  initialPaintSessions: PaintEditorSession[]
+  initialPaintSessions: PaintEditorSession[],
+  hasInitialSpriteSelection: boolean
 ): StudioViewId {
   const normalizedMode = serializedMode.trim();
 
   if (normalizedMode === "map") {
     return "map-designer";
+  }
+
+  if (normalizedMode === "sprite" && hasInitialSpriteSelection) {
+    return "sprite-editor";
   }
 
   if (normalizedMode === "tile") {
@@ -138,6 +144,10 @@ function getSerializedMode(activeView: StudioViewId, paintEditors: PaintEditorSe
     return "map";
   }
 
+  if (activeView === "sprite-editor") {
+    return "sprite";
+  }
+
   if (activeView === "tile-workshop") {
     return "tile";
   }
@@ -162,6 +172,10 @@ function getDocumentTitle(activeView: StudioViewId, paintEditors: PaintEditorSes
     return "Tile Editor";
   }
 
+  if (activeView === "sprite-editor") {
+    return "Sprite Editor";
+  }
+
   if (activeView === "map-designer") {
     return "Map Designer";
   }
@@ -181,11 +195,28 @@ function getViewFromHash(hash: string): StudioView {
     return "map-designer";
   }
 
+  if (
+    normalizedHash === "#/sprite" ||
+    normalizedHash === "#sprite" ||
+    normalizedHash === "#/sprite-editor" ||
+    normalizedHash === "#sprite-editor"
+  ) {
+    return "sprite-editor";
+  }
+
   return "tile-workshop";
 }
 
 function getHashForView(view: StudioView) {
-  return view === "map-designer" ? "#/map" : "#/tile";
+  if (view === "map-designer") {
+    return "#/map";
+  }
+
+  if (view === "sprite-editor") {
+    return "#/sprite";
+  }
+
+  return "#/tile";
 }
 
 function getSerializedEditParam(tileRecord: TileRecord | null) {
@@ -194,6 +225,15 @@ function getSerializedEditParam(tileRecord: TileRecord | null) {
   }
 
   return normalizeTileLibraryPath(`${tileRecord.path}/${tileRecord.slug}`);
+}
+
+function getSerializedSpriteParam(spriteRecord: SpriteRecord | null) {
+  if (!spriteRecord) {
+    return "";
+  }
+
+  const normalizedPath = normalizeTileLibraryPath(spriteRecord.path);
+  return normalizedPath ? `${normalizedPath}/${spriteRecord.filename}` : spriteRecord.filename;
 }
 
 function getInitialTileSlug(tileRecords: TileRecord[], preferredEditParam: string) {
@@ -221,6 +261,36 @@ function getInitialTileSlug(tileRecords: TileRecord[], preferredEditParam: strin
   }
 
   return "";
+}
+
+function getInitialSpriteKey(spriteRecords: SpriteRecord[], preferredSpriteParam: string) {
+  const trimmedPreferredSpriteParam = preferredSpriteParam.trim();
+
+  if (!trimmedPreferredSpriteParam) {
+    return "";
+  }
+
+  const lastSlashIndex = trimmedPreferredSpriteParam.lastIndexOf("/");
+
+  if (lastSlashIndex !== -1) {
+    const preferredPath = normalizeTileLibraryPath(trimmedPreferredSpriteParam.slice(0, lastSlashIndex));
+    const preferredFilename = trimmedPreferredSpriteParam.slice(lastSlashIndex + 1).trim();
+    const matchedSprite = spriteRecords.find(
+      (spriteRecord) =>
+        normalizeTileLibraryPath(spriteRecord.path) === preferredPath &&
+        spriteRecord.filename === preferredFilename
+    );
+
+    if (matchedSprite) {
+      return getTileLibrarySpriteKey(matchedSprite.path, matchedSprite.filename);
+    }
+  }
+
+  const matchedByFilename = spriteRecords.find(
+    (spriteRecord) => spriteRecord.filename === trimmedPreferredSpriteParam
+  );
+
+  return matchedByFilename ? getTileLibrarySpriteKey(matchedByFilename.path, matchedByFilename.filename) : "";
 }
 
 function getInitialMapSlug(mapRecords: MapRecord[], preferredSlug: string) {
@@ -353,8 +423,10 @@ interface TileServerAppProps {
   initialMapSlug: string;
   initialMode: string;
   initialPaintEditors: string;
+  initialSpriteKey: string;
   initialBrushTileSlug: string;
   maps: MapRecord[];
+  sprites: SpriteRecord[];
   tileLibraryFolders: string[];
   tiles: TileRecord[];
 }
@@ -366,17 +438,21 @@ export function TileServerApp({
   initialMapSlug,
   initialMode,
   initialPaintEditors,
+  initialSpriteKey,
   initialBrushTileSlug,
   maps,
+  sprites,
   tileLibraryFolders,
   tiles
 }: TileServerAppProps) {
   const initialPaintSessions = parsePaintEditorList(initialPaintEditors, tiles);
+  const initialSelectedSpriteKey = getInitialSpriteKey(sprites, initialSpriteKey);
   const [mapRecords, setMapRecords] = useState(maps);
+  const [spriteRecords, setSpriteRecords] = useState(sprites);
   const [tileRecords, setTileRecords] = useState(tiles);
   const [tileLibraryFolderPaths, setTileLibraryFolderPaths] = useState(tileLibraryFolders);
   const [activeView, setActiveView] = useState<StudioViewId>(() =>
-    getInitialActiveView(initialMode, initialPaintSessions)
+    getInitialActiveView(initialMode, initialPaintSessions, Boolean(initialSelectedSpriteKey))
   );
   const [activeTileSlug, setActiveTileSlug] = useState(() =>
     getInitialTileSlug(tiles, initialEditTileSlug)
@@ -388,6 +464,7 @@ export function TileServerApp({
     getInitialBrushTileSlug(tiles, initialBrushTileSlug)
   );
   const [paintEditors, setPaintEditors] = useState<PaintEditorSession[]>(() => initialPaintSessions);
+  const [activeSpriteKey, setActiveSpriteKey] = useState(initialSelectedSpriteKey);
   const [clipboardStatus, setClipboardStatus] = useState("Clipboard manager is ready.");
   const [clipboardSlotsState, setClipboardSlotsState] = useState(() =>
     normalizeClientClipboardSlots(clipboardSlots)
@@ -418,6 +495,7 @@ export function TileServerApp({
 
   function syncLocationState(
     tileSlug: string,
+    spriteKey: string,
     currentView: StudioViewId,
     currentPaintEditors: PaintEditorSession[],
     mapSlug: string,
@@ -429,12 +507,23 @@ export function TileServerApp({
 
     const url = new URL(window.location.href);
     const activeTileRecord = tileRecords.find((tileRecord) => tileRecord.slug === tileSlug) ?? null;
+    const activeSpriteRecord =
+      spriteRecords.find(
+        (spriteRecord) => getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === spriteKey
+      ) ?? null;
     const serializedEditParam = getSerializedEditParam(activeTileRecord);
+    const serializedSpriteParam = getSerializedSpriteParam(activeSpriteRecord);
 
     if (serializedEditParam) {
       url.searchParams.set("edit", serializedEditParam);
     } else {
       url.searchParams.delete("edit");
+    }
+
+    if (serializedSpriteParam) {
+      url.searchParams.set("sprite", serializedSpriteParam);
+    } else {
+      url.searchParams.delete("sprite");
     }
 
     if (mapSlug) {
@@ -463,6 +552,14 @@ export function TileServerApp({
     } else {
       url.searchParams.delete("paint");
     }
+
+    url.hash = getHashForView(
+      currentView === "map-designer"
+        ? "map-designer"
+        : currentView === "sprite-editor"
+          ? "sprite-editor"
+          : "tile-workshop"
+    );
 
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }
@@ -633,6 +730,23 @@ export function TileServerApp({
 
   function handleSetActiveTileSlug(tileSlug: string) {
     setActiveTileSlug(tileSlug);
+
+    if (tileSlug) {
+      setActiveSpriteKey("");
+      setActiveView((currentView) => (currentView === "sprite-editor" ? "tile-workshop" : currentView));
+    }
+  }
+
+  function handleSetActiveSpriteKey(spriteKey: string) {
+    setActiveSpriteKey(spriteKey);
+
+    if (spriteKey) {
+      setActiveTileSlug("");
+      setActiveView("sprite-editor");
+      return;
+    }
+
+    setActiveView("tile-workshop");
   }
 
   function openPaintEditor(tileRecord: TileRecord, slotKey: SlotKey) {
@@ -698,6 +812,10 @@ export function TileServerApp({
   useEffect(() => {
     setTileRecords(tiles);
   }, [tiles]);
+
+  useEffect(() => {
+    setSpriteRecords(sprites);
+  }, [sprites]);
 
   useEffect(() => {
     setTileLibraryFolderPaths(tileLibraryFolders);
@@ -863,6 +981,24 @@ export function TileServerApp({
   }, [tileRecords]);
 
   useEffect(() => {
+    setActiveSpriteKey((currentKey) => {
+      if (!currentKey) {
+        return currentKey;
+      }
+
+      if (
+        spriteRecords.some(
+          (spriteRecord) => getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === currentKey
+        )
+      ) {
+        return currentKey;
+      }
+
+      return "";
+    });
+  }, [spriteRecords]);
+
+  useEffect(() => {
     setDraftLayersByMapSlug((currentDrafts) => {
       const nextDrafts: Record<string, MapLayerStack> = {};
 
@@ -889,6 +1025,7 @@ export function TileServerApp({
   useEffect(() => {
     if (
       activeView !== "tile-workshop" &&
+      activeView !== "sprite-editor" &&
       activeView !== "map-designer" &&
       !paintEditors.some((editor) => editor.id === activeView)
     ) {
@@ -897,12 +1034,25 @@ export function TileServerApp({
   }, [activeView, paintEditors]);
 
   useEffect(() => {
+    if (activeView === "sprite-editor" && !activeSpriteKey) {
+      setActiveView("tile-workshop");
+    }
+  }, [activeSpriteKey, activeView]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
 
     const syncViewFromHash = () => {
-      setActiveView(getViewFromHash(window.location.hash));
+      const nextView = getViewFromHash(window.location.hash);
+
+      if (nextView === "sprite-editor" && !activeSpriteKey) {
+        setActiveView("tile-workshop");
+        return;
+      }
+
+      setActiveView(nextView);
     };
 
     if (!initialMode) {
@@ -914,11 +1064,18 @@ export function TileServerApp({
     return () => {
       window.removeEventListener("hashchange", syncViewFromHash);
     };
-  }, [initialMode]);
+  }, [activeSpriteKey, initialMode]);
 
   useEffect(() => {
-    syncLocationState(activeTileSlug, activeView, paintEditors, activeMapSlug, mapBrushTileSlug);
-  }, [activeMapSlug, activeTileSlug, activeView, mapBrushTileSlug, paintEditors, tileRecords]);
+    syncLocationState(
+      activeTileSlug,
+      activeSpriteKey,
+      activeView,
+      paintEditors,
+      activeMapSlug,
+      mapBrushTileSlug
+    );
+  }, [activeMapSlug, activeSpriteKey, activeTileSlug, activeView, mapBrushTileSlug, paintEditors, spriteRecords, tileRecords]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -1054,6 +1211,10 @@ export function TileServerApp({
   }, [addClipboardSlot, clipboardSlotsState, isStudioStateRestored]);
 
   const activeTile = tileRecords.find((tileRecord) => tileRecord.slug === activeTileSlug) ?? null;
+  const activeSprite =
+    spriteRecords.find(
+      (spriteRecord) => getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === activeSpriteKey
+    ) ?? null;
   const activeMap = mapRecords.find((mapRecord) => mapRecord.slug === activeMapSlug) ?? null;
   const filledClipboardSlots = clipboardSlotsState.filter(Boolean).length;
 
@@ -1067,6 +1228,8 @@ export function TileServerApp({
         addClipboardSlot,
         activeMap,
         activeMapSlug,
+        activeSprite,
+        activeSpriteKey,
         activeTile,
         activeTileSlug,
         addTileLibraryFolder: (folderPath) => {
@@ -1094,11 +1257,34 @@ export function TileServerApp({
         setPaintEditorUiState,
         setSelectedClipboardSlotIndex,
         setMapDraftLayers,
+        setActiveSpriteKey: handleSetActiveSpriteKey,
         setActiveTileSlug: handleSetActiveTileSlug,
         setMapBrushTileSlug,
         setTileDraftSlots,
+        sprites: spriteRecords,
         tileLibraryFolders: tileLibraryFolderPaths,
         tiles: tileRecords,
+        upsertSprite: (spriteRecord) => {
+          setSpriteRecords((currentSprites) => {
+            const spriteKey = `${spriteRecord.path}/${spriteRecord.filename}`;
+            const existingIndex = currentSprites.findIndex(
+              (candidate) => `${candidate.path}/${candidate.filename}` === spriteKey
+            );
+
+            if (existingIndex === -1) {
+              return [...currentSprites, spriteRecord].sort(
+                (left, right) =>
+                  left.path.localeCompare(right.path) ||
+                  left.name.localeCompare(right.name) ||
+                  left.filename.localeCompare(right.filename)
+              );
+            }
+
+            const nextSprites = currentSprites.slice();
+            nextSprites[existingIndex] = spriteRecord;
+            return nextSprites;
+          });
+        },
         updateTileDraftSlot,
         upsertMap: (mapRecord) => {
           setMapRecords((currentMaps) => {
@@ -1229,7 +1415,7 @@ export function TileServerApp({
           </div>
 
           <div className="min-h-0 flex-1">
-            <div className={activeView === "tile-workshop" ? "block h-full" : "hidden h-full"}>
+            <div className={activeView === "tile-workshop" || activeView === "sprite-editor" ? "block h-full" : "hidden h-full"}>
               <TileWorkshop />
             </div>
             <div className={activeView === "map-designer" ? "block h-full" : "hidden h-full"}>

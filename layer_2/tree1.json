@@ -1,0 +1,15 @@
+{
+  "filename": "tree1.png",
+  "image_h": 209,
+  "image_w": 129,
+  "impassible": true,
+  "is_flat": false,
+  "item_id": 0,
+  "mount_x": 65,
+  "mount_y": 191,
+  "name": "tree1",
+  "offset_x": 0,
+  "offset_y": 0,
+  "tile_h": 1.6328125,
+  "tile_w": 1.0078125
+}

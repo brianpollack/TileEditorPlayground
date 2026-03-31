@@ -9,8 +9,8 @@ models=(
   "river.*v2.*pro"
   "fal/z-image/turbo/tiling"
   "fal/nano-banana-2"
-  "fal/flux-pro/v1.1"
   "fal/qwen-image-2/text-to-image"
+  "fal/flux-2-pro"
 )
 
 prompts=(
