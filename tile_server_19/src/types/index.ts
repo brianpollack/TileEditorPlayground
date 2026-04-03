@@ -53,11 +53,19 @@ export interface MapTileOptions {
 }
 
 export interface MapTilePlacement {
+  kind: "tile";
   options: MapTileOptions;
+  slotNum: number;
   tileSlug: string;
 }
 
-export type MapLayerCell = MapTilePlacement | null;
+export interface MapSpritePlacement {
+  kind: "sprite";
+  spriteKey: string;
+}
+
+export type MapAssetPlacement = MapTilePlacement | MapSpritePlacement;
+export type MapLayerCell = MapAssetPlacement | null;
 export type MapLayerGrid = MapLayerCell[][];
 export type MapLayerStack = MapLayerGrid[];
 

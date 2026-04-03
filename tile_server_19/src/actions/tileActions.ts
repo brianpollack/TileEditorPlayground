@@ -2,13 +2,10 @@
 
 import {
   createTileRecord,
-  createTileThumbnail,
   ensureTileLibraryFolder,
   exportTileStrip,
   loadProjectImageSource,
-  normalizeTilePayload,
-  readTileRecords,
-  writeTileRecords
+  saveTileRecord
 } from "../lib/serverStore";
 import { normalizeUnderscoreName } from "../lib/naming";
 import { normalizeTileLibraryPath } from "../lib/tileLibrary";
@@ -23,27 +20,7 @@ export async function saveTileAction(input: {
   slug: string;
   source: string;
 }) {
-  const tileRecords = await readTileRecords();
-  const tileIndex = tileRecords.findIndex((tileRecord) => tileRecord.slug === input.slug.trim());
-
-  if (tileIndex === -1) {
-    throw new Error("Tile not found.");
-  }
-
-  const existingTile = tileRecords[tileIndex];
-  const nextTile = normalizeTilePayload(
-    existingTile.name,
-    existingTile.path,
-    existingTile.slug,
-    input.source,
-    input.slots,
-    createTileThumbnail(input.slots)
-  );
-
-  tileRecords[tileIndex] = nextTile;
-  await writeTileRecords(tileRecords);
-
-  return nextTile;
+  return saveTileRecord(input);
 }
 
 export async function loadProjectImageAction(projectPath: string) {

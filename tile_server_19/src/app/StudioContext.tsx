@@ -37,10 +37,12 @@ export interface StudioContextValue {
   getTileDraftSlots(tileSlug: string, fallbackSlots: Array<SlotRecord | null> | undefined): Array<SlotRecord | null>;
   initialImagePath: string;
   isClipboardManagerOpen: boolean;
-  mapBrushTileSlug: string;
+  mapBrushAssetKey: string;
   maps: MapRecord[];
   openPaintEditor(tileRecord: TileRecord, slotKey: SlotKey): void;
   putClipboardSlot(image: string, preferredIndex?: number | null): { ok: boolean; slotIndex?: number };
+  removeSprite(spriteKey: string): void;
+  removeTile(tileSlug: string): void;
   selectedClipboardSlotIndex: number | null;
   setActiveMapSlug(mapSlug: string): void;
   setClipboardManagerOpen(isOpen: boolean): void;
@@ -50,9 +52,10 @@ export interface StudioContextValue {
   setMapDraftLayers(mapSlug: string, layers: MapLayerStack, width?: number, height?: number): void;
   setActiveSpriteKey(spriteKey: string): void;
   setActiveTileSlug(tileSlug: string): void;
-  setMapBrushTileSlug(tileSlug: string): void;
+  setMapBrushAssetKey(assetKey: string): void;
   setTileDraftSlots(tileSlug: string, slotRecords: Array<SlotRecord | null>): void;
   sprites: SpriteRecord[];
+  tileLibraryFolderAssetCounts: Record<string, number>;
   tileLibraryFolders: string[];
   tiles: TileRecord[];
   upsertSprite(spriteRecord: SpriteRecord): void;

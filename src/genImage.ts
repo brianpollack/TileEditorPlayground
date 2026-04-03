@@ -1,5 +1,6 @@
 import "dotenv/config";
 
+import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -255,6 +256,29 @@ function promptFilePathToOutputSegment(promptFilePath: string): string {
   }
 
   return sanitizedPromptBaseName;
+}
+
+function generateRandomHexSuffix(): string {
+  return randomBytes(2).toString("hex");
+}
+
+async function allocateGeneratedImageBaseName(input: {
+  modelSegment: string;
+  outputDirectory: string;
+  promptSegment: string;
+}): Promise<string> {
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const candidate = `${input.promptSegment}-${input.modelSegment}-${generateRandomHexSuffix()}`;
+    const candidateImagePath = path.join(input.outputDirectory, `${candidate}.png`);
+
+    if (!(await pathExists(candidateImagePath))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    `Could not allocate a unique generated image filename in ${input.outputDirectory}.`
+  );
 }
 
 function normalizeOutputPrefix(prefix: string): string {
@@ -565,6 +589,7 @@ async function main(): Promise<void> {
   const promptOutputSegment = promptFilePathToOutputSegment(promptFilePath);
   const resolvedModels = await resolveModels(modelQuery);
   const baseOutputDirectory = path.join(OUTPUT_DIR, normalizedPrefix);
+  const generatedImagesDirectory = path.join(OUTPUT_DIR, "gen");
   let failureCount = 0;
 
   console.log(`Prompt file: ${promptFilePath}`);
@@ -575,13 +600,25 @@ async function main(): Promise<void> {
   );
 
   for (const resolvedModel of resolvedModels) {
+    const modelOutputSegment = modelIdToOutputSegment(resolvedModel.id);
     const outputDirectory = path.join(
       baseOutputDirectory,
-      modelIdToOutputSegment(resolvedModel.id),
+      modelOutputSegment,
       promptOutputSegment
     );
-    const outputImagePath = path.join(outputDirectory, "output.png");
-    const output128ImagePath = path.join(outputDirectory, "output128.png");
+    const generatedImageBaseName = await allocateGeneratedImageBaseName({
+      modelSegment: modelOutputSegment,
+      outputDirectory: generatedImagesDirectory,
+      promptSegment: promptOutputSegment
+    });
+    const outputImagePath = path.join(
+      generatedImagesDirectory,
+      `${generatedImageBaseName}.png`
+    );
+    const output128ImagePath = path.join(
+      generatedImagesDirectory,
+      `${generatedImageBaseName}-128.png`
+    );
     const exampleImagePath = path.join(outputDirectory, "example.png");
     const extractImagePath = path.join(outputDirectory, "extract.png");
     const example2ImagePath = path.join(outputDirectory, "example2.png");
@@ -662,6 +699,7 @@ async function main(): Promise<void> {
       }
 
       await fs.mkdir(outputDirectory, { recursive: true });
+      await fs.mkdir(generatedImagesDirectory, { recursive: true });
       await fs.writeFile(outputImagePath, generatedImageBuffer);
       await writeDerivedTileImages({
         example2ImagePath,

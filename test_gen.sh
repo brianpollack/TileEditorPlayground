@@ -3,21 +3,19 @@
 set -euo pipefail
 
 models=(
-  "fal/imagen4/preview"
+  # "fal/imagen4/preview"
   "gemini.*pro"
   "seed"
-  "river.*v2.*pro"
-  "fal/z-image/turbo/tiling"
+  # "river.*v2.*pro"
+  # "fal/z-image/turbo/tiling"
   "fal/nano-banana-2"
   "fal/qwen-image-2/text-to-image"
   "fal/flux-2-pro"
 )
 
 prompts=(
-#   "grass1.md"
-#   "house1.md"
-    "house2.md"
-    "tree1.md"
+  "tree3.md"
+  "house3.md"
 )
 
 for model in "${models[@]}"; do

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, type Dirent } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -6,12 +7,16 @@ import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
 
 import { MAP_DEFAULT_GRID_SIZE, SLOT_COUNT, TILE_SIZE } from "./constants";
+import { ensureDatabaseSchema, getDatabase, getDatabaseConnectionErrorMessage } from "./database";
 import {
   createEmptyMapCells,
   createEmptyMapLayers,
+  createMapSpritePlacement,
   createMapTilePlacement,
   flattenMapLayers,
   getMapLayerDimensions,
+  isMapSpritePlacement,
+  isMapTilePlacement,
   normalizeMapLayers,
   normalizeMapDimension,
   normalizeMapTileOptions,
@@ -20,6 +25,8 @@ import {
 import { normalizeUnderscoreName } from "./naming";
 import { normalizeSlotRecords } from "./slots";
 import {
+  getTileLibraryAncestorPaths,
+  getTileLibrarySpriteKey,
   normalizeTileLibraryPath,
   normalizeTileRecordPath,
   TILE_LIBRARY_LAYERS,
@@ -29,10 +36,10 @@ import type {
   ClipboardSlotRecord,
   ExportArtifact,
   LoadedImagePayload,
+  MapLayerCell,
   MapLayerStack,
   MapRecord,
   MapTileOptions,
-  MapTilePlacement,
   SpriteRecord,
   SlotRecord,
   TileRecord
@@ -57,6 +64,7 @@ type StoredMapTileReference =
   | string
   | {
       options?: Partial<MapTileOptions>;
+      sprite?: string;
       tile?: string;
     };
 
@@ -73,6 +81,84 @@ interface StoredMapRecord {
 }
 
 type StoredSpriteRecord = Omit<SpriteRecord, "path" | "thumbnail">;
+
+type AssetType = "folder" | "sprite" | "tile";
+
+interface StoredAssetRow {
+  asset_key: string;
+  asset_name: string;
+  asset_slug: string | null;
+  asset_type: AssetType;
+  created_at: Date | string;
+  deleted: boolean;
+  file_name: string | null;
+  id: string;
+  image_data: Buffer | null;
+  source_path: string | null;
+  sprite_metadata: unknown;
+  sub_folder: string;
+  tile_slots: unknown;
+  updated_at: Date | string;
+}
+
+interface StoredMapRow {
+  created_at: Date | string;
+  deleted: boolean;
+  height: number;
+  id: string;
+  name: string;
+  slug: string;
+  updated_at: Date | string;
+  width: number;
+}
+
+interface StoredMapPlacementRow {
+  asset_type: "sprite" | "tile";
+  color_enabled: boolean;
+  color_value: string;
+  flip_horizontal: boolean;
+  flip_vertical: boolean;
+  layer_index: number;
+  map_id: string;
+  multiply_enabled: boolean;
+  rotate_quarter_turns: number;
+  slot_num: number;
+  sprite_asset_id: string | null;
+  sprite_file_name: string | null;
+  sprite_sub_folder: string | null;
+  tile_asset_id: string | null;
+  tile_slug: string | null;
+  tile_x: number;
+  tile_y: number;
+}
+
+interface StoredMapPlacementInsertRow {
+  asset_type: "sprite" | "tile";
+  color_enabled: boolean;
+  color_value: string;
+  created_at: string;
+  flip_horizontal: boolean;
+  flip_vertical: boolean;
+  id: string;
+  layer_index: number;
+  map_id: string;
+  multiply_enabled: boolean;
+  rotate_quarter_turns: number;
+  slot_num: number;
+  sprite_asset_id: string | null;
+  tile_asset_id: string | null;
+  tile_x: number;
+  tile_y: number;
+  updated_at: string;
+}
+
+export interface AssetDatabaseStatus {
+  available: boolean;
+  message: string;
+}
+
+let assetDatabaseReadyPromise: Promise<void> | null = null;
+let mapDatabaseReadyPromise: Promise<void> | null = null;
 
 function slugifyName(name: string) {
   const slug = name
@@ -92,6 +178,396 @@ function getSafeProjectPath(projectPath: string) {
   }
 
   return resolvedPath;
+}
+
+function getAssetDatabaseErrorMessage(error: unknown) {
+  return `Database unavailable, can't continue. ${getDatabaseConnectionErrorMessage(error)}`;
+}
+
+function serializeStoredTimestamp(value: Date | string | undefined) {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = new Date(value);
+
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+
+  return new Date().toISOString();
+}
+
+function getFolderAssetKey(folderPath: string) {
+  return `folder:${normalizeTileRecordPath(folderPath)}`;
+}
+
+function getTileAssetKey(slug: string) {
+  return `tile:${slug.trim()}`;
+}
+
+function getSpriteAssetKey(spritePath: string, fileName: string) {
+  return `sprite:${getTileLibrarySpriteKey(spritePath, fileName)}`;
+}
+
+function bufferToPngDataUrl(buffer: Buffer | null) {
+  if (!buffer?.length) {
+    return "";
+  }
+
+  return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
+function getTileThumbnailBuffer(tileRecord: TileRecord) {
+  const thumbnailDataUrl = tileRecord.thumbnail.trim() || createTileThumbnail(tileRecord.slots);
+  return extractPngBuffer(thumbnailDataUrl);
+}
+
+function prefixDeletedAssetName(name: string) {
+  return name.startsWith("_") ? name : `_${name}`;
+}
+
+async function readLegacyTileFile() {
+  if (existsSync(TILE_DB_PATH)) {
+    const fileContents = await readFile(TILE_DB_PATH, "utf8");
+    const parsed = JSON.parse(fileContents);
+
+    if (Array.isArray(parsed)) {
+      return parsed.filter(isTileRecord).map(normalizeTileRecord);
+    }
+  }
+
+  if (existsSync(LEGACY_TILE_DB_PATH)) {
+    const fileContents = await readFile(LEGACY_TILE_DB_PATH, "utf8");
+    const parsed = JSON.parse(fileContents);
+
+    if (Array.isArray(parsed)) {
+      return parsed.filter(isTileRecord).map(normalizeTileRecord);
+    }
+  }
+
+  return [];
+}
+
+async function collectLegacyFolderPaths(relativePath: string, collectedPaths: Set<string>) {
+  const absolutePath = getSafeProjectPath(relativePath);
+
+  if (!existsSync(absolutePath)) {
+    return;
+  }
+
+  const entries = await readdir(absolutePath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const childPath = normalizeTileRecordPath(path.posix.join(relativePath, entry.name));
+    collectedPaths.add(childPath);
+    await collectLegacyFolderPaths(childPath, collectedPaths);
+  }
+}
+
+async function collectLegacySpriteAssets(
+  relativePath: string,
+  collectedSprites: Map<string, { buffer: Buffer; record: SpriteRecord }>
+) {
+  const absolutePath = getSafeProjectPath(relativePath);
+
+  if (!existsSync(absolutePath)) {
+    return;
+  }
+
+  const entries = await readdir(absolutePath, { withFileTypes: true });
+
+  if (tileLibraryPathSupportsSprites(relativePath)) {
+    for (const entry of entries) {
+      if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== SPRITE_IMAGE_EXTENSION) {
+        continue;
+      }
+
+      const spritePath = path.posix.join(relativePath, entry.name);
+      const spriteBuffer = await readFile(getSafeProjectPath(spritePath));
+      const spriteJsonPath = getSafeProjectPath(getSpriteJsonPath(relativePath, entry.name));
+      let spriteRecord: SpriteRecord | null = null;
+
+      if (existsSync(spriteJsonPath)) {
+        try {
+          spriteRecord = parseSpriteRecord(
+            relativePath,
+            `${path.parse(entry.name).name}.json`,
+            JSON.parse(await readFile(spriteJsonPath, "utf8"))
+          );
+        } catch {
+          spriteRecord = null;
+        }
+      }
+
+      if (!spriteRecord) {
+        const { height, width } = getSpriteSizeFromBuffer(spriteBuffer);
+        spriteRecord = createInitialSpriteRecord(relativePath, entry.name, width, height);
+      }
+
+      collectedSprites.set(getSpriteRecordKey(spriteRecord), {
+        buffer: spriteBuffer,
+        record: spriteRecord
+      });
+    }
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    await collectLegacySpriteAssets(
+      normalizeTileRecordPath(path.posix.join(relativePath, entry.name)),
+      collectedSprites
+    );
+  }
+}
+
+async function ensureFolderAncestors(folderPath: string) {
+  const normalizedPath = normalizeTileRecordPath(folderPath);
+
+  if (!normalizedPath) {
+    return;
+  }
+
+  const db = await getDatabase();
+  const segments = normalizedPath.split("/");
+  let nextPath = "";
+
+  for (const segment of segments) {
+    nextPath = nextPath ? `${nextPath}/${segment}` : segment;
+    await upsertFolderAsset(db, nextPath);
+  }
+}
+
+async function upsertFolderAsset(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  folderPath: string
+) {
+  const normalizedPath = normalizeTileRecordPath(folderPath);
+
+  if (!normalizedPath) {
+    return "";
+  }
+
+  const now = new Date().toISOString();
+  await db("map_tiles")
+    .insert({
+      asset_key: getFolderAssetKey(normalizedPath),
+      asset_name: path.posix.basename(normalizedPath),
+      asset_slug: null,
+      asset_type: "folder",
+      created_at: now,
+      deleted: false,
+      file_name: null,
+      id: randomUUID(),
+      image_data: null,
+      source_path: null,
+      sprite_metadata: null,
+      sub_folder: normalizedPath,
+      tile_slots: null,
+      updated_at: now
+    } satisfies Partial<StoredAssetRow>)
+    .onConflict("asset_key")
+    .merge({
+      asset_name: path.posix.basename(normalizedPath),
+      deleted: false,
+      sub_folder: normalizedPath,
+      updated_at: now
+    });
+
+  return normalizedPath;
+}
+
+async function upsertTileAsset(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  tileRecord: TileRecord
+) {
+  const normalizedTile = normalizeTileRecord(tileRecord);
+  const now = new Date().toISOString();
+  const serializedSlots = JSON.stringify(normalizedTile.slots);
+
+  await ensureFolderAncestors(normalizedTile.path);
+
+  await db("map_tiles")
+    .insert({
+      asset_key: getTileAssetKey(normalizedTile.slug),
+      asset_name: normalizedTile.name,
+      asset_slug: normalizedTile.slug,
+      asset_type: "tile",
+      created_at: now,
+      deleted: false,
+      file_name: null,
+      id: randomUUID(),
+      image_data: getTileThumbnailBuffer(normalizedTile),
+      source_path: normalizedTile.source,
+      sprite_metadata: null,
+      sub_folder: normalizedTile.path,
+      tile_slots: serializedSlots,
+      updated_at: now
+    } satisfies Partial<StoredAssetRow>)
+    .onConflict("asset_key")
+    .merge({
+      asset_name: normalizedTile.name,
+      asset_slug: normalizedTile.slug,
+      deleted: false,
+      image_data: getTileThumbnailBuffer(normalizedTile),
+      source_path: normalizedTile.source,
+      sub_folder: normalizedTile.path,
+      tile_slots: serializedSlots,
+      updated_at: now
+    });
+}
+
+async function upsertSpriteAsset(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  spriteRecord: SpriteRecord,
+  imageBuffer: Buffer
+) {
+  const normalizedSprite = normalizeSpriteRecord(spriteRecord);
+  const now = new Date().toISOString();
+  const serializedSpriteMetadata = JSON.stringify(serializeStoredSpriteRecord(normalizedSprite));
+
+  await ensureFolderAncestors(normalizedSprite.path);
+
+  await db("map_tiles")
+    .insert({
+      asset_key: getSpriteAssetKey(normalizedSprite.path, normalizedSprite.filename),
+      asset_name: normalizedSprite.name,
+      asset_slug: null,
+      asset_type: "sprite",
+      created_at: now,
+      deleted: false,
+      file_name: normalizedSprite.filename,
+      id: randomUUID(),
+      image_data: imageBuffer,
+      source_path: null,
+      sprite_metadata: serializedSpriteMetadata,
+      sub_folder: normalizedSprite.path,
+      tile_slots: null,
+      updated_at: now
+    } satisfies Partial<StoredAssetRow>)
+    .onConflict("asset_key")
+    .merge({
+      asset_name: normalizedSprite.name,
+      deleted: false,
+      file_name: normalizedSprite.filename,
+      image_data: imageBuffer,
+      sprite_metadata: serializedSpriteMetadata,
+      sub_folder: normalizedSprite.path,
+      updated_at: now
+    });
+}
+
+function mapRowToTileRecord(row: StoredAssetRow): TileRecord {
+  const slots = normalizeSlotRecords(Array.isArray(row.tile_slots) ? (row.tile_slots as Array<SlotRecord | null>) : undefined);
+
+  return normalizeTilePayload(
+    row.asset_name,
+    row.sub_folder,
+    row.asset_slug ?? "",
+    row.source_path ?? "",
+    slots,
+    bufferToPngDataUrl(row.image_data) || createTileThumbnail(slots)
+  );
+}
+
+function mapRowToSpriteRecord(row: StoredAssetRow) {
+  if (!row.file_name) {
+    return null;
+  }
+
+  const spriteRecord = parseSpriteRecord(row.sub_folder, `${path.parse(row.file_name).name}.json`, row.sprite_metadata);
+
+  if (!spriteRecord) {
+    return null;
+  }
+
+  return {
+    ...spriteRecord,
+    thumbnail: bufferToPngDataUrl(row.image_data)
+  };
+}
+
+async function importLegacyAssetLibrary() {
+  const db = await getDatabase();
+  const legacyFolderPaths = new Set<string>(TILE_LIBRARY_LAYERS.map((layer) => layer.folder));
+
+  for (const layer of TILE_LIBRARY_LAYERS) {
+    await collectLegacyFolderPaths(layer.folder, legacyFolderPaths);
+  }
+
+  for (const folderPath of Array.from(legacyFolderPaths).sort((left, right) => left.localeCompare(right))) {
+    await upsertFolderAsset(db, folderPath);
+  }
+
+  const legacyTiles = await readLegacyTileFile();
+
+  for (const tileRecord of legacyTiles) {
+    await upsertTileAsset(db, tileRecord);
+  }
+
+  const legacySprites = new Map<string, { buffer: Buffer; record: SpriteRecord }>();
+
+  for (const layer of TILE_LIBRARY_LAYERS) {
+    await collectLegacySpriteAssets(layer.folder, legacySprites);
+  }
+
+  for (const spriteAsset of legacySprites.values()) {
+    await upsertSpriteAsset(db, spriteAsset.record, spriteAsset.buffer);
+  }
+}
+
+async function initializeAssetDatabase() {
+  const db = await getDatabase();
+  await ensureDatabaseSchema(db);
+
+  for (const layer of TILE_LIBRARY_LAYERS) {
+    await upsertFolderAsset(db, layer.folder);
+  }
+
+  const existingAssets = await db("map_tiles")
+    .whereIn("asset_type", ["tile", "sprite"])
+    .andWhere({ deleted: false })
+    .count<{ count: string }[]>({ count: "*" });
+  const assetCount = Number(existingAssets[0]?.count ?? 0);
+
+  if (assetCount === 0) {
+    await importLegacyAssetLibrary();
+  }
+}
+
+async function ensureAssetDatabaseReady() {
+  if (!assetDatabaseReadyPromise) {
+    assetDatabaseReadyPromise = initializeAssetDatabase().catch((error) => {
+      assetDatabaseReadyPromise = null;
+      throw error;
+    });
+  }
+
+  return assetDatabaseReadyPromise;
+}
+
+export async function getAssetDatabaseStatus(): Promise<AssetDatabaseStatus> {
+  try {
+    await ensureAssetDatabaseReady();
+    return {
+      available: true,
+      message: ""
+    };
+  } catch (error) {
+    return {
+      available: false,
+      message: getAssetDatabaseErrorMessage(error)
+    };
+  }
 }
 
 async function readTileLibraryFoldersRecursively(
@@ -400,17 +876,105 @@ function getSlugFromStoredTileReference(reference: string | undefined) {
   return segments.at(-1) ?? (reference?.trim() ?? "");
 }
 
+function getSpriteKeyFromStoredReference(reference: string | undefined) {
+  const trimmedReference = reference?.trim() ?? "";
+
+  if (!trimmedReference) {
+    return "";
+  }
+
+  const lastSlashIndex = trimmedReference.lastIndexOf("/");
+
+  if (lastSlashIndex === -1) {
+    return trimmedReference;
+  }
+
+  return getTileLibrarySpriteKey(
+    trimmedReference.slice(0, lastSlashIndex),
+    trimmedReference.slice(lastSlashIndex + 1)
+  );
+}
+
 function normalizeStoredMapTileReferenceOptions(options: Partial<MapTileOptions> | undefined) {
   return normalizeMapTileOptions(options);
 }
 
-function decodeStoredMapTileReference(reference: StoredMapTileReference | undefined): MapTilePlacement | null {
+function getRotateQuarterTurnsFromOptions(options: Partial<MapTileOptions> | undefined) {
+  const normalizedOptions = normalizeMapTileOptions(options);
+
+  if (normalizedOptions.rotate270) {
+    return 3;
+  }
+
+  if (normalizedOptions.rotate180) {
+    return 2;
+  }
+
+  if (normalizedOptions.rotate90) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function createMapTileOptionsFromPlacementRow(row: Pick<
+  StoredMapPlacementRow,
+  | "color_enabled"
+  | "color_value"
+  | "flip_horizontal"
+  | "flip_vertical"
+  | "multiply_enabled"
+  | "rotate_quarter_turns"
+>) {
+  const normalizedQuarterTurns = ((Math.round(row.rotate_quarter_turns) % 4) + 4) % 4;
+
+  return normalizeMapTileOptions({
+    color: row.color_enabled,
+    colorValue: row.color_value,
+    flipHorizontal: row.flip_horizontal,
+    flipVertical: row.flip_vertical,
+    multiply: row.multiply_enabled,
+    rotate180: normalizedQuarterTurns === 2,
+    rotate270: normalizedQuarterTurns === 3,
+    rotate90: normalizedQuarterTurns === 1
+  });
+}
+
+function createMapPlacementFromRow(row: StoredMapPlacementRow): MapLayerCell {
+  if (row.asset_type === "sprite") {
+    if (!row.sprite_sub_folder || !row.sprite_file_name) {
+      return null;
+    }
+
+    return createMapSpritePlacement(getTileLibrarySpriteKey(row.sprite_sub_folder, row.sprite_file_name));
+  }
+
+  if (!row.tile_slug) {
+    return null;
+  }
+
+  return createMapTilePlacement(
+    row.tile_slug,
+    createMapTileOptionsFromPlacementRow(row),
+    row.slot_num
+  );
+}
+
+function decodeStoredMapTileReference(reference: StoredMapTileReference | undefined): MapLayerCell {
   if (!reference) {
     return null;
   }
 
   if (typeof reference === "string") {
+    if (reference.trim().toLowerCase().endsWith(SPRITE_IMAGE_EXTENSION)) {
+      return createMapSpritePlacement(getSpriteKeyFromStoredReference(reference));
+    }
+
     return createMapTilePlacement(getSlugFromStoredTileReference(reference));
+  }
+
+  if (typeof reference.sprite === "string" && reference.sprite.trim()) {
+    return createMapSpritePlacement(getSpriteKeyFromStoredReference(reference.sprite));
   }
 
   return createMapTilePlacement(
@@ -419,12 +983,17 @@ function decodeStoredMapTileReference(reference: StoredMapTileReference | undefi
   );
 }
 
-function buildStoredMapTileReference(
-  tilePath: string,
-  options: Partial<MapTileOptions> | undefined
-): Exclude<StoredMapTileReference, string> {
+function buildStoredMapTileReference(placement: MapLayerCell, tilePathBySlug: Map<string, string>) {
+  if (isMapSpritePlacement(placement)) {
+    return {
+      sprite: getSpriteKeyFromStoredReference(placement.spriteKey)
+    } satisfies Exclude<StoredMapTileReference, string>;
+  }
+
+  const tilePath = tilePathBySlug.get(placement?.tileSlug ?? "") ?? placement?.tileSlug ?? "";
+
   return {
-    options: normalizeStoredMapTileReferenceOptions(options),
+    options: normalizeStoredMapTileReferenceOptions(placement?.options),
     tile: tilePath
   };
 }
@@ -446,6 +1015,10 @@ function decodeStoredMapCell(cell: StoredMapCell, tileMap: Record<string, Stored
 
   if (trimmedCell in tileMap) {
     return decodeStoredMapTileReference(tileMap[trimmedCell]);
+  }
+
+  if (trimmedCell.toLowerCase().endsWith(SPRITE_IMAGE_EXTENSION)) {
+    return createMapSpritePlacement(getSpriteKeyFromStoredReference(trimmedCell));
   }
 
   if (trimmedCell.includes("/")) {
@@ -486,13 +1059,23 @@ function parseStoredMapRecord(record: StoredMapRecord): MapRecord {
   } as MapRecord);
 }
 
-function buildStoredMapRecord(mapRecord: MapRecord, tileRecords: TileRecord[]): StoredMapRecord {
+function buildStoredMapRecord(
+  mapRecord: MapRecord,
+  tileRecords: TileRecord[],
+  spriteRecords: SpriteRecord[]
+): StoredMapRecord {
   const normalized = normalizeMapRecord(mapRecord);
   const tilePathBySlug = new Map(
     tileRecords.map((tileRecord) => [
       tileRecord.slug,
       normalizeTileLibraryPath(`${tileRecord.path}/${tileRecord.slug}`)
     ])
+  );
+  const spritePathByKey = new Map(
+    spriteRecords.map((spriteRecord) => {
+      const spriteKey = getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename);
+      return [spriteKey, spriteKey] as const;
+    })
   );
   const tileIdByReference = new Map<string, number>();
   const tileMap: Record<string, StoredMapTileReference> = {};
@@ -501,12 +1084,15 @@ function buildStoredMapRecord(mapRecord: MapRecord, tileRecords: TileRecord[]): 
   const storedLayers = normalized.layers.map((layerRows) =>
     layerRows.map((row) =>
       row.map((placement) => {
-        if (!placement?.tileSlug) {
+        if (!placement) {
           return 0;
         }
 
-        const tilePath = tilePathBySlug.get(placement.tileSlug) ?? placement.tileSlug;
-        const referenceKey = `${tilePath}:${serializeMapTileOptionsKey(placement.options)}`;
+        const referenceKey = isMapTilePlacement(placement)
+          ? `tile:${tilePathBySlug.get(placement.tileSlug) ?? placement.tileSlug}:${serializeMapTileOptionsKey(
+              placement.options
+            )}`
+          : `sprite:${spritePathByKey.get(placement.spriteKey) ?? getSpriteKeyFromStoredReference(placement.spriteKey)}`;
         const existingTileId = tileIdByReference.get(referenceKey);
 
         if (existingTileId) {
@@ -516,7 +1102,7 @@ function buildStoredMapRecord(mapRecord: MapRecord, tileRecords: TileRecord[]): 
         const tileId = nextTileId;
         nextTileId += 1;
         tileIdByReference.set(referenceKey, tileId);
-        tileMap[String(tileId)] = buildStoredMapTileReference(tilePath, placement.options);
+        tileMap[String(tileId)] = buildStoredMapTileReference(placement, tilePathBySlug);
         return tileId;
       })
     )
@@ -536,8 +1122,8 @@ function buildStoredMapRecord(mapRecord: MapRecord, tileRecords: TileRecord[]): 
 
 async function writeStoredMapFile(mapRecord: MapRecord) {
   const normalized = normalizeMapRecord(mapRecord);
-  const tileRecords = await readTileRecords();
-  const storedRecord = buildStoredMapRecord(normalized, tileRecords);
+  const [tileRecords, spriteRecords] = await Promise.all([readTileRecords(), readSpriteRecords()]);
+  const storedRecord = buildStoredMapRecord(normalized, tileRecords, spriteRecords);
   const filePath = path.join(MAPS_DIR, `${normalized.slug}.json`);
 
   await writeFile(filePath, `${JSON.stringify(storedRecord, null, 2)}\n`, "utf8");
@@ -583,6 +1169,220 @@ async function ensureStarterMap() {
   };
 
   await writeStoredMapFile(starterMap);
+}
+
+async function readLegacyMapFiles() {
+  await mkdir(MAPS_DIR, { recursive: true });
+  const entries = await readdir(MAPS_DIR, { withFileTypes: true });
+  const maps = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map(async (entry) => {
+        try {
+          const filePath = path.join(MAPS_DIR, entry.name);
+          const fileContents = await readFile(filePath, "utf8");
+          return parseStoredMapRecord(JSON.parse(fileContents) as StoredMapRecord);
+        } catch {
+          return null;
+        }
+      })
+  );
+
+  return maps.filter((mapRecord): mapRecord is MapRecord => mapRecord !== null);
+}
+
+async function upsertMapRecordToDatabase(mapRecord: MapRecord) {
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const normalizedMap = normalizeMapRecord(mapRecord);
+  const now = new Date().toISOString();
+  const tileSlugs = new Set<string>();
+  const spriteKeys = new Set<string>();
+
+  normalizedMap.layers.forEach((layerRows) => {
+    layerRows.forEach((row) => {
+      row.forEach((placement) => {
+        if (isMapTilePlacement(placement)) {
+          tileSlugs.add(placement.tileSlug);
+        } else if (isMapSpritePlacement(placement)) {
+          spriteKeys.add(placement.spriteKey);
+        }
+      });
+    });
+  });
+
+  const [tileAssetRows, spriteAssetRows] = await Promise.all([
+    tileSlugs.size
+      ? db<StoredAssetRow>("map_tiles")
+          .select("id", "asset_slug")
+          .where({ asset_type: "tile" })
+          .whereIn("asset_slug", Array.from(tileSlugs))
+      : Promise.resolve([] as Pick<StoredAssetRow, "asset_slug" | "id">[]),
+    spriteKeys.size
+      ? db<StoredAssetRow>("map_tiles")
+          .select("id", "asset_key")
+          .where({ asset_type: "sprite" })
+          .whereIn(
+            "asset_key",
+            Array.from(spriteKeys).map((spriteKey) => `sprite:${spriteKey}`)
+          )
+      : Promise.resolve([] as Pick<StoredAssetRow, "asset_key" | "id">[])
+  ]);
+  const tileAssetIdBySlug = new Map(
+    tileAssetRows
+      .filter((row) => typeof row.asset_slug === "string" && row.asset_slug.trim())
+      .map((row) => [row.asset_slug as string, row.id] as const)
+  );
+  const spriteAssetIdByKey = new Map(
+    spriteAssetRows
+      .filter((row) => typeof row.asset_key === "string" && row.asset_key.trim())
+      .map((row) => [row.asset_key.replace(/^sprite:/u, ""), row.id] as const)
+  );
+
+  await db.transaction(async (transaction) => {
+    const [storedMap] = await transaction<StoredMapRow>("map_maps")
+      .insert({
+        deleted: false,
+        height: normalizedMap.height,
+        id: randomUUID(),
+        name: normalizedMap.name,
+        slug: normalizedMap.slug,
+        updated_at: normalizedMap.updatedAt || now,
+        width: normalizedMap.width
+      } satisfies Partial<StoredMapRow>)
+      .onConflict("slug")
+      .merge({
+        deleted: false,
+        height: normalizedMap.height,
+        name: normalizedMap.name,
+        updated_at: normalizedMap.updatedAt || now,
+        width: normalizedMap.width
+      })
+      .returning(["id"]);
+    const mapId = storedMap?.id;
+
+    if (!mapId) {
+      throw new Error(`Could not persist map ${normalizedMap.slug}.`);
+    }
+
+    await transaction("map_map_assets").where({ map_id: mapId }).delete();
+
+    const placementRows: StoredMapPlacementInsertRow[] = [];
+
+    normalizedMap.layers.forEach((layerRows, layerIndex) => {
+      layerRows.forEach((row, tileY) => {
+        row.forEach((placement, tileX) => {
+          if (!placement) {
+            return;
+          }
+
+          if (isMapTilePlacement(placement)) {
+            const tileAssetId = tileAssetIdBySlug.get(placement.tileSlug);
+
+            if (!tileAssetId) {
+              throw new Error(`Map references unknown tile ${placement.tileSlug}.`);
+            }
+
+            placementRows.push({
+              asset_type: "tile",
+              color_enabled: placement.options.color,
+              color_value: placement.options.colorValue,
+              created_at: now,
+              flip_horizontal: placement.options.flipHorizontal,
+              flip_vertical: placement.options.flipVertical,
+              id: randomUUID(),
+              layer_index: layerIndex,
+              map_id: mapId,
+              multiply_enabled: placement.options.multiply,
+              rotate_quarter_turns: getRotateQuarterTurnsFromOptions(placement.options),
+              slot_num: placement.slotNum ?? 0,
+              sprite_asset_id: null,
+              tile_asset_id: tileAssetId,
+              tile_x: tileX,
+              tile_y: tileY,
+              updated_at: now
+            });
+            return;
+          }
+
+          const spriteAssetId = spriteAssetIdByKey.get(placement.spriteKey);
+
+          if (!spriteAssetId) {
+            throw new Error(`Map references unknown sprite ${placement.spriteKey}.`);
+          }
+
+          placementRows.push({
+            asset_type: "sprite",
+            color_enabled: false,
+            color_value: "#ffffff",
+            created_at: now,
+            flip_horizontal: false,
+            flip_vertical: false,
+            id: randomUUID(),
+            layer_index: layerIndex,
+            map_id: mapId,
+            multiply_enabled: false,
+            rotate_quarter_turns: 0,
+            slot_num: 0,
+            sprite_asset_id: spriteAssetId,
+            tile_asset_id: null,
+            tile_x: tileX,
+            tile_y: tileY,
+            updated_at: now
+          });
+        });
+      });
+    });
+
+    if (placementRows.length > 0) {
+      await transaction("map_map_assets").insert(placementRows);
+    }
+  });
+}
+
+async function importLegacyMapLibrary() {
+  const legacyMaps = await readLegacyMapFiles();
+
+  if (legacyMaps.length > 0) {
+    for (const mapRecord of legacyMaps) {
+      await upsertMapRecordToDatabase(mapRecord);
+    }
+
+    return;
+  }
+
+  await upsertMapRecordToDatabase({
+    cells: flattenMapLayers(createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE)),
+    height: MAP_DEFAULT_GRID_SIZE,
+    layers: createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE),
+    name: "Starter Camp",
+    slug: "starter-camp",
+    updatedAt: new Date().toISOString(),
+    width: MAP_DEFAULT_GRID_SIZE
+  });
+}
+
+async function initializeMapDatabase() {
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  await ensureDatabaseSchema(db);
+  const existingMaps = await db("map_maps").count<{ count: string }[]>({ count: "*" });
+  const mapCount = Number(existingMaps[0]?.count ?? 0);
+
+  if (mapCount === 0) {
+    await importLegacyMapLibrary();
+  }
+}
+
+async function ensureMapDatabaseReady() {
+  if (!mapDatabaseReadyPromise) {
+    mapDatabaseReadyPromise = initializeMapDatabase().catch((error) => {
+      mapDatabaseReadyPromise = null;
+      throw error;
+    });
+  }
+
+  return mapDatabaseReadyPromise;
 }
 
 function normalizeClipboardSlot(slot: unknown): ClipboardSlotRecord | null {
@@ -649,57 +1449,98 @@ export async function writeClipboardSlots(clipboardSlots: Array<ClipboardSlotRec
 }
 
 export async function readTileRecords() {
-  await ensureTileDatabase();
-  const fileContents = await readFile(TILE_DB_PATH, "utf8");
-  const parsed = JSON.parse(fileContents);
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const rows = await db<StoredAssetRow>("map_tiles")
+    .select("*")
+    .where({ asset_type: "tile", deleted: false })
+    .orderBy([
+      { column: "sub_folder", order: "asc" },
+      { column: "asset_name", order: "asc" },
+      { column: "asset_slug", order: "asc" }
+    ]);
 
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-
-  return parsed.filter(isTileRecord).map(normalizeTileRecord);
+  return rows.map(mapRowToTileRecord);
 }
 
 export async function writeTileRecords(tileRecords: TileRecord[]) {
-  await ensureTileDatabase();
-  await writeFile(
-    TILE_DB_PATH,
-    `${JSON.stringify(tileRecords.map(normalizeTileRecord), null, 2)}\n`,
-    "utf8"
-  );
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+
+  for (const tileRecord of tileRecords) {
+    await upsertTileAsset(db, tileRecord);
+  }
 }
 
 export async function readTileLibraryFolders() {
-  await ensureTileDatabase();
-  const folderPaths = new Set<string>(TILE_LIBRARY_LAYERS.map((layer) => layer.folder));
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const rows = await db<StoredAssetRow>("map_tiles")
+    .select("sub_folder")
+    .where({ asset_type: "folder", deleted: false })
+    .orderBy("sub_folder", "asc");
 
-  for (const layer of TILE_LIBRARY_LAYERS) {
-    await readTileLibraryFoldersRecursively(layer.folder, folderPaths);
-  }
+  return rows.map((row) => normalizeTileRecordPath(row.sub_folder)).filter(Boolean);
+}
 
-  return Array.from(folderPaths).sort((left, right) => left.localeCompare(right));
+export async function readTileLibraryFolderAssetCounts() {
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const result = await db.raw<{
+    rows: Array<{
+      asset_count: number | string;
+      folder_path: string;
+    }>;
+  }>(`
+    with expanded_assets as (
+      select array_to_string(asset_segments[1:depth], '/') as folder_path
+      from (
+        select regexp_split_to_array(sub_folder, '/') as asset_segments
+        from map_tiles
+        where asset_type in ('tile', 'sprite') and deleted = false
+      ) asset_rows
+      cross join lateral generate_series(1, array_length(asset_segments, 1)) as depth
+    ),
+    grouped_assets as (
+      select folder_path, count(*)::int as asset_count
+      from expanded_assets
+      group by folder_path
+    )
+    select folders.sub_folder as folder_path, coalesce(grouped_assets.asset_count, 0)::int as asset_count
+    from map_tiles folders
+    left join grouped_assets on grouped_assets.folder_path = folders.sub_folder
+    where folders.asset_type = 'folder' and folders.deleted = false
+    order by folders.sub_folder asc
+  `);
+
+  return Object.fromEntries(
+    result.rows.map((row) => [normalizeTileRecordPath(row.folder_path), Number(row.asset_count)])
+  ) satisfies Record<string, number>;
 }
 
 export async function readSpriteRecords() {
-  await ensureTileDatabase();
-  const spriteRecords = new Map<string, SpriteRecord>();
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const rows = await db<StoredAssetRow>("map_tiles")
+    .select("*")
+    .where({ asset_type: "sprite", deleted: false })
+    .orderBy([
+      { column: "sub_folder", order: "asc" },
+      { column: "asset_name", order: "asc" },
+      { column: "file_name", order: "asc" }
+    ]);
 
-  for (const layer of TILE_LIBRARY_LAYERS) {
-    await readTileLibraryFoldersRecursively(layer.folder, new Set<string>(), spriteRecords);
-  }
-
-  return Array.from(spriteRecords.values()).sort(
-    (left, right) =>
-      left.path.localeCompare(right.path) ||
-      left.name.localeCompare(right.name) ||
-      left.filename.localeCompare(right.filename)
-  );
+  return rows
+    .map(mapRowToSpriteRecord)
+    .filter((spriteRecord): spriteRecord is SpriteRecord => spriteRecord !== null);
 }
 
 export async function ensureTileLibraryFolder(relativePath: string) {
   const normalizedPath = normalizeTileRecordPath(relativePath);
-  await ensureTileDatabase();
-  await mkdir(getSafeProjectPath(normalizedPath), { recursive: true });
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  await ensureFolderAncestors(normalizedPath);
+  await upsertFolderAsset(db, normalizedPath);
   return normalizedPath;
 }
 
@@ -715,6 +1556,7 @@ export async function createTileRecord(name: string, tilePath: string) {
     throw new Error("Choose a tile library folder before creating a tile.");
   }
 
+  await ensureTileLibraryFolder(nextPath);
   const tileRecords = await readTileRecords();
   const nextTile = normalizeTilePayload(
     nextName,
@@ -725,8 +1567,8 @@ export async function createTileRecord(name: string, tilePath: string) {
     ""
   );
 
-  tileRecords.push(nextTile);
-  await writeTileRecords(tileRecords);
+  const db = await getDatabase();
+  await upsertTileAsset(db, nextTile);
 
   return nextTile;
 }
@@ -745,23 +1587,24 @@ export async function importSpriteFile(file: File, spritePath: string) {
   await ensureTileLibraryFolder(normalizedPath);
 
   const spriteFilename = sanitizeSpriteFilename(file.name);
-  const spriteImagePath = getSafeProjectPath(path.posix.join(normalizedPath, spriteFilename));
-  const spriteJsonPath = getSafeProjectPath(getSpriteJsonPath(normalizedPath, spriteFilename));
+  const db = await getDatabase();
+  const existingSprite = await db<StoredAssetRow>("map_tiles")
+    .select("id")
+    .first()
+    .where({ asset_key: getSpriteAssetKey(normalizedPath, spriteFilename), deleted: false });
 
-  if (existsSync(spriteImagePath) || existsSync(spriteJsonPath)) {
+  if (existingSprite) {
     throw new Error(`A sprite named ${spriteFilename} already exists in this folder.`);
   }
 
   const fileBuffer = Buffer.from(await file.arrayBuffer());
   const { height, width } = getSpriteSizeFromBuffer(fileBuffer);
 
-  await writeFile(spriteImagePath, fileBuffer);
-
   const spriteRecord = {
     ...createInitialSpriteRecord(normalizedPath, spriteFilename, width, height),
     thumbnail: createSpriteThumbnailDataUrl(fileBuffer, spriteFilename)
   };
-  await writeSpriteRecord(spriteRecord);
+  await upsertSpriteAsset(db, spriteRecord, fileBuffer);
 
   return spriteRecord;
 }
@@ -778,7 +1621,12 @@ export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: Fi
     throw new Error("Sprites can only be saved into layers above layer_0.");
   }
 
-  const spriteImagePath = getSafeProjectPath(path.posix.join(normalizedPath, normalizedSprite.filename));
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const existingSprite = await db<StoredAssetRow>("map_tiles")
+    .select("*")
+    .first()
+    .where({ asset_key: getSpriteAssetKey(normalizedPath, normalizedSprite.filename), deleted: false });
   let thumbnailBuffer: Buffer | null = null;
   let nextSprite = normalizedSprite;
 
@@ -790,22 +1638,20 @@ export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: Fi
     thumbnailBuffer = Buffer.from(await replacementFile.arrayBuffer());
     const { height, width } = getSpriteSizeFromBuffer(thumbnailBuffer);
 
-    await writeFile(spriteImagePath, thumbnailBuffer);
-
     nextSprite = normalizeSpriteRecord({
       ...normalizedSprite,
       image_h: height,
       image_w: width
     });
   } else {
-    if (!existsSync(spriteImagePath)) {
-      throw new Error("Sprite image file is missing on disk.");
+    if (!existingSprite?.image_data) {
+      throw new Error("Sprite image is missing in the database.");
     }
 
-    thumbnailBuffer = await readFile(spriteImagePath);
+    thumbnailBuffer = existingSprite.image_data;
   }
 
-  await writeSpriteRecord(nextSprite);
+  await upsertSpriteAsset(db, nextSprite, thumbnailBuffer);
 
   return {
     ...nextSprite,
@@ -813,25 +1659,212 @@ export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: Fi
   };
 }
 
-export async function readMapRecords() {
-  await ensureStarterMap();
-  const entries = await readdir(MAPS_DIR, { withFileTypes: true });
-  const maps = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-      .map(async (entry) => {
-        const filePath = path.join(MAPS_DIR, entry.name);
-        const fileContents = await readFile(filePath, "utf8");
-        return parseStoredMapRecord(JSON.parse(fileContents) as StoredMapRecord);
-      })
+export async function saveTileRecord(input: {
+  slots: Array<SlotRecord | null>;
+  slug: string;
+  source: string;
+}) {
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const existingTile = await db<StoredAssetRow>("map_tiles")
+    .select("*")
+    .first()
+    .where({ asset_key: getTileAssetKey(input.slug.trim()), deleted: false });
+
+  if (!existingTile) {
+    throw new Error("Tile not found.");
+  }
+
+  const currentTile = mapRowToTileRecord(existingTile);
+  const nextTile = normalizeTilePayload(
+    currentTile.name,
+    currentTile.path,
+    currentTile.slug,
+    input.source,
+    input.slots,
+    createTileThumbnail(input.slots)
   );
 
-  return maps.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  await upsertTileAsset(db, nextTile);
+  return nextTile;
+}
+
+export async function deleteAssetRecord(input: {
+  assetType: "sprite" | "tile";
+  filename?: string;
+  path?: string;
+  slug?: string;
+}) {
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+
+  if (input.assetType === "tile") {
+    const tileSlug = input.slug?.trim() ?? "";
+
+    if (!tileSlug) {
+      throw new Error("Tile slug is required.");
+    }
+
+    const existingTile = await db<StoredAssetRow>("map_tiles")
+      .select("*")
+      .first()
+      .where({ asset_key: getTileAssetKey(tileSlug), deleted: false });
+
+    if (!existingTile) {
+      throw new Error("Tile not found.");
+    }
+
+    const nextAssetName = prefixDeletedAssetName(existingTile.asset_name);
+
+    await db("map_tiles")
+      .where({ id: existingTile.id })
+      .update({
+        asset_name: nextAssetName,
+        deleted: true,
+        updated_at: now
+      });
+
+    return {
+      assetType: "tile" as const,
+      path: existingTile.sub_folder,
+      slug: tileSlug
+    };
+  }
+
+  const spritePath = normalizeTileLibraryPath(input.path);
+  const spriteFilename = input.filename?.trim() ?? "";
+
+  if (!spritePath || !spriteFilename) {
+    throw new Error("Sprite path and filename are required.");
+  }
+
+  const existingSprite = await db<StoredAssetRow>("map_tiles")
+    .select("*")
+    .first()
+    .where({ asset_key: getSpriteAssetKey(spritePath, spriteFilename), deleted: false });
+
+  if (!existingSprite) {
+    throw new Error("Sprite not found.");
+  }
+
+  const nextAssetName = prefixDeletedAssetName(existingSprite.asset_name);
+  const currentSpriteMetadata =
+    existingSprite.sprite_metadata && typeof existingSprite.sprite_metadata === "object"
+      ? { ...(existingSprite.sprite_metadata as Record<string, unknown>) }
+      : {};
+
+  if (typeof currentSpriteMetadata.name === "string") {
+    currentSpriteMetadata.name = prefixDeletedAssetName(currentSpriteMetadata.name);
+  } else {
+    currentSpriteMetadata.name = nextAssetName;
+  }
+
+  await db("map_tiles")
+    .where({ id: existingSprite.id })
+    .update({
+      asset_name: nextAssetName,
+      deleted: true,
+      sprite_metadata: JSON.stringify(currentSpriteMetadata),
+      updated_at: now
+    });
+
+  return {
+    assetType: "sprite" as const,
+    filename: spriteFilename,
+    path: spritePath,
+    spriteKey: getTileLibrarySpriteKey(spritePath, spriteFilename)
+  };
+}
+
+export async function readMapRecords() {
+  await ensureMapDatabaseReady();
+  const db = await getDatabase();
+  const [storedMaps, storedPlacements] = await Promise.all([
+    db<StoredMapRow>("map_maps")
+      .select(["id", "slug", "name", "width", "height", "deleted", "created_at", "updated_at"])
+      .where({ deleted: false })
+      .orderBy("updated_at", "desc"),
+    db("map_map_assets as placements")
+      .innerJoin("map_maps as maps", "placements.map_id", "maps.id")
+      .leftJoin("map_tiles as tile_assets", "placements.tile_asset_id", "tile_assets.id")
+      .leftJoin("map_tiles as sprite_assets", "placements.sprite_asset_id", "sprite_assets.id")
+      .select([
+        "placements.map_id",
+        "placements.layer_index",
+        "placements.tile_x",
+        "placements.tile_y",
+        "placements.asset_type",
+        "placements.tile_asset_id",
+        "placements.sprite_asset_id",
+        "placements.slot_num",
+        "placements.color_enabled",
+        "placements.color_value",
+        "placements.multiply_enabled",
+        "placements.flip_horizontal",
+        "placements.flip_vertical",
+        "placements.rotate_quarter_turns",
+        "tile_assets.asset_slug as tile_slug",
+        "sprite_assets.sub_folder as sprite_sub_folder",
+        "sprite_assets.file_name as sprite_file_name"
+      ])
+      .where("maps.deleted", false)
+      .orderBy([
+        { column: "placements.map_id", order: "asc" },
+        { column: "placements.layer_index", order: "asc" },
+        { column: "placements.tile_y", order: "asc" },
+        { column: "placements.tile_x", order: "asc" }
+      ])
+  ]);
+  const placementsByMapId = new Map<string, StoredMapPlacementRow[]>();
+
+  for (const placement of storedPlacements as StoredMapPlacementRow[]) {
+    const existingPlacements = placementsByMapId.get(placement.map_id);
+
+    if (existingPlacements) {
+      existingPlacements.push(placement);
+      continue;
+    }
+
+    placementsByMapId.set(placement.map_id, [placement]);
+  }
+
+  return storedMaps.map((storedMap) => {
+    const layers = createEmptyMapLayers(storedMap.width, storedMap.height);
+    const placements = placementsByMapId.get(storedMap.id) ?? [];
+
+    for (const placement of placements) {
+      if (
+        placement.layer_index < 0 ||
+        placement.layer_index >= layers.length ||
+        placement.tile_y < 0 ||
+        placement.tile_y >= storedMap.height ||
+        placement.tile_x < 0 ||
+        placement.tile_x >= storedMap.width
+      ) {
+        continue;
+      }
+
+      layers[placement.layer_index][placement.tile_y][placement.tile_x] = createMapPlacementFromRow(
+        placement
+      );
+    }
+
+    return normalizeMapRecord({
+      cells: flattenMapLayers(layers, storedMap.width, storedMap.height),
+      height: storedMap.height,
+      layers,
+      name: storedMap.name,
+      slug: storedMap.slug,
+      updatedAt: serializeStoredTimestamp(storedMap.updated_at),
+      width: storedMap.width
+    });
+  });
 }
 
 export async function writeMapRecord(mapRecord: MapRecord) {
-  await ensureStarterMap();
-  await writeStoredMapFile(mapRecord);
+  await ensureMapDatabaseReady();
+  await upsertMapRecordToDatabase(mapRecord);
 }
 
 export function createUniqueSlug(records: Array<{ slug: string }>, name: string) {

@@ -25,12 +25,30 @@ import {
 import type { SpriteRecord, TileRecord } from "../types";
 
 const CREATE_TILE_PATH = "/__tiles/create";
+const DELETE_ASSET_PATH = "/__tiles/delete-asset";
 const IMPORT_SPRITE_PATH = "/__tiles/import-sprite";
 
 interface TileLibraryFolderEntry {
+  assetCount: number;
   label: string;
   path: string;
 }
+
+type TileLibraryAssetMenuState =
+  | {
+      assetType: "sprite";
+      filename: string;
+      key: string;
+      name: string;
+      path: string;
+    }
+  | {
+      assetType: "tile";
+      key: string;
+      name: string;
+      path: string;
+      slug: string;
+    };
 
 export function TileLibraryPanel() {
   const {
@@ -43,7 +61,10 @@ export function TileLibraryPanel() {
     setActiveSpriteKey,
     setActiveTileSlug,
     setTileDraftSlots,
+    removeSprite,
+    removeTile,
     sprites,
+    tileLibraryFolderAssetCounts,
     tileLibraryFolders,
     tiles,
     upsertSprite,
@@ -53,6 +74,10 @@ export function TileLibraryPanel() {
   const [tileQuery, setTileQuery] = useState("");
   const [spriteImportStatus, setSpriteImportStatus] = useState("");
   const [isSpriteDragActive, setSpriteDragActive] = useState(false);
+  const [assetMenu, setAssetMenu] = useState<TileLibraryAssetMenuState | null>(null);
+  const [assetPendingDelete, setAssetPendingDelete] = useState<TileLibraryAssetMenuState | null>(null);
+  const [deleteStatus, setDeleteStatus] = useState("");
+  const [isDeletingAsset, setDeletingAsset] = useState(false);
   const activeLibraryPath = normalizeTileLibraryPath(activeTile?.path ?? activeSprite?.path ?? "");
   const [libraryPath, setLibraryPath] = useState(() => activeLibraryPath);
   const [isPending, startTransition] = useTransition();
@@ -101,10 +126,12 @@ export function TileLibraryPanel() {
         .slice()
         .sort((left, right) => left.localeCompare(right))
         .map((folderPath) => ({
+          assetCount: tileLibraryFolderAssetCounts[folderPath] ?? 0,
           label: getTileLibrarySegmentLabel(folderPath),
           path: folderPath
         }))
     : TILE_LIBRARY_LAYERS.map((layer) => ({
+        assetCount: tileLibraryFolderAssetCounts[layer.folder] ?? 0,
         label: getTileLibraryLayerLabel(layer),
         path: layer.folder
       }));
@@ -167,6 +194,10 @@ export function TileLibraryPanel() {
     setSpriteImportStatus("");
     setSpriteDragActive(false);
     resetSpriteInput();
+  }, [currentLibraryPath]);
+
+  useEffect(() => {
+    setAssetMenu(null);
   }, [currentLibraryPath]);
 
   function navigateToLibraryPath(nextPath: string) {
@@ -273,6 +304,69 @@ export function TileLibraryPanel() {
     });
   }
 
+  function openAssetDeleteConfirmation(asset: TileLibraryAssetMenuState) {
+    setAssetMenu(null);
+    setDeletingAsset(false);
+    setDeleteStatus("");
+    setAssetPendingDelete(asset);
+  }
+
+  function handleDeleteAsset() {
+    if (!assetPendingDelete || isDeletingAsset) {
+      return;
+    }
+
+    setDeletingAsset(true);
+    setDeleteStatus("");
+
+    void (async () => {
+      try {
+        const response = await fetch(DELETE_ASSET_PATH, {
+          body: JSON.stringify(
+            assetPendingDelete.assetType === "tile"
+              ? {
+                  assetType: "tile",
+                  slug: assetPendingDelete.slug
+                }
+              : {
+                  assetType: "sprite",
+                  filename: assetPendingDelete.filename,
+                  path: assetPendingDelete.path
+                }
+          ),
+          headers: {
+            "Content-Type": "application/json"
+          },
+          method: "POST"
+        });
+        const responseBody = (await response.json()) as Partial<{
+          assetType: "sprite" | "tile";
+          error: string;
+          slug: string;
+          spriteKey: string;
+        }>;
+
+        if (!response.ok || responseBody.error) {
+          setDeleteStatus(responseBody.error ?? "Could not remove asset.");
+          return;
+        }
+
+        if (assetPendingDelete.assetType === "tile") {
+          removeTile(responseBody.slug ?? assetPendingDelete.slug);
+        } else {
+          removeSprite(responseBody.spriteKey ?? assetPendingDelete.key);
+        }
+
+        setAssetPendingDelete(null);
+        setDeleteStatus("");
+      } catch {
+        setDeleteStatus("Could not remove asset.");
+      } finally {
+        setDeletingAsset(false);
+      }
+    })();
+  }
+
   return (
     <Panel
       actions={
@@ -372,76 +466,170 @@ export function TileLibraryPanel() {
             }}
             type="button"
           >
-            <div className="grid gap-1">
-              <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-                Folder
+            <div className="flex items-start justify-between gap-3">
+              <div className="grid min-w-0 gap-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
+                  Folder
+                </span>
+                <span className="truncate text-sm font-semibold text-[#142127]">{folderEntry.label}</span>
+              </div>
+              <span className="inline-flex min-w-7 shrink-0 items-center justify-center rounded-full border border-[#c3d0cb] bg-white/90 px-2 py-0.5 text-xs font-bold text-[#4a6069]">
+                {folderEntry.assetCount}
               </span>
-              <span className="truncate text-sm font-semibold text-[#142127]">{folderEntry.label}</span>
             </div>
           </button>
         ))}
         {filteredTiles.map((tileRecord) => (
-          <button
-            className={`${selectableCardClass(
-              tileRecord.slug === activeTileSlug,
-              "border-[#c3d0cb]/80 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
-            )} flex min-h-[4.5rem] flex-col justify-between gap-2 px-3 py-3 text-left`}
-            key={tileRecord.slug}
-            onClick={() => {
-              setLibraryPath(normalizeTileLibraryPath(tileRecord.path));
-              setActiveSpriteKey("");
-              setActiveTileSlug(tileRecord.slug);
-            }}
-            type="button"
-          >
-            <div className="grid min-w-0 gap-2">
-              <span className="truncate text-sm font-medium text-[#142127]">{tileRecord.name}</span>
-              {tileRecord.thumbnail ? (
-                <img
-                  alt={`${tileRecord.name} thumbnail`}
-                  className="h-4 w-20 object-contain [image-rendering:pixelated]"
-                  height={16}
-                  src={tileRecord.thumbnail}
-                  width={80}
-                />
-              ) : null}
-            </div>
-          </button>
+          <div className="relative" key={tileRecord.slug}>
+            <button
+              className="absolute top-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#c3d0cb] bg-white/90 text-sm font-bold text-[#4a6069] transition hover:border-[#d88753]/55 hover:text-[#142127]"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setAssetMenu((currentMenu) =>
+                  currentMenu?.key === `tile:${tileRecord.slug}`
+                    ? null
+                    : {
+                        assetType: "tile",
+                        key: `tile:${tileRecord.slug}`,
+                        name: tileRecord.name,
+                        path: tileRecord.path,
+                        slug: tileRecord.slug
+                      }
+                );
+              }}
+              title={`Options for ${tileRecord.name}`}
+              type="button"
+            >
+              ⋮
+            </button>
+            {assetMenu?.key === `tile:${tileRecord.slug}` ? (
+              <div className="absolute top-10 right-2 z-20 min-w-36 border border-[#c3d0cb] bg-white shadow-[0_18px_40px_rgba(20,33,39,0.16)]">
+                <button
+                  className="block w-full px-3 py-2 text-left text-sm font-semibold text-[#142127] transition hover:bg-[#f5efe3]"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openAssetDeleteConfirmation({
+                      assetType: "tile",
+                      key: `tile:${tileRecord.slug}`,
+                      name: tileRecord.name,
+                      path: tileRecord.path,
+                      slug: tileRecord.slug
+                    });
+                  }}
+                  type="button"
+                >
+                  Delete asset
+                </button>
+              </div>
+            ) : null}
+            <button
+              className={`${selectableCardClass(
+                tileRecord.slug === activeTileSlug,
+                "border-[#c3d0cb]/80 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
+              )} flex min-h-[4.5rem] w-full flex-col justify-between gap-2 px-3 py-3 pr-12 text-left`}
+              onClick={() => {
+                setLibraryPath(normalizeTileLibraryPath(tileRecord.path));
+                setActiveSpriteKey("");
+                setActiveTileSlug(tileRecord.slug);
+              }}
+              type="button"
+            >
+              <div className="grid min-w-0 gap-2">
+                <span className="truncate text-sm font-medium text-[#142127]">{tileRecord.name}</span>
+                {tileRecord.thumbnail ? (
+                  <img
+                    alt={`${tileRecord.name} thumbnail`}
+                    className="h-4 w-20 object-contain [image-rendering:pixelated]"
+                    height={16}
+                    src={tileRecord.thumbnail}
+                    width={80}
+                  />
+                ) : null}
+              </div>
+            </button>
+          </div>
         ))}
         {filteredSprites.map((spriteRecord) => (
-          <button
-            className={`${selectableCardClass(
-              getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === activeSpriteKey,
-              "border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(239,246,239,0.92),rgba(228,236,227,0.86))] hover:border-[#d88753]/55"
-            )} flex min-h-[5.5rem] items-center gap-3 px-3 py-3 text-left shadow-[0_14px_30px_rgba(20,33,39,0.08)]`}
-            key={`${spriteRecord.path}/${spriteRecord.filename}`}
-            onClick={() => {
-              setLibraryPath(normalizeTileLibraryPath(spriteRecord.path));
-              setActiveTileSlug("");
-              setActiveSpriteKey(getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename));
-            }}
-            type="button"
-          >
-            <div className="flex h-20 w-20 shrink-0 items-center justify-center border border-[#c3d0cb] bg-white/90 p-2">
-              {spriteRecord.thumbnail ? (
-                <img
-                  alt={`${spriteRecord.name} sprite thumbnail`}
-                  className="max-h-full max-w-full object-contain"
-                  src={spriteRecord.thumbnail}
-                />
-              ) : null}
-            </div>
-            <div className="grid min-w-0 gap-1">
-              <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-                Sprite
-              </span>
-              <span className="truncate text-sm font-semibold text-[#142127]">{spriteRecord.name}</span>
-              <span className="truncate text-xs font-mono text-[#4a6069]">{spriteRecord.filename}</span>
-              <span className="text-xs text-[#4a6069]">
-                {spriteRecord.image_w}x{spriteRecord.image_h} px
-              </span>
-            </div>
-          </button>
+          <div className="relative" key={`${spriteRecord.path}/${spriteRecord.filename}`}>
+            <button
+              className="absolute top-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#c3d0cb] bg-white/90 text-sm font-bold text-[#4a6069] transition hover:border-[#d88753]/55 hover:text-[#142127]"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const spriteKey = getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename);
+                setAssetMenu((currentMenu) =>
+                  currentMenu?.key === spriteKey
+                    ? null
+                    : {
+                        assetType: "sprite",
+                        filename: spriteRecord.filename,
+                        key: spriteKey,
+                        name: spriteRecord.name,
+                        path: spriteRecord.path
+                      }
+                );
+              }}
+              title={`Options for ${spriteRecord.name}`}
+              type="button"
+            >
+              ⋮
+            </button>
+            {assetMenu?.key === getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) ? (
+              <div className="absolute top-10 right-2 z-20 min-w-36 border border-[#c3d0cb] bg-white shadow-[0_18px_40px_rgba(20,33,39,0.16)]">
+                <button
+                  className="block w-full px-3 py-2 text-left text-sm font-semibold text-[#142127] transition hover:bg-[#f5efe3]"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openAssetDeleteConfirmation({
+                      assetType: "sprite",
+                      filename: spriteRecord.filename,
+                      key: getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename),
+                      name: spriteRecord.name,
+                      path: spriteRecord.path
+                    });
+                  }}
+                  type="button"
+                >
+                  Delete asset
+                </button>
+              </div>
+            ) : null}
+            <button
+              className={`${selectableCardClass(
+                getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === activeSpriteKey,
+                "border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(239,246,239,0.92),rgba(228,236,227,0.86))] hover:border-[#d88753]/55"
+              )} flex min-h-[5.5rem] w-full items-center gap-3 px-3 py-3 pr-12 text-left shadow-[0_14px_30px_rgba(20,33,39,0.08)]`}
+              onClick={() => {
+                setLibraryPath(normalizeTileLibraryPath(spriteRecord.path));
+                setActiveTileSlug("");
+                setActiveSpriteKey(getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename));
+              }}
+              type="button"
+            >
+              <div className="flex h-20 w-20 shrink-0 items-center justify-center border border-[#c3d0cb] bg-white/90 p-2">
+                {spriteRecord.thumbnail ? (
+                  <img
+                    alt={`${spriteRecord.name} sprite thumbnail`}
+                    className="max-h-full max-w-full object-contain"
+                    src={spriteRecord.thumbnail}
+                  />
+                ) : null}
+              </div>
+              <div className="grid min-w-0 gap-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
+                  Sprite
+                </span>
+                <span className="truncate text-sm font-semibold text-[#142127]">{spriteRecord.name}</span>
+                <span className="truncate text-xs font-mono text-[#4a6069]">{spriteRecord.filename}</span>
+                <span className="text-xs text-[#4a6069]">
+                  {spriteRecord.image_w}x{spriteRecord.image_h} px
+                </span>
+              </div>
+            </button>
+          </div>
         ))}
         {canImportSprites ? (
           <>
@@ -502,6 +690,44 @@ export function TileLibraryPanel() {
           </div>
         ) : null}
       </div>
+      {assetPendingDelete ? (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-[rgba(20,33,39,0.45)] px-4"
+          key={assetPendingDelete.key}
+        >
+          <div className="w-full max-w-md border border-[#c3d0cb] bg-[linear-gradient(180deg,rgba(255,253,248,0.98),rgba(244,239,226,0.96))] p-5 shadow-[0_24px_60px_rgba(20,33,39,0.22)]">
+            <div className="grid gap-4">
+              <div className="grid gap-1">
+                <strong className="text-base text-[#142127]">Are you sure you want to remove this asset?</strong>
+                <span className="text-sm text-[#4a6069]">{assetPendingDelete.name}</span>
+              </div>
+              {deleteStatus ? <div className="text-sm text-[#4a6069]">{deleteStatus}</div> : null}
+              <div className="flex justify-end gap-3">
+                <button
+                  className="min-h-11 border border-[#c3d0cb] bg-white px-4 py-2 font-semibold text-[#4a6069] transition hover:text-[#142127]"
+                  disabled={isDeletingAsset}
+                  onClick={() => {
+                    setAssetPendingDelete(null);
+                    setDeletingAsset(false);
+                    setDeleteStatus("");
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className={actionButtonClass}
+                  disabled={isDeletingAsset}
+                  onClick={handleDeleteAsset}
+                  type="button"
+                >
+                  {isDeletingAsset ? "Removing..." : "Delete asset"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </Panel>
   );
 }

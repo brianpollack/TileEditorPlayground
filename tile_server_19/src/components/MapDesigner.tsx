@@ -31,6 +31,7 @@ import {
   clampMapScalePercent,
   createEmptyMapCells,
   createEmptyMapLayers,
+  createMapSpritePlacement,
   createMapTilePlacement,
   describeMapTileOptions,
   drawMapTileFallback,
@@ -39,13 +40,20 @@ import {
   getMapCanvasWidth,
   getMapCellFromPointerEvent,
   getMapLayerDimensions,
+  isMapSpritePlacement,
+  isMapTilePlacement,
   normalizeMapDimension,
   normalizeMapTileOptions,
   serializeMapTileOptionsKey
 } from "../lib/map";
 import { normalizeUnderscoreName } from "../lib/naming";
-import { sanitizeSlotRecord } from "../lib/slots";
-import { normalizeTileLibraryPath, splitTileLibraryPath, TILE_LIBRARY_LAYERS } from "../lib/tileLibrary";
+import { describeSlot, sanitizeSlotRecord, type SlotKey } from "../lib/slots";
+import {
+  getTileLibrarySpriteKey,
+  normalizeTileLibraryPath,
+  splitTileLibraryPath,
+  TILE_LIBRARY_LAYERS
+} from "../lib/tileLibrary";
 import { useImageCache } from "../lib/useImageCache";
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
@@ -67,7 +75,7 @@ import {
   visibilityOptionButtonClass,
   zoomButtonClass
 } from "./uiStyles";
-import type { MapTileOptions, TileCell, TileRecord } from "../types";
+import type { MapTileOptions, SpriteRecord, TileCell, TileRecord } from "../types";
 
 const MAP_PREVIEW_SIZE = 128;
 const VISIBILITY_OPTIONS = [
@@ -89,11 +97,18 @@ const DEFAULT_MAP_BRUSH_OPTIONS = normalizeMapTileOptions(undefined);
 
 interface MapWorkspaceProps {
   activeLayerIndex: number;
+  activeBrushSlotNum: number;
   activeLayerTitle: string;
   activeOpacityValue: number;
+  brushSlotOptions: Array<{
+    label: string;
+    previewUrl: string;
+    slotNum: number;
+  }>;
   canZoomIn: boolean;
   canZoomOut: boolean;
   hoverLabel: string;
+  hoverCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   layerPreviewCanvasRefs: React.MutableRefObject<Array<HTMLCanvasElement | null>>;
   layerVisibilities: number[];
   mapCanvasHeight: number;
@@ -107,6 +122,7 @@ interface MapWorkspaceProps {
   onCanvasMouseUp(): void;
   onClearAllLayers(): void;
   onClearLayer(layerIndex: number): void;
+  onSelectBrushSlot(slotNum: number): void;
   onSelectLayer(layerIndex: number): void;
   onSetLayerVisibility(layerIndex: number, visibility: number): void;
   onZoomIn(): void;
@@ -118,11 +134,14 @@ interface MapWorkspaceProps {
 
 const MapWorkspace = memo(function MapWorkspace({
   activeLayerIndex,
+  activeBrushSlotNum,
   activeLayerTitle,
   activeOpacityValue,
+  brushSlotOptions,
   canZoomIn,
   canZoomOut,
   hoverLabel,
+  hoverCanvasRef,
   layerPreviewCanvasRefs,
   layerVisibilities,
   mapCanvasHeight,
@@ -136,6 +155,7 @@ const MapWorkspace = memo(function MapWorkspace({
   onCanvasMouseUp,
   onClearAllLayers,
   onClearLayer,
+  onSelectBrushSlot,
   onSelectLayer,
   onSetLayerVisibility,
   onZoomIn,
@@ -151,17 +171,25 @@ const MapWorkspace = memo(function MapWorkspace({
           className={`${canvasViewportClass} h-[clamp(28rem,70vh,58rem)] p-4`}
           ref={mapFrameRef}
         >
-          <canvas
-            className="block max-h-none max-w-none bg-white/82 [image-rendering:pixelated]"
-            height={mapCanvasHeight}
-            onClick={onCanvasClick}
-            onMouseDown={onCanvasMouseDown}
-            onMouseLeave={onCanvasMouseLeave}
-            onMouseMove={onCanvasMouseMove}
-            onMouseUp={onCanvasMouseUp}
-            ref={mapCanvasRef}
-            width={mapCanvasWidth}
-          />
+          <div className="relative inline-block">
+            <canvas
+              className="block max-h-none max-w-none bg-white/82 [image-rendering:pixelated]"
+              height={mapCanvasHeight}
+              onClick={onCanvasClick}
+              onMouseDown={onCanvasMouseDown}
+              onMouseLeave={onCanvasMouseLeave}
+              onMouseMove={onCanvasMouseMove}
+              onMouseUp={onCanvasMouseUp}
+              ref={mapCanvasRef}
+              width={mapCanvasWidth}
+            />
+            <canvas
+              className="pointer-events-none absolute inset-0 h-full w-full [image-rendering:pixelated]"
+              height={mapCanvasHeight}
+              ref={hoverCanvasRef}
+              width={mapCanvasWidth}
+            />
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -188,6 +216,43 @@ const MapWorkspace = memo(function MapWorkspace({
             </button>
           </div>
         </div>
+
+        {brushSlotOptions.length ? (
+          <div className={`${sectionCardClass} grid gap-3`}>
+            <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
+              Tile Variant
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {brushSlotOptions.map((option) => {
+                const selected = option.slotNum === activeBrushSlotNum;
+
+                return (
+                  <button
+                    className={`flex min-h-11 items-center gap-2 border px-2 py-2 text-left transition ${
+                      selected
+                        ? "border-[#d88753] bg-[#fff4e4] text-[#142127]"
+                        : "border-[#c3d0cb] bg-white text-[#4a6069] hover:border-[#d88753] hover:text-[#142127]"
+                    }`}
+                    key={option.slotNum}
+                    onClick={() => {
+                      onSelectBrushSlot(option.slotNum);
+                    }}
+                    type="button"
+                  >
+                    <span className="grid h-9 w-9 place-items-center overflow-hidden border border-[#c3d0cb]/70 bg-[linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%),linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%)] bg-[length:16px_16px] bg-[position:0_0,8px_8px]">
+                      <img
+                        alt={option.label}
+                        className="h-8 w-8 object-contain [image-rendering:pixelated]"
+                        src={option.previewUrl}
+                      />
+                    </span>
+                    <span className="text-sm font-medium">{option.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="grid content-start gap-4">
@@ -332,6 +397,112 @@ function getPlacementRotationDegrees(options: Partial<MapTileOptions> | undefine
   ) % 360;
 }
 
+function getSpriteBrushOutlineRect(
+  spriteRecord: SpriteRecord,
+  anchorTileX: number,
+  anchorTileY: number,
+  tileDrawSize: number,
+  offsetX = 0,
+  offsetY = 0
+) {
+  const anchorCenterX = offsetX + anchorTileX * tileDrawSize + tileDrawSize / 2;
+  const anchorCenterY = offsetY + anchorTileY * tileDrawSize + tileDrawSize / 2;
+  const outlineWidth = Math.max(tileDrawSize, spriteRecord.tile_w * tileDrawSize);
+  const outlineHeight = Math.max(tileDrawSize, spriteRecord.tile_h * tileDrawSize);
+  const mountScaleX = outlineWidth / Math.max(1, spriteRecord.image_w);
+  const mountScaleY = outlineHeight / Math.max(1, spriteRecord.image_h);
+
+  return {
+    height: outlineHeight,
+    width: outlineWidth,
+    x: anchorCenterX - spriteRecord.mount_x * mountScaleX,
+    y: anchorCenterY - spriteRecord.mount_y * mountScaleY
+  };
+}
+
+function getTileBrushAssetKey(tileSlug: string) {
+  return getTileBrushAssetKeyWithSlot(tileSlug, 0);
+}
+
+function getSpriteBrushAssetKey(spriteKey: string) {
+  return spriteKey.trim() ? `sprite:${spriteKey.trim()}` : "";
+}
+
+function normalizeBrushTileSlotNum(slotNum: number) {
+  return Number.isFinite(slotNum) && slotNum >= 0 ? Math.max(0, Math.round(slotNum)) : 0;
+}
+
+function getTileBrushAssetKeyWithSlot(tileSlug: string, slotNum: number) {
+  const normalizedTileSlug = tileSlug.trim();
+
+  if (!normalizedTileSlug) {
+    return "";
+  }
+
+  return `tile:${normalizedTileSlug}:slot:${normalizeBrushTileSlotNum(slotNum)}`;
+}
+
+function parseTileBrushAssetKey(brushAssetKey: string) {
+  if (!brushAssetKey.startsWith("tile:")) {
+    return null;
+  }
+
+  const rawValue = brushAssetKey.slice("tile:".length).trim();
+
+  if (!rawValue) {
+    return null;
+  }
+
+  const slotSeparatorIndex = rawValue.lastIndexOf(":slot:");
+
+  if (slotSeparatorIndex === -1) {
+    return {
+      slotNum: 0,
+      tileSlug: rawValue
+    };
+  }
+
+  const tileSlug = rawValue.slice(0, slotSeparatorIndex).trim();
+  const rawSlotNum = rawValue.slice(slotSeparatorIndex + ":slot:".length).trim();
+
+  if (!tileSlug) {
+    return null;
+  }
+
+  return {
+    slotNum: normalizeBrushTileSlotNum(Number.parseInt(rawSlotNum, 10)),
+    tileSlug
+  };
+}
+
+function getBrushTileSlug(brushAssetKey: string) {
+  return parseTileBrushAssetKey(brushAssetKey)?.tileSlug ?? "";
+}
+
+function getBrushTileSlotNum(brushAssetKey: string) {
+  return parseTileBrushAssetKey(brushAssetKey)?.slotNum ?? 0;
+}
+
+function getBrushSpriteKey(brushAssetKey: string) {
+  return brushAssetKey.startsWith("sprite:") ? brushAssetKey.slice("sprite:".length).trim() : "";
+}
+
+function getSlotLabel(slotNum: number) {
+  if (slotNum <= 0) {
+    return describeSlot("main");
+  }
+
+  const normalizedSlotNum = Math.min(4, Math.max(1, Math.round(slotNum)));
+  return describeSlot(String(normalizedSlotNum - 1) as SlotKey);
+}
+
+function haveStringListsChanged(previousValues: string[], nextValues: string[]) {
+  return (
+    previousValues.length !== nextValues.length ||
+    previousValues.some((value, index) => value !== nextValues[index])
+  );
+}
+
 export function MapDesigner() {
   const {
     activeMap,
@@ -339,14 +510,15 @@ export function MapDesigner() {
     getMapDesignerUiState,
     getMapDraftLayers,
     getTileDraftSlots,
-    mapBrushTileSlug,
+    mapBrushAssetKey,
     maps,
     openPaintEditor,
     setActiveMapSlug,
     setActiveTileSlug,
     setMapDesignerUiState,
     setMapDraftLayers,
-    setMapBrushTileSlug,
+    setMapBrushAssetKey,
+    sprites,
     tiles,
     upsertMap
   } = useStudio();
@@ -358,7 +530,7 @@ export function MapDesigner() {
     initialMapDesignerUiState.zoomPercent
   );
   const [mapStatus, setMapStatus] = useState(
-    "Choose a brush tile, pick a layer, and paint on the stacked map. Save writes JSON through a server function."
+    "Choose a brush tile or sprite, pick a layer, and paint on the stacked map. Save writes to the database."
   );
   const [mapQuery, setMapQuery] = useState("");
   const [newMapName, setNewMapName] = useState("");
@@ -385,9 +557,12 @@ export function MapDesigner() {
     scrollTop: initialMapDesignerUiState.scrollTop
   });
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const hoverCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const layerPreviewCanvasRefs = useRef<Array<HTMLCanvasElement | null>>([]);
   const fallbackTileCanvasCacheRef = useRef(new Map<string, HTMLCanvasElement>());
   const renderedPlacementCanvasCacheRef = useRef(new Map<string, HTMLCanvasElement>());
+  const assetImageUrlsRef = useRef<string[]>([]);
+  const tileSourceUrlsRef = useRef<string[]>([]);
   const imageCache = useImageCache();
   const createNameInputRef = useRef<HTMLInputElement | null>(null);
   const deferredMapQuery = useDeferredValue(mapQuery.trim().toLowerCase());
@@ -404,13 +579,29 @@ export function MapDesigner() {
   const mapCanvasWidth = getMapCanvasWidth(mapWidth);
   const mapCanvasHeight = getMapCanvasHeight(mapHeight);
   const tilesBySlug = new Map(tiles.map((tileRecord) => [tileRecord.slug, tileRecord]));
-  const tileMainSlotsBySlug = new Map(
-    tiles.map((tileRecord) => [
-      tileRecord.slug,
-      sanitizeSlotRecord(getTileDraftSlots(tileRecord.slug, tileRecord.slots)[0])
+  const spritesByKey = new Map(
+    sprites.map((spriteRecord) => [
+      getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename),
+      spriteRecord
     ])
   );
+  const tileSlotsBySlug = new Map(
+    tiles.map((tileRecord) => [
+      tileRecord.slug,
+      getTileDraftSlots(tileRecord.slug, tileRecord.slots).map((slotRecord) => sanitizeSlotRecord(slotRecord))
+    ])
+  );
+  const tileMainSlotsBySlug = new Map(
+    tiles.map((tileRecord) => [tileRecord.slug, tileSlotsBySlug.get(tileRecord.slug)?.[0] ?? null])
+  );
+  const activeBrushTileSlug = getBrushTileSlug(mapBrushAssetKey);
+  const activeBrushTileSlotNum = getBrushTileSlotNum(mapBrushAssetKey);
+  const activeBrushSpriteKey = getBrushSpriteKey(mapBrushAssetKey);
   const brushOptionLabels = describeMapTileOptions(brushOptions);
+  const tileSlotUrls = tiles.flatMap((tileRecord) =>
+    (tileSlotsBySlug.get(tileRecord.slug) ?? []).map((slotRecord) => slotRecord?.pixels ?? "")
+  );
+  const spriteThumbnailUrls = sprites.map((spriteRecord) => spriteRecord.thumbnail ?? "");
 
   useEffect(() => {
     if (activeMap) {
@@ -611,10 +802,37 @@ export function MapDesigner() {
     };
   }, [activeLayerIndex, activeMapSlug, layerVisibilities, setMapDesignerUiState]);
 
+  useEffect(() => {
+    if (haveStringListsChanged(tileSourceUrlsRef.current, tileSlotUrls)) {
+      tileSourceUrlsRef.current = tileSlotUrls;
+      fallbackTileCanvasCacheRef.current.clear();
+      renderedPlacementCanvasCacheRef.current.clear();
+    }
+
+    const nextAssetImageUrls = [...tileSlotUrls, ...spriteThumbnailUrls].filter(Boolean);
+
+    if (!haveStringListsChanged(assetImageUrlsRef.current, nextAssetImageUrls)) {
+      return;
+    }
+
+    assetImageUrlsRef.current = nextAssetImageUrls;
+    let cancelled = false;
+
+    void Promise.all(nextAssetImageUrls.map((imageUrl) => imageCache.ensureImage(imageUrl))).finally(() => {
+      if (cancelled) {
+        return;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
   const renderTilePlacement = useEffectEvent(
     (
       context: CanvasRenderingContext2D,
-      placement: { options: MapTileOptions; tileSlug: string } | null,
+      placement: { kind: "tile"; options: MapTileOptions; slotNum: number; tileSlug: string } | null,
       drawX: number,
       drawY: number,
       drawWidth: number,
@@ -631,8 +849,11 @@ export function MapDesigner() {
         return;
       }
 
-      const mainSlot = tileMainSlotsBySlug.get(placement.tileSlug) ?? null;
-      const tileImage = mainSlot?.pixels ? imageCache.getCachedImage(mainSlot.pixels) : null;
+      const tileSlots = tileSlotsBySlug.get(placement.tileSlug) ?? [];
+      const selectedSlot = tileSlots[placement.slotNum] ?? null;
+      const mainSlot = tileSlots[0] ?? null;
+      const renderSlot = selectedSlot?.pixels ? selectedSlot : mainSlot;
+      const tileImage = renderSlot?.pixels ? imageCache.getCachedImage(renderSlot.pixels) : null;
 
       if (!tileImage && simplified) {
         context.fillStyle = "rgba(216, 135, 83, 0.2)";
@@ -640,8 +861,8 @@ export function MapDesigner() {
         return;
       }
 
-      const sourceKey = tileImage ? mainSlot?.pixels ?? placement.tileSlug : `fallback:${tileRecord.name}`;
-      const variantKey = `${placement.tileSlug}:${sourceKey}:${serializeMapTileOptionsKey(placement.options)}`;
+      const sourceKey = tileImage ? renderSlot?.pixels ?? placement.tileSlug : `fallback:${tileRecord.name}`;
+      const variantKey = `${placement.tileSlug}:${placement.slotNum}:${sourceKey}:${serializeMapTileOptionsKey(placement.options)}`;
       let variantCanvas = renderedPlacementCanvasCacheRef.current.get(variantKey) ?? null;
 
       if (!variantCanvas) {
@@ -722,6 +943,58 @@ export function MapDesigner() {
     }
   );
 
+  const renderSpritePlacement = useEffectEvent(
+    (
+      context: CanvasRenderingContext2D,
+      placement: { kind: "sprite"; spriteKey: string } | null,
+      drawX: number,
+      drawY: number,
+      tileDrawSize: number,
+      simplified = false
+    ) => {
+      if (!placement?.spriteKey) {
+        return;
+      }
+
+      const spriteRecord = spritesByKey.get(placement.spriteKey) ?? null;
+
+      if (!spriteRecord) {
+        return;
+      }
+
+      const spriteImage = spriteRecord.thumbnail
+        ? imageCache.getCachedImage(spriteRecord.thumbnail)
+        : null;
+      const scale = tileDrawSize / TILE_SIZE;
+      const anchorCenterX = drawX + tileDrawSize / 2;
+      const anchorCenterY = drawY + tileDrawSize / 2;
+      const spriteDrawWidth = spriteRecord.image_w * scale;
+      const spriteDrawHeight = spriteRecord.image_h * scale;
+      const spriteDrawX =
+        anchorCenterX - spriteRecord.mount_x * scale + spriteRecord.offset_x * scale;
+      const spriteDrawY =
+        anchorCenterY - spriteRecord.mount_y * scale + spriteRecord.offset_y * scale;
+
+      if (!spriteImage) {
+        if (!simplified) {
+          return;
+        }
+
+        context.fillStyle = "rgba(216, 135, 83, 0.2)";
+        context.fillRect(spriteDrawX, spriteDrawY, spriteDrawWidth, spriteDrawHeight);
+        context.strokeStyle = "rgba(20, 33, 39, 0.38)";
+        context.lineWidth = Math.max(1, tileDrawSize * 0.03);
+        context.strokeRect(spriteDrawX, spriteDrawY, spriteDrawWidth, spriteDrawHeight);
+        return;
+      }
+
+      context.save();
+      context.imageSmoothingEnabled = false;
+      context.drawImage(spriteImage, spriteDrawX, spriteDrawY, spriteDrawWidth, spriteDrawHeight);
+      context.restore();
+    }
+  );
+
   const renderMapGrid = useEffectEvent(
     (
       context: CanvasRenderingContext2D,
@@ -754,28 +1027,52 @@ export function MapDesigner() {
           const drawY = offsetY + tileY * tileDrawSize;
 
           drawMapCellBackgroundAtSize(context, drawX, drawY, tileDrawSize);
+        }
+      }
 
-          for (let layerIndex = 0; layerIndex < MAP_LAYER_COUNT; layerIndex += 1) {
+      for (let layerIndex = 0; layerIndex < MAP_LAYER_COUNT; layerIndex += 1) {
+        const opacity = opacityForLayer(layerIndex);
+
+        if (opacity <= 0) {
+          continue;
+        }
+
+        for (let tileY = 0; tileY < mapHeight; tileY += 1) {
+          for (let tileX = 0; tileX < mapWidth; tileX += 1) {
             const placement = layers[layerIndex]?.[tileY]?.[tileX] ?? null;
-            const opacity = opacityForLayer(layerIndex);
+            const drawX = offsetX + tileX * tileDrawSize;
+            const drawY = offsetY + tileY * tileDrawSize;
 
-            if (!placement?.tileSlug || opacity <= 0) {
+            if (!placement) {
               continue;
             }
 
             context.save();
             context.globalAlpha = opacity;
-            renderTilePlacement(
-              context,
-              placement,
-              drawX,
-              drawY,
-              tileDrawSize,
-              tileDrawSize,
-              simplifiedFallback
-            );
+
+            if (isMapTilePlacement(placement)) {
+              renderTilePlacement(
+                context,
+                placement,
+                drawX,
+                drawY,
+                tileDrawSize,
+                tileDrawSize,
+                simplifiedFallback
+              );
+            } else if (isMapSpritePlacement(placement)) {
+              renderSpritePlacement(context, placement, drawX, drawY, tileDrawSize, simplifiedFallback);
+            }
+
             context.restore();
           }
+        }
+      }
+
+      for (let tileY = 0; tileY < mapHeight; tileY += 1) {
+        for (let tileX = 0; tileX < mapWidth; tileX += 1) {
+          const drawX = offsetX + tileX * tileDrawSize;
+          const drawY = offsetY + tileY * tileDrawSize;
 
           if (showGrid) {
             context.strokeStyle = "rgba(20, 33, 39, 0.12)";
@@ -790,7 +1087,26 @@ export function MapDesigner() {
           ) {
             context.strokeStyle = "#f1c97b";
             context.lineWidth = 5;
-            context.strokeRect(drawX + 2.5, drawY + 2.5, tileDrawSize - 5, tileDrawSize - 5);
+
+            if (activeBrushSprite) {
+              const outlineRect = getSpriteBrushOutlineRect(
+                activeBrushSprite,
+                tileX,
+                tileY,
+                tileDrawSize,
+                offsetX,
+                offsetY
+              );
+
+              context.strokeRect(
+                outlineRect.x + 2.5,
+                outlineRect.y + 2.5,
+                Math.max(1, outlineRect.width - 5),
+                Math.max(1, outlineRect.height - 5)
+              );
+            } else {
+              context.strokeRect(drawX + 2.5, drawY + 2.5, tileDrawSize - 5, tileDrawSize - 5);
+            }
           }
         }
       }
@@ -815,52 +1131,69 @@ export function MapDesigner() {
       }
 
       drawPreviewBackground(context, MAP_PREVIEW_SIZE, MAP_PREVIEW_SIZE);
-      const sourceCanvas = document.createElement("canvas");
-      sourceCanvas.width = mapCanvasWidth;
-      sourceCanvas.height = mapCanvasHeight;
-      const sourceContext = sourceCanvas.getContext("2d");
-
-      if (!sourceContext) {
-        return;
-      }
-
-      renderMapGrid(sourceContext, layers, opacityForLayer, {
-        showGrid: false
-      });
-
       const scale = Math.min(MAP_PREVIEW_SIZE / mapCanvasWidth, MAP_PREVIEW_SIZE / mapCanvasHeight);
       const scaledWidth = Math.max(1, Math.round(mapCanvasWidth * scale));
       const scaledHeight = Math.max(1, Math.round(mapCanvasHeight * scale));
       const offsetX = Math.floor((MAP_PREVIEW_SIZE - scaledWidth) / 2);
       const offsetY = Math.floor((MAP_PREVIEW_SIZE - scaledHeight) / 2);
 
-      context.save();
-      context.imageSmoothingEnabled = true;
-      context.imageSmoothingQuality = "high";
-      context.drawImage(
-        sourceCanvas,
-        0,
-        0,
-        mapCanvasWidth,
-        mapCanvasHeight,
+      renderMapGrid(context, layers, opacityForLayer, {
+        clearCanvas: false,
         offsetX,
         offsetY,
-        scaledWidth,
-        scaledHeight
-      );
-      context.restore();
+        showGrid: false,
+        tileDrawSize: TILE_SIZE * scale
+      });
     }
   );
 
-  const ensureBrushImagesLoaded = useEffectEvent(async () => {
-    const mainSlotUrls = tiles
-      .map((tileRecord) => tileMainSlotsBySlug.get(tileRecord.slug)?.pixels ?? "")
-      .filter(Boolean);
+  const renderHoverCanvas = useEffectEvent(() => {
+    const hoverCanvas = hoverCanvasRef.current;
 
-    await Promise.all(mainSlotUrls.map((imageUrl) => imageCache.ensureImage(imageUrl)));
+    if (!hoverCanvas) {
+      return;
+    }
+
+    ensureCanvasSize(hoverCanvas, mapCanvasWidth, mapCanvasHeight);
+    const context = hoverCanvas.getContext("2d");
+
+    if (!context) {
+      return;
+    }
+
+    context.clearRect(0, 0, hoverCanvas.width, hoverCanvas.height);
+
+    if (!hoverCell) {
+      return;
+    }
+
+    const drawX = hoverCell.tileX * TILE_SIZE;
+    const drawY = hoverCell.tileY * TILE_SIZE;
+
+    context.strokeStyle = "#f1c97b";
+    context.lineWidth = 5;
+
+    if (activeBrushSprite) {
+      const outlineRect = getSpriteBrushOutlineRect(
+        activeBrushSprite,
+        hoverCell.tileX,
+        hoverCell.tileY,
+        TILE_SIZE
+      );
+
+      context.strokeRect(
+        outlineRect.x + 2.5,
+        outlineRect.y + 2.5,
+        Math.max(1, outlineRect.width - 5),
+        Math.max(1, outlineRect.height - 5)
+      );
+      return;
+    }
+
+    context.strokeRect(drawX + 2.5, drawY + 2.5, TILE_SIZE - 5, TILE_SIZE - 5);
   });
 
-  const renderMapCanvas = useEffectEvent(async () => {
+  const renderMapCanvas = useEffectEvent(() => {
     const mapCanvas = mapCanvasRef.current;
 
     if (!mapCanvas) {
@@ -873,15 +1206,12 @@ export function MapDesigner() {
       return;
     }
 
-    await ensureBrushImagesLoaded();
     renderMapGrid(context, draftLayers, (layerIndex) => layerVisibilities[layerIndex] ?? 1, {
-      hoverCell,
       showGrid: true
     });
   });
 
-  const renderPreviewCanvases = useEffectEvent(async () => {
-    await ensureBrushImagesLoaded();
+  const renderPreviewCanvases = useEffectEvent(() => {
     renderPreviewCanvas(previewCanvasRef.current, draftLayers, (layerIndex) => layerVisibilities[layerIndex] ?? 1);
 
     layerPreviewCanvasRefs.current.forEach((previewCanvas, layerIndex) => {
@@ -894,12 +1224,16 @@ export function MapDesigner() {
   });
 
   useEffect(() => {
-    void renderMapCanvas();
-  }, [draftLayers, hoverCell, layerVisibilities, mapCanvasHeight, mapCanvasWidth, mapHeight, mapWidth, renderMapCanvas, tiles]);
+    renderMapCanvas();
+  }, [draftLayers, layerVisibilities, mapCanvasHeight, mapCanvasWidth, mapHeight, mapWidth, renderMapCanvas]);
 
   useEffect(() => {
-    void renderPreviewCanvases();
-  }, [draftLayers, layerVisibilities, mapCanvasHeight, mapCanvasWidth, mapHeight, mapWidth, renderPreviewCanvases, tiles]);
+    renderPreviewCanvases();
+  }, [draftLayers, layerVisibilities, mapCanvasHeight, mapCanvasWidth, mapHeight, mapWidth, renderPreviewCanvases]);
+
+  useEffect(() => {
+    renderHoverCanvas();
+  }, [activeBrushSpriteKey, hoverCell, mapCanvasHeight, mapCanvasWidth, renderHoverCanvas, sprites]);
 
   function paintCell(nextCell: TileCell) {
     if (!activeMapSlug) {
@@ -914,7 +1248,11 @@ export function MapDesigner() {
       return;
     }
 
-    nextRow[nextCell.tileX] = mapBrushTileSlug ? createMapTilePlacement(mapBrushTileSlug, brushOptions) : null;
+    nextRow[nextCell.tileX] = activeBrushTileSlug
+      ? createMapTilePlacement(activeBrushTileSlug, brushOptions, activeBrushTileSlotNum)
+      : activeBrushSpriteKey
+        ? createMapSpritePlacement(activeBrushSpriteKey)
+        : null;
     setMapDraftLayers(activeMapSlug, nextLayers, mapWidth, mapHeight);
   }
 
@@ -1030,30 +1368,49 @@ export function MapDesigner() {
     mapScalePercent ?? mapScalePercentRef.current ?? MAP_MIN_SCALE_PERCENT;
   const selectedLayer = TILE_LIBRARY_LAYERS[activeLayerIndex] ?? TILE_LIBRARY_LAYERS[0];
   const selectedLayerFolder = selectedLayer?.folder ?? "";
-  const activeBrushTile = tiles.find((tileRecord) => tileRecord.slug === mapBrushTileSlug) ?? null;
+  const activeBrushTile = tiles.find((tileRecord) => tileRecord.slug === activeBrushTileSlug) ?? null;
+  const activeBrushSprite = spritesByKey.get(activeBrushSpriteKey) ?? null;
   const activeLayerTitle = `${activeLayerIndex} - ${TILE_LIBRARY_LAYERS[activeLayerIndex]?.description ?? "Layer"}`;
   const activeOpacityValue = layerVisibilities[activeLayerIndex] ?? 1;
+  const activeBrushTileSlots = activeBrushTile ? tileSlotsBySlug.get(activeBrushTile.slug) ?? [] : [];
+  const availableBrushSlotOptions = activeBrushTileSlots.flatMap((slotRecord, slotNum) =>
+    slotRecord?.pixels
+      ? [
+          {
+            label: getSlotLabel(slotNum),
+            previewUrl: slotRecord.pixels,
+            slotNum
+          }
+        ]
+      : []
+  );
   const selectedBrushLabel = activeBrushTile
-    ? brushOptionLabels.length
-      ? `${activeBrushTile.name} • ${brushOptionLabels.join(", ")}`
-      : activeBrushTile.name
-    : "Eraser";
+    ? [activeBrushTile.name, getSlotLabel(activeBrushTileSlotNum), ...brushOptionLabels].join(" • ")
+    : activeBrushSprite
+      ? `${activeBrushSprite.name} • Sprite`
+      : "Eraser";
   const hoverLabel = hoverCell
     ? (() => {
         const layerDetails = draftLayers
           .map((layerCells, layerIndex) => {
             const placement = layerCells?.[hoverCell.tileY]?.[hoverCell.tileX] ?? null;
 
-            if (!placement?.tileSlug) {
-              return null;
+            if (isMapTilePlacement(placement)) {
+              const tileRecord = tilesBySlug.get(placement.tileSlug) ?? null;
+              const optionLabels = describeMapTileOptions(placement.options);
+              const slotLabel = getSlotLabel(placement.slotNum);
+
+              return `L${layerIndex} ${tileRecord?.slug ?? placement.tileSlug} [${slotLabel}]${
+                optionLabels.length ? ` (${optionLabels.join(", ")})` : ""
+              }`;
             }
 
-            const tileRecord = tilesBySlug.get(placement.tileSlug) ?? null;
-            const optionLabels = describeMapTileOptions(placement.options);
+            if (isMapSpritePlacement(placement)) {
+              const spriteRecord = spritesByKey.get(placement.spriteKey) ?? null;
+              return `L${layerIndex} Sprite ${spriteRecord?.name ?? placement.spriteKey}`;
+            }
 
-            return `L${layerIndex} ${tileRecord?.slug ?? placement.tileSlug}${
-              optionLabels.length ? ` (${optionLabels.join(", ")})` : ""
-            }`;
+            return null;
           })
           .filter((detail): detail is string => Boolean(detail));
 
@@ -1083,6 +1440,19 @@ export function MapDesigner() {
       (left, right) =>
         normalizeTileLibraryPath(left.path).localeCompare(normalizeTileLibraryPath(right.path)) ||
         left.slug.localeCompare(right.slug)
+    );
+  const visibleBrushSprites = sprites
+    .filter((spriteRecord) => {
+      const spritePath = normalizeTileLibraryPath(spriteRecord.path);
+
+      return spritePath === selectedLayerFolder || spritePath.startsWith(`${selectedLayerFolder}/`);
+    })
+    .slice()
+    .sort(
+      (left, right) =>
+        normalizeTileLibraryPath(left.path).localeCompare(normalizeTileLibraryPath(right.path)) ||
+        left.name.localeCompare(right.name) ||
+        left.filename.localeCompare(right.filename)
     );
 
   return (
@@ -1145,144 +1515,206 @@ export function MapDesigner() {
         <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(18rem,0.7fr)_minmax(0,1.65fr)]">
           <div className="grid min-h-0 gap-4">
             <Panel
-              description={`Pick a brush tile from ${selectedLayer.index} - ${selectedLayer.description}, then combine flip, rotation, and tint options before painting.`}
+              description={`Pick a tile or sprite from ${selectedLayer.index} - ${selectedLayer.description}, then paint it onto the active layer.`}
               title="Brush Palette"
             >
               <div className="grid gap-4">
-              <div className={sectionCardClass}>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-                    Brush Effects
+                <div className={`${sectionCardClass} ${activeBrushTile ? "" : "opacity-65"}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
+                      Brush Effects
+                    </div>
+                    <input
+                      className="h-9 w-14 cursor-pointer border border-[#c3d0cb] bg-white disabled:cursor-not-allowed disabled:bg-[#eef1ef]"
+                      disabled={!activeBrushTile}
+                      onChange={(event) => {
+                        const nextColorValue = event.currentTarget.value;
+
+                        setBrushOptions((currentOptions) =>
+                          normalizeMapTileOptions({
+                            ...currentOptions,
+                            colorValue: nextColorValue
+                          })
+                        );
+                      }}
+                      type="color"
+                      value={brushOptions.colorValue}
+                    />
                   </div>
-                  <input
-                    className="h-9 w-14 cursor-pointer border border-[#c3d0cb] bg-white"
-                    onChange={(event) => {
-                      const nextColorValue = event.currentTarget.value;
+                  <div className="mb-3 text-xs text-[#4a6069]">
+                    {activeBrushTile
+                      ? "Flip, rotate, multiply, and tint apply to tile brushes."
+                      : "Sprite brushes use their own image and mount point, so tile effects are disabled."}
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {BRUSH_OPTION_DEFINITIONS.map((option) => (
+                      <label
+                        className="flex min-h-10 items-center gap-3 border border-[#c3d0cb] bg-white px-3 py-2 text-sm text-[#142127]"
+                        key={option.id}
+                      >
+                        <input
+                          checked={brushOptions[option.id]}
+                          className="h-4 w-4 accent-[#d88753]"
+                          disabled={!activeBrushTile}
+                          onChange={(event) => {
+                            const isChecked = event.currentTarget.checked;
 
-                      setBrushOptions((currentOptions) =>
-                        normalizeMapTileOptions({
-                          ...currentOptions,
-                          colorValue: nextColorValue
-                        })
-                      );
-                    }}
-                    type="color"
-                    value={brushOptions.colorValue}
-                  />
+                            setBrushOptions((currentOptions) =>
+                              normalizeMapTileOptions({
+                                ...currentOptions,
+                                [option.id]: isChecked
+                              })
+                            );
+                          }}
+                          type="checkbox"
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {BRUSH_OPTION_DEFINITIONS.map((option) => (
-                    <label
-                      className="flex min-h-10 items-center gap-3 border border-[#c3d0cb] bg-white px-3 py-2 text-sm text-[#142127]"
-                      key={option.id}
-                    >
-                      <input
-                        checked={brushOptions[option.id]}
-                        className="h-4 w-4 accent-[#d88753]"
-                        onChange={(event) => {
-                          const isChecked = event.currentTarget.checked;
 
-                          setBrushOptions((currentOptions) =>
-                            normalizeMapTileOptions({
-                              ...currentOptions,
-                              [option.id]: isChecked
-                            })
-                          );
-                        }}
-                        type="checkbox"
-                      />
-                      <span>{option.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
-              <button
-                className={`${selectableCardClass(
-                  mapBrushTileSlug === "",
-                  "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
-                )} grid justify-items-center gap-2 p-3 text-center`}
-                onClick={() => {
-                  setMapBrushTileSlug("");
-                }}
-                type="button"
-              >
-                <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden bg-[linear-gradient(135deg,rgba(19,38,47,0.92),rgba(36,66,79,0.88))] text-[#fffdf8]/84">
-                  <FontAwesomeIcon className="h-10 w-10" icon={faEraser} title="Erase" />
-                </div>
-                <div className="text-center text-sm font-normal leading-tight text-[#4a6069]">
-                  <div>Tool</div>
-                  <div>eraser</div>
-                </div>
-              </button>
-
-              {visibleBrushTiles.map((tileRecord) => {
-                const mainSlot = tileMainSlotsBySlug.get(tileRecord.slug) ?? null;
-                const pathSegments = splitTileLibraryPath(tileRecord.path);
-                const folderLabel =
-                  pathSegments.length > 1 ? pathSegments[pathSegments.length - 1] : selectedLayer.folder;
-
-                return (
-                  <div
-                    className={`${selectableCardClass(
-                      tileRecord.slug === mapBrushTileSlug,
-                      "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
-                    )} grid justify-items-center gap-2 p-3 text-center`}
-                    key={tileRecord.slug}
-                  >
+                <div className="grid gap-3">
+                  <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
+                    Tiles
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
                     <button
-                      className="grid w-full justify-items-center gap-2 text-center"
+                      className={`${selectableCardClass(
+                        mapBrushAssetKey === "",
+                        "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
+                      )} grid justify-items-center gap-2 p-3 text-center`}
                       onClick={() => {
-                        setMapBrushTileSlug(tileRecord.slug);
+                        setMapBrushAssetKey("");
                       }}
                       type="button"
                     >
-                      <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden bg-[linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%),linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%)] bg-[length:24px_24px] bg-[position:0_0,12px_12px]">
-                        {mainSlot?.pixels ? (
-                          <img
-                            alt={tileRecord.name}
-                            className="max-h-32 max-w-32 object-contain"
-                            src={mainSlot.pixels}
-                          />
-                        ) : (
-                          <span>No Main</span>
-                        )}
+                      <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden bg-[linear-gradient(135deg,rgba(19,38,47,0.92),rgba(36,66,79,0.88))] text-[#fffdf8]/84">
+                        <FontAwesomeIcon className="h-10 w-10" icon={faEraser} title="Erase" />
+                      </div>
+                      <div className="text-center text-sm font-normal leading-tight text-[#4a6069]">
+                        <div>Tool</div>
+                        <div>eraser</div>
                       </div>
                     </button>
-                    <div className="flex w-full items-start gap-2">
-                      <button
-                        className="grid h-7 w-7 shrink-0 place-items-center border border-[#c3d0cb] text-[#4a6069] transition hover:border-[#d88753] hover:text-[#d88753]"
-                        onClick={() => {
-                          setActiveTileSlug(tileRecord.slug);
-                          openPaintEditor(tileRecord, "main");
-                        }}
-                        title={`Edit ${tileRecord.name} main slot`}
-                        type="button"
-                      >
-                        <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
-                      </button>
-                      <button
-                        className="min-w-0 flex-1 text-left text-sm font-normal leading-tight text-[#4a6069]"
-                        onClick={() => {
-                          setMapBrushTileSlug(tileRecord.slug);
-                        }}
-                        type="button"
-                      >
-                        <div className="truncate">{folderLabel}</div>
-                        <div className="truncate">{tileRecord.slug}</div>
-                      </button>
-                    </div>
+
+                    {visibleBrushTiles.map((tileRecord) => {
+                      const mainSlot = tileMainSlotsBySlug.get(tileRecord.slug) ?? null;
+                      const pathSegments = splitTileLibraryPath(tileRecord.path);
+                      const folderLabel =
+                        pathSegments.length > 1 ? pathSegments[pathSegments.length - 1] : selectedLayer.folder;
+
+                      return (
+                        <div
+                          className={`${selectableCardClass(
+                            activeBrushTileSlug === tileRecord.slug,
+                            "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
+                          )} grid justify-items-center gap-2 p-3 text-center`}
+                          key={tileRecord.slug}
+                        >
+                          <button
+                            className="grid w-full justify-items-center gap-2 text-center"
+                            onClick={() => {
+                              setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(tileRecord.slug, 0));
+                            }}
+                            type="button"
+                          >
+                            <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden bg-[linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%),linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%)] bg-[length:24px_24px] bg-[position:0_0,12px_12px]">
+                              {mainSlot?.pixels ? (
+                                <img
+                                  alt={tileRecord.name}
+                                  className="max-h-32 max-w-32 object-contain"
+                                  src={mainSlot.pixels}
+                                />
+                              ) : (
+                                <span>No Main</span>
+                              )}
+                            </div>
+                          </button>
+                          <div className="flex w-full items-start gap-2">
+                            <button
+                              className="grid h-7 w-7 shrink-0 place-items-center border border-[#c3d0cb] text-[#4a6069] transition hover:border-[#d88753] hover:text-[#d88753]"
+                              onClick={() => {
+                                setActiveTileSlug(tileRecord.slug);
+                                openPaintEditor(tileRecord, "main");
+                              }}
+                              title={`Edit ${tileRecord.name} main slot`}
+                              type="button"
+                            >
+                              <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
+                            </button>
+                            <button
+                              className="min-w-0 flex-1 text-left text-sm font-normal leading-tight text-[#4a6069]"
+                              onClick={() => {
+                                setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(tileRecord.slug, 0));
+                              }}
+                              type="button"
+                            >
+                              <div className="truncate">{folderLabel}</div>
+                              <div className="truncate">{tileRecord.slug}</div>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
-              </div>
-              </div>
-              {!visibleBrushTiles.length ? (
-                <div className="text-sm text-[#4a6069]">
-                  No tiles are available in {selectedLayer.folder}/ yet.
+                  {!visibleBrushTiles.length ? (
+                    <div className="text-sm text-[#4a6069]">
+                      No tiles are available in {selectedLayer.folder}/ yet.
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
+
+                <div className="grid gap-3">
+                  <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
+                    Sprites
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+                    {visibleBrushSprites.map((spriteRecord) => {
+                      const spriteKey = getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename);
+                      const pathSegments = splitTileLibraryPath(spriteRecord.path);
+                      const folderLabel =
+                        pathSegments.length > 1 ? pathSegments[pathSegments.length - 1] : selectedLayer.folder;
+
+                      return (
+                        <button
+                          className={`${selectableCardClass(
+                            getSpriteBrushAssetKey(spriteKey) === mapBrushAssetKey,
+                            "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
+                          )} grid justify-items-center gap-2 p-3 text-center`}
+                          key={spriteKey}
+                          onClick={() => {
+                            setMapBrushAssetKey(getSpriteBrushAssetKey(spriteKey));
+                          }}
+                          type="button"
+                        >
+                          <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden bg-[linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%),linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%)] bg-[length:24px_24px] bg-[position:0_0,12px_12px]">
+                            {spriteRecord.thumbnail ? (
+                              <img
+                                alt={spriteRecord.name}
+                                className="max-h-32 max-w-32 object-contain"
+                                src={spriteRecord.thumbnail}
+                              />
+                            ) : (
+                              <span>No Image</span>
+                            )}
+                          </div>
+                          <div className="w-full text-left text-sm font-normal leading-tight text-[#4a6069]">
+                            <div className="truncate">{folderLabel}</div>
+                            <div className="truncate">{spriteRecord.name}</div>
+                            <div className="truncate font-mono text-[11px]">{spriteRecord.filename}</div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {!visibleBrushSprites.length ? (
+                    <div className="text-sm text-[#4a6069]">
+                      No sprites are available in {selectedLayer.folder}/ yet.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </Panel>
           </div>
 
@@ -1298,7 +1730,7 @@ export function MapDesigner() {
                 <div className={statusChipClass}>
                   {busyLabel
                     ? `${busyLabel}...`
-                    : activeBrushTile
+                    : activeBrushTile || activeBrushSprite
                       ? `Brush: ${selectedBrushLabel}`
                       : "Brush: eraser"}
                 </div>
@@ -1308,11 +1740,14 @@ export function MapDesigner() {
           >
             <MapWorkspace
               activeLayerIndex={activeLayerIndex}
+              activeBrushSlotNum={activeBrushTileSlotNum}
               activeLayerTitle={activeLayerTitle}
               activeOpacityValue={activeOpacityValue}
+              brushSlotOptions={availableBrushSlotOptions}
               canZoomIn={currentScale > MAP_MIN_SCALE_PERCENT}
               canZoomOut={currentScale < MAP_MAX_SCALE_PERCENT}
               hoverLabel={hoverLabel}
+              hoverCanvasRef={hoverCanvasRef}
               layerPreviewCanvasRefs={layerPreviewCanvasRefs}
               layerVisibilities={layerVisibilities}
               mapCanvasHeight={mapCanvasHeight}
@@ -1348,6 +1783,13 @@ export function MapDesigner() {
               onClearLayer={(layerIndex) => {
                 clearLayer(layerIndex);
                 setMapStatus(`Cleared ${TILE_LIBRARY_LAYERS[layerIndex]?.description ?? `Layer ${layerIndex}`}.`);
+              }}
+              onSelectBrushSlot={(slotNum) => {
+                if (!activeBrushTile) {
+                  return;
+                }
+
+                setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(activeBrushTile.slug, slotNum));
               }}
               onSelectLayer={setActiveLayerIndex}
               onSetLayerVisibility={(layerIndex, visibility) => {
@@ -1412,8 +1854,7 @@ export function MapDesigner() {
                       Create Map
                     </h2>
                     <p className="mt-1 text-sm leading-6 text-[#4a6069]">
-                      Name the map and choose its grid size before creating the server-backed JSON
-                      file.
+                      Name the map and choose its grid size before creating the server-backed map.
                     </p>
                   </div>
                   <button

@@ -7,9 +7,11 @@ import {
 } from "./constants";
 import { theme } from "../styles/theme";
 import type {
+  MapAssetPlacement,
   MapLayerCell,
   MapLayerGrid,
   MapLayerStack,
+  MapSpritePlacement,
   MapTileOptions,
   MapTilePlacement,
   TileCell,
@@ -65,7 +67,8 @@ export function normalizeMapTileOptions(options: Partial<MapTileOptions> | undef
 
 export function createMapTilePlacement(
   tileSlug: string,
-  options?: Partial<MapTileOptions>
+  options?: Partial<MapTileOptions>,
+  slotNum = 0
 ): MapTilePlacement | null {
   const normalizedTileSlug = tileSlug.trim();
 
@@ -74,22 +77,71 @@ export function createMapTilePlacement(
   }
 
   return {
+    kind: "tile",
     options: normalizeMapTileOptions(options),
+    slotNum:
+      Number.isFinite(slotNum) && slotNum >= 0
+        ? Math.max(0, Math.round(slotNum))
+        : 0,
     tileSlug: normalizedTileSlug
+  };
+}
+
+export function createMapSpritePlacement(spriteKey: string): MapSpritePlacement | null {
+  const normalizedSpriteKey = spriteKey.trim();
+
+  if (!normalizedSpriteKey) {
+    return null;
+  }
+
+  return {
+    kind: "sprite",
+    spriteKey: normalizedSpriteKey
   };
 }
 
 export function normalizeMapLayerCell(cell: unknown): MapLayerCell {
   if (typeof cell === "string") {
-    return createMapTilePlacement(cell);
+    const trimmedCell = cell.trim();
+
+    if (!trimmedCell) {
+      return null;
+    }
+
+    if (trimmedCell.toLowerCase().endsWith(".png")) {
+      return createMapSpritePlacement(trimmedCell);
+    }
+
+    return createMapTilePlacement(trimmedCell);
   }
 
   if (!cell || typeof cell !== "object") {
     return null;
   }
 
-  const candidate = cell as Partial<MapTilePlacement>;
-  return createMapTilePlacement(candidate.tileSlug ?? "", candidate.options);
+  const candidate = cell as Partial<MapTilePlacement> & Partial<MapSpritePlacement>;
+
+  if (candidate.kind === "sprite" || typeof candidate.spriteKey === "string") {
+    return createMapSpritePlacement(candidate.spriteKey ?? "");
+  }
+
+  return createMapTilePlacement(
+    candidate.tileSlug ?? "",
+    candidate.options,
+    typeof candidate.slotNum === "number" ? candidate.slotNum : 0
+  );
+}
+
+export function isMapTilePlacement(
+  placement: MapAssetPlacement | null | undefined
+): placement is MapTilePlacement {
+  return placement?.kind === "tile";
+}
+
+export function isMapSpritePlacement(
+  placement: MapAssetPlacement | null | undefined
+): placement is MapSpritePlacement {
+  return placement?.kind === "sprite";
 }
 
 export function serializeMapTileOptionsKey(options: Partial<MapTileOptions> | undefined) {
@@ -256,8 +308,13 @@ export function flattenMapLayers(
       for (let layerIndex = MAP_LAYER_COUNT - 1; layerIndex >= 0; layerIndex -= 1) {
         const placement = normalizedLayers[layerIndex]?.[tileY]?.[tileX];
 
-        if (placement?.tileSlug) {
+        if (isMapTilePlacement(placement)) {
           flattenedCells[tileY][tileX] = placement.tileSlug;
+          break;
+        }
+
+        if (isMapSpritePlacement(placement)) {
+          flattenedCells[tileY][tileX] = placement.spriteKey;
           break;
         }
       }

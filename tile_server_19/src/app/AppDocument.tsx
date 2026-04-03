@@ -1,5 +1,7 @@
 import {
+  getAssetDatabaseStatus,
   readClipboardSlots,
+  readTileLibraryFolderAssetCounts,
   readMapRecords,
   readSpriteRecords,
   readTileLibraryFolders,
@@ -14,13 +16,34 @@ interface AppDocumentProps {
 }
 
 export default async function AppDocument({ requestUrl }: AppDocumentProps) {
+  const databaseStatus = await getAssetDatabaseStatus();
+
+  if (!databaseStatus.available) {
+    return (
+      <html lang="en">
+        <head>
+          <meta charSet="utf-8" />
+          <meta content="width=device-width, initial-scale=1" name="viewport" />
+          <title>Tile Server 19</title>
+          <style>{getThemeCssText()}</style>
+        </head>
+        <body>
+          <main className="min-h-screen bg-[#f3eee2] px-6 py-10 text-[#142127]">
+            <p className="mx-auto max-w-2xl text-lg font-semibold">{databaseStatus.message}</p>
+          </main>
+        </body>
+      </html>
+    );
+  }
+
   const url = new URL(requestUrl);
   const clipboardSlots = await readClipboardSlots();
+  const tileLibraryFolderAssetCounts = await readTileLibraryFolderAssetCounts();
   const tileLibraryFolders = await readTileLibraryFolders();
   const sprites = await readSpriteRecords();
   const tiles = await readTileRecords();
   const maps = await readMapRecords();
-  const initialBrushTileSlug = url.searchParams.get("brush")?.trim() ?? "";
+  const initialBrushAssetKey = url.searchParams.get("brush")?.trim() ?? "";
   const initialEditTileSlug = url.searchParams.get("edit")?.trim() ?? "";
   const initialImagePath = url.searchParams.get("image")?.trim() ?? "";
   const initialMapSlug = url.searchParams.get("map")?.trim() ?? "";
@@ -44,7 +67,7 @@ export default async function AppDocument({ requestUrl }: AppDocumentProps) {
       <body>
         <TileServerApp
           clipboardSlots={clipboardSlots}
-          initialBrushTileSlug={initialBrushTileSlug}
+          initialBrushAssetKey={initialBrushAssetKey}
           initialEditTileSlug={initialEditTileSlug}
           initialImagePath={initialImagePath}
           initialMapSlug={initialMapSlug}
@@ -53,6 +76,7 @@ export default async function AppDocument({ requestUrl }: AppDocumentProps) {
           initialSpriteKey={initialSpriteKey}
           maps={maps}
           sprites={sprites}
+          tileLibraryFolderAssetCounts={tileLibraryFolderAssetCounts}
           tileLibraryFolders={tileLibraryFolders}
           tiles={tiles}
         />

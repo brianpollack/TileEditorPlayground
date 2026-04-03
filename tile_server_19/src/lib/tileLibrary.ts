@@ -63,6 +63,12 @@ export function splitTileLibraryPath(path: string | undefined) {
   return normalized ? normalized.split("/") : [];
 }
 
+export function getTileLibraryAncestorPaths(path: string | undefined) {
+  const segments = splitTileLibraryPath(path);
+
+  return segments.map((_, index) => segments.slice(0, index + 1).join("/"));
+}
+
 export function getTileLibraryLayer(path: string | undefined) {
   const [layerFolder] = splitTileLibraryPath(path);
   return TILE_LIBRARY_LAYERS.find((layer) => layer.folder === layerFolder) ?? null;

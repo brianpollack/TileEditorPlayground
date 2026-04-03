@@ -2,6 +2,8 @@
 
 AI-agent context for a local React 19 tile and map workshop. This file is intentionally written as implementation guidance, not marketing copy.
 
+Database schema documentation lives in `DATABASE.md`. Whenever we change any table schema, column behavior, indexes, or serialization rules, update `DATABASE.md`, this `README.md`, and `memory.md` together.
+
 ## What This Project Is
 
 This app is a local content-authoring tool for:
@@ -13,14 +15,14 @@ This app is a local content-authoring tool for:
 - assembling maps from saved tiles
 - moving small image snippets through a floating clipboard manager
 
-The app is optimized for local iteration, JSON-backed persistence, and draft-safe editing. The most important architectural idea is that the UI should not lose local work just because a panel unmounts, a tab changes, or a paint editor closes and reopens.
+The app is optimized for local iteration, Postgres-backed project persistence, and draft-safe editing. The most important architectural idea is that the UI should not lose local work just because a panel unmounts, a tab changes, or a paint editor closes and reopens.
 
 ## Stack And Runtime
 
 - React 19 client components plus Vite RSC wiring
 - Vite as the dev/build tool
 - Tailwind CSS v4 for utility styling
-- server actions for writes to JSON-backed project data
+- server actions for writes to project data
 - `pngjs` for thumbnail generation and strip export
 
 Relevant entry points:
@@ -29,6 +31,7 @@ Relevant entry points:
 - `src/app/TileServerApp.tsx`: top-level client shell, global draft state owner, mode switcher
 - `src/framework/entry.browser.tsx`: browser hydration and action callback plumbing
 - `vite.config.ts`: Vite config plus custom clipboard persistence middleware
+- `DATABASE.md`: current database tables, columns, indexes, and storage notes
 
 ## Project Shape
 
@@ -37,8 +40,10 @@ Relevant entry points:
 - `src/actions/`: server actions invoked from the client
 - `src/lib/`: normalization, storage, image, map, and slot helpers
 - `src/styles/`: theme tokens and base CSS
+- `DATABASE.md`: database schema reference and maintenance notes
+- `memory.md`: repo-local agent reminder file
 - `data/all_tiles.json`: persisted tile records
-- `data/maps/*.json`: persisted map records
+- `data/maps/*.json`: legacy map import source for database bootstrap
 - `data/temp/clipboard-slots.json`: persisted clipboard slots for the floating clipboard manager
 - `exports/`: generated exported tile strips
 - `public/art_icons/`: bundled art assets and references
@@ -87,12 +92,12 @@ Maps are stored as `MapRecord` objects.
 - `name`, `slug`
 - `updatedAt`
 
-Persisted map JSON files use a compact disk format:
+Persisted maps are now stored in Postgres:
 
-- `tileMap`: numeric id lookup where each id represents one tile path plus one saved option set
-- `layers`: 9 layer grids that store tile ids, with `0` meaning empty
-- `cells` is not written to disk; it is derived when the file is loaded
-- `data/maps/starter-camp.jsonschema` documents the on-disk format
+- `map_maps` stores one row per map
+- `map_map_assets` stores one row per occupied map cell per layer
+- `slotNum` on tile placements identifies which tile slot/variant was painted
+- legacy `data/maps/*.json` files are only used for one-time import when the database has no maps yet
 
 ### Clipboard Slots
 
@@ -105,7 +110,7 @@ Clipboard entries are `ClipboardSlotRecord | null` in a fixed-length array of 10
 
 There are three persistence layers:
 
-1. Server-backed project data on disk
+1. Server-backed project data in Postgres and local support files
 2. Client draft state inside `TileServerApp`
 3. Session restoration in `window.sessionStorage`
 
@@ -113,8 +118,8 @@ There are three persistence layers:
 
 The project persists real content through `src/lib/serverStore.ts`.
 
-- tiles are read/written from `data/all_tiles.json`
-- maps are read/written from `data/maps/*.json`
+- tile library assets are now read/written from Postgres `map_tiles`
+- maps are now read/written from Postgres `map_maps` and `map_map_assets`
 - clipboard slots are read/written from `data/temp/clipboard-slots.json`
 - exported slot strips are written to `exports/`
 
@@ -509,8 +514,9 @@ When debugging, check these areas first:
 
 - URL query params and hash if the wrong mode opens
 - `sessionStorage` key `tile-server-19:studio-state` if draft restoration behaves strangely
-- `data/all_tiles.json` for saved tile payload shape
-- `data/maps/*.json` for saved map payload shape
+- `DATABASE.md` for current Postgres table shape and migration notes
+- `map_tiles` for saved tile and sprite payload shape
+- `map_maps` and `map_map_assets` for saved map payload shape
 - `data/temp/clipboard-slots.json` for persisted clipboard state
 - console errors around image decoding if previews go blank
 

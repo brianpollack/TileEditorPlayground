@@ -12,7 +12,11 @@ import { MAP_LAYER_COUNT, SLOT_LAYER_COUNT } from "../lib/constants";
 import { loadImageFromUrl, revokeObjectUrl } from "../lib/images";
 import { clampMapScalePercent, normalizeMapLayers } from "../lib/map";
 import { describeSlot, getSlotIndex, normalizeSlotRecords, type SlotKey } from "../lib/slots";
-import { getTileLibrarySpriteKey, normalizeTileLibraryPath } from "../lib/tileLibrary";
+import {
+  getTileLibraryAncestorPaths,
+  getTileLibrarySpriteKey,
+  normalizeTileLibraryPath
+} from "../lib/tileLibrary";
 import { StudioProvider } from "./StudioContext";
 import type {
   ClipboardSlotRecord,
@@ -303,18 +307,140 @@ function getInitialMapSlug(mapRecords: MapRecord[], preferredSlug: string) {
   return mapRecords[0]?.slug ?? "";
 }
 
-function getInitialBrushTileSlug(tileRecords: TileRecord[], preferredSlug: string) {
-  const normalizedPreferredSlug = preferredSlug.trim();
+function getTileBrushAssetKey(tileSlug: string) {
+  return getTileBrushAssetKeyWithSlot(tileSlug, 0);
+}
 
-  if (normalizedPreferredSlug === "") {
+function getSpriteBrushAssetKey(spriteKey: string) {
+  return spriteKey.trim() ? `sprite:${spriteKey.trim()}` : "";
+}
+
+function normalizeBrushTileSlotNum(slotNum: number) {
+  return Number.isFinite(slotNum) && slotNum >= 0 ? Math.max(0, Math.round(slotNum)) : 0;
+}
+
+function getTileBrushAssetKeyWithSlot(tileSlug: string, slotNum: number) {
+  const normalizedTileSlug = tileSlug.trim();
+
+  if (!normalizedTileSlug) {
     return "";
   }
 
-  if (normalizedPreferredSlug && tileRecords.some((tileRecord) => tileRecord.slug === normalizedPreferredSlug)) {
-    return normalizedPreferredSlug;
+  return `tile:${normalizedTileSlug}:slot:${normalizeBrushTileSlotNum(slotNum)}`;
+}
+
+function parseTileBrushAssetKey(brushAssetKey: string) {
+  if (!brushAssetKey.startsWith("tile:")) {
+    return null;
   }
 
-  return tileRecords[0]?.slug ?? "";
+  const rawValue = brushAssetKey.slice("tile:".length).trim();
+
+  if (!rawValue) {
+    return null;
+  }
+
+  const slotSeparatorIndex = rawValue.lastIndexOf(":slot:");
+
+  if (slotSeparatorIndex === -1) {
+    return {
+      slotNum: 0,
+      tileSlug: rawValue
+    };
+  }
+
+  const tileSlug = rawValue.slice(0, slotSeparatorIndex).trim();
+  const rawSlotNum = rawValue.slice(slotSeparatorIndex + ":slot:".length).trim();
+
+  if (!tileSlug) {
+    return null;
+  }
+
+  return {
+    slotNum: normalizeBrushTileSlotNum(Number.parseInt(rawSlotNum, 10)),
+    tileSlug
+  };
+}
+
+function applyFolderAssetCountDelta(
+  currentCounts: Record<string, number>,
+  folderPath: string,
+  delta: number
+) {
+  const nextCounts = { ...currentCounts };
+
+  for (const ancestorPath of getTileLibraryAncestorPaths(folderPath)) {
+    nextCounts[ancestorPath] = Math.max(0, (nextCounts[ancestorPath] ?? 0) + delta);
+  }
+
+  return nextCounts;
+}
+
+function normalizeSpriteReference(spriteReference: string) {
+  const trimmedReference = spriteReference.trim();
+
+  if (!trimmedReference) {
+    return "";
+  }
+
+  const lastSlashIndex = trimmedReference.lastIndexOf("/");
+
+  if (lastSlashIndex === -1) {
+    return trimmedReference;
+  }
+
+  return getTileLibrarySpriteKey(
+    trimmedReference.slice(0, lastSlashIndex),
+    trimmedReference.slice(lastSlashIndex + 1)
+  );
+}
+
+function getInitialBrushAssetKey(
+  tileRecords: TileRecord[],
+  spriteRecords: SpriteRecord[],
+  preferredKey: string
+) {
+  const normalizedPreferredKey = preferredKey.trim();
+
+  if (normalizedPreferredKey === "") {
+    return "";
+  }
+
+  if (normalizedPreferredKey.startsWith("tile:")) {
+    const parsedTileBrush = parseTileBrushAssetKey(normalizedPreferredKey);
+
+    if (!parsedTileBrush) {
+      return "";
+    }
+
+    return tileRecords.some((tileRecord) => tileRecord.slug === parsedTileBrush.tileSlug)
+      ? getTileBrushAssetKeyWithSlot(parsedTileBrush.tileSlug, parsedTileBrush.slotNum)
+      : "";
+  }
+
+  if (normalizedPreferredKey.startsWith("sprite:")) {
+    const spriteKey = normalizeSpriteReference(normalizedPreferredKey.slice("sprite:".length));
+    const hasSprite = spriteRecords.some(
+      (spriteRecord) => getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === spriteKey
+    );
+
+    return hasSprite ? getSpriteBrushAssetKey(spriteKey) : "";
+  }
+
+  if (tileRecords.some((tileRecord) => tileRecord.slug === normalizedPreferredKey)) {
+    return getTileBrushAssetKeyWithSlot(normalizedPreferredKey, 0);
+  }
+
+  const normalizedLegacySpriteKey = normalizeSpriteReference(normalizedPreferredKey);
+  const hasLegacySprite = spriteRecords.some(
+    (spriteRecord) => getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === normalizedLegacySpriteKey
+  );
+
+  if (hasLegacySprite) {
+    return getSpriteBrushAssetKey(normalizedLegacySpriteKey);
+  }
+
+  return "";
 }
 
 function normalizeClientClipboardSlots(
@@ -424,9 +550,10 @@ interface TileServerAppProps {
   initialMode: string;
   initialPaintEditors: string;
   initialSpriteKey: string;
-  initialBrushTileSlug: string;
+  initialBrushAssetKey: string;
   maps: MapRecord[];
   sprites: SpriteRecord[];
+  tileLibraryFolderAssetCounts: Record<string, number>;
   tileLibraryFolders: string[];
   tiles: TileRecord[];
 }
@@ -439,9 +566,10 @@ export function TileServerApp({
   initialMode,
   initialPaintEditors,
   initialSpriteKey,
-  initialBrushTileSlug,
+  initialBrushAssetKey,
   maps,
   sprites,
+  tileLibraryFolderAssetCounts,
   tileLibraryFolders,
   tiles
 }: TileServerAppProps) {
@@ -450,6 +578,7 @@ export function TileServerApp({
   const [mapRecords, setMapRecords] = useState(maps);
   const [spriteRecords, setSpriteRecords] = useState(sprites);
   const [tileRecords, setTileRecords] = useState(tiles);
+  const [tileLibraryFolderCountsByPath, setTileLibraryFolderCountsByPath] = useState(tileLibraryFolderAssetCounts);
   const [tileLibraryFolderPaths, setTileLibraryFolderPaths] = useState(tileLibraryFolders);
   const [activeView, setActiveView] = useState<StudioViewId>(() =>
     getInitialActiveView(initialMode, initialPaintSessions, Boolean(initialSelectedSpriteKey))
@@ -460,8 +589,8 @@ export function TileServerApp({
   const [activeMapSlug, setActiveMapSlug] = useState(() =>
     getInitialMapSlug(maps, initialMapSlug)
   );
-  const [mapBrushTileSlug, setMapBrushTileSlug] = useState(() =>
-    getInitialBrushTileSlug(tiles, initialBrushTileSlug)
+  const [mapBrushAssetKey, setMapBrushAssetKey] = useState(() =>
+    getInitialBrushAssetKey(tiles, sprites, initialBrushAssetKey)
   );
   const [paintEditors, setPaintEditors] = useState<PaintEditorSession[]>(() => initialPaintSessions);
   const [activeSpriteKey, setActiveSpriteKey] = useState(initialSelectedSpriteKey);
@@ -499,7 +628,7 @@ export function TileServerApp({
     currentView: StudioViewId,
     currentPaintEditors: PaintEditorSession[],
     mapSlug: string,
-    brushTileSlug: string
+    brushAssetKey: string
   ) {
     if (typeof window === "undefined") {
       return;
@@ -532,8 +661,8 @@ export function TileServerApp({
       url.searchParams.delete("map");
     }
 
-    if (brushTileSlug) {
-      url.searchParams.set("brush", brushTileSlug);
+    if (brushAssetKey) {
+      url.searchParams.set("brush", brushAssetKey);
     } else {
       url.searchParams.delete("brush");
     }
@@ -749,6 +878,70 @@ export function TileServerApp({
     setActiveView("tile-workshop");
   }
 
+  function removeTileRecord(tileSlug: string) {
+    if (!tileSlug) {
+      return;
+    }
+
+    const existingTile = tileRecords.find((candidate) => candidate.slug === tileSlug) ?? null;
+
+    if (!existingTile) {
+      return;
+    }
+
+    setTileRecords((currentTiles) => currentTiles.filter((candidate) => candidate.slug !== tileSlug));
+    setDraftSlotsByTileSlug((currentDrafts) => {
+      const nextDrafts = { ...currentDrafts };
+      delete nextDrafts[tileSlug];
+      return nextDrafts;
+    });
+    setPaintEditors((currentEditors) => currentEditors.filter((editor) => editor.tileSlug !== tileSlug));
+    setPaintEditorUiStateById((currentState) =>
+      Object.fromEntries(Object.entries(currentState).filter(([sessionId]) => !sessionId.startsWith(`paint:${tileSlug}:`)))
+    );
+    setTileLibraryFolderCountsByPath((currentCounts) =>
+      applyFolderAssetCountDelta(currentCounts, existingTile.path, -1)
+    );
+    setActiveTileSlug((currentSlug) => (currentSlug === tileSlug ? "" : currentSlug));
+    setMapBrushAssetKey((currentBrushAssetKey) =>
+      parseTileBrushAssetKey(currentBrushAssetKey)?.tileSlug === tileSlug ? "" : currentBrushAssetKey
+    );
+    setActiveView((currentView) =>
+      currentView !== "tile-workshop" && currentView.startsWith(`paint:${tileSlug}:`) ? "tile-workshop" : currentView
+    );
+  }
+
+  function removeSpriteRecord(spriteKey: string) {
+    const normalizedSpriteKey = normalizeSpriteReference(spriteKey);
+
+    if (!normalizedSpriteKey) {
+      return;
+    }
+
+    const existingSprite =
+      spriteRecords.find(
+        (candidate) => getTileLibrarySpriteKey(candidate.path, candidate.filename) === normalizedSpriteKey
+      ) ?? null;
+
+    if (!existingSprite) {
+      return;
+    }
+
+    setSpriteRecords((currentSprites) =>
+      currentSprites.filter(
+        (candidate) => getTileLibrarySpriteKey(candidate.path, candidate.filename) !== normalizedSpriteKey
+      )
+    );
+    setTileLibraryFolderCountsByPath((currentCounts) =>
+      applyFolderAssetCountDelta(currentCounts, existingSprite.path, -1)
+    );
+    setActiveSpriteKey((currentKey) => (currentKey === normalizedSpriteKey ? "" : currentKey));
+    setMapBrushAssetKey((currentBrushAssetKey) =>
+      currentBrushAssetKey === getSpriteBrushAssetKey(normalizedSpriteKey) ? "" : currentBrushAssetKey
+    );
+    setActiveView((currentView) => (currentView === "sprite-editor" && activeSpriteKey === normalizedSpriteKey ? "tile-workshop" : currentView));
+  }
+
   function openPaintEditor(tileRecord: TileRecord, slotKey: SlotKey) {
     const editorId = createPaintEditorId(tileRecord.slug, slotKey);
     const slotIndex = getSlotIndex(slotKey);
@@ -822,6 +1015,10 @@ export function TileServerApp({
   }, [tileLibraryFolders]);
 
   useEffect(() => {
+    setTileLibraryFolderCountsByPath(tileLibraryFolderAssetCounts);
+  }, [tileLibraryFolderAssetCounts]);
+
+  useEffect(() => {
     if (hasRestoredStudioStateRef.current || typeof window === "undefined") {
       return;
     }
@@ -843,6 +1040,7 @@ export function TileServerApp({
         draftCellsByMapSlug: Record<string, string[][]>;
         isClipboardManagerOpen: boolean;
         mapDesignerUiStateByMapSlug: Record<string, Partial<MapDesignerUiState>>;
+        mapBrushAssetKey: string;
         mapBrushTileSlug: string;
         paintEditorUiStateById: Record<string, Partial<PaintEditorUiState>>;
         selectedClipboardSlotIndex: number | null;
@@ -856,11 +1054,13 @@ export function TileServerApp({
       }
 
       if (
-        typeof parsedState.mapBrushTileSlug === "string" &&
-        (parsedState.mapBrushTileSlug === "" ||
-          tileRecords.some((tileRecord) => tileRecord.slug === parsedState.mapBrushTileSlug))
+        typeof parsedState.mapBrushAssetKey === "string"
       ) {
-        setMapBrushTileSlug(parsedState.mapBrushTileSlug);
+        setMapBrushAssetKey(getInitialBrushAssetKey(tileRecords, spriteRecords, parsedState.mapBrushAssetKey));
+      } else if (
+        typeof parsedState.mapBrushTileSlug === "string"
+      ) {
+        setMapBrushAssetKey(getInitialBrushAssetKey(tileRecords, spriteRecords, parsedState.mapBrushTileSlug));
       }
 
       if (typeof parsedState.isClipboardManagerOpen === "boolean") {
@@ -933,7 +1133,7 @@ export function TileServerApp({
     } finally {
       setIsStudioStateRestored(true);
     }
-  }, [mapRecords, tileRecords]);
+  }, [mapRecords, spriteRecords, tileRecords]);
 
   useEffect(() => {
     setDraftSlotsByTileSlug((currentDrafts) => {
@@ -967,18 +1167,20 @@ export function TileServerApp({
       return "";
     });
 
-    setMapBrushTileSlug((currentSlug) => {
-      if (currentSlug === "") {
-        return currentSlug;
+    setMapBrushAssetKey((currentKey) => {
+      if (currentKey === "") {
+        return currentKey;
       }
 
-      if (tileRecords.some((tileRecord) => tileRecord.slug === currentSlug)) {
-        return currentSlug;
+      const nextKey = getInitialBrushAssetKey(tileRecords, spriteRecords, currentKey);
+
+      if (nextKey) {
+        return nextKey;
       }
 
-      return tileRecords[0]?.slug ?? "";
+      return "";
     });
-  }, [tileRecords]);
+  }, [spriteRecords, tileRecords]);
 
   useEffect(() => {
     setActiveSpriteKey((currentKey) => {
@@ -1073,9 +1275,9 @@ export function TileServerApp({
       activeView,
       paintEditors,
       activeMapSlug,
-      mapBrushTileSlug
+      mapBrushAssetKey
     );
-  }, [activeMapSlug, activeSpriteKey, activeTileSlug, activeView, mapBrushTileSlug, paintEditors, spriteRecords, tileRecords]);
+  }, [activeMapSlug, activeSpriteKey, activeTileSlug, activeView, mapBrushAssetKey, paintEditors, spriteRecords, tileRecords]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -1096,7 +1298,7 @@ export function TileServerApp({
       draftLayersByMapSlug,
       isClipboardManagerOpen,
       mapDesignerUiStateByMapSlug,
-      mapBrushTileSlug,
+      mapBrushAssetKey,
       paintEditorUiStateById,
       selectedClipboardSlotIndex
     };
@@ -1109,7 +1311,7 @@ export function TileServerApp({
     isClipboardManagerOpen,
     isStudioStateRestored,
     mapDesignerUiStateByMapSlug,
-    mapBrushTileSlug,
+    mapBrushAssetKey,
     paintEditorUiStateById,
     selectedClipboardSlotIndex
   ]);
@@ -1236,6 +1438,9 @@ export function TileServerApp({
           setTileLibraryFolderPaths((currentFolders) =>
             currentFolders.includes(folderPath) ? currentFolders : [...currentFolders, folderPath].sort()
           );
+          setTileLibraryFolderCountsByPath((currentCounts) =>
+            currentCounts[folderPath] === undefined ? { ...currentCounts, [folderPath]: 0 } : currentCounts
+          );
         },
         clearClipboardSlot,
         clipboardStatus,
@@ -1246,10 +1451,12 @@ export function TileServerApp({
         getTileDraftSlots,
         initialImagePath,
         isClipboardManagerOpen,
-        mapBrushTileSlug,
+        mapBrushAssetKey,
         maps: mapRecords,
         openPaintEditor,
         putClipboardSlot,
+        removeSprite: removeSpriteRecord,
+        removeTile: removeTileRecord,
         selectedClipboardSlotIndex,
         setActiveMapSlug,
         setClipboardManagerOpen,
@@ -1259,12 +1466,15 @@ export function TileServerApp({
         setMapDraftLayers,
         setActiveSpriteKey: handleSetActiveSpriteKey,
         setActiveTileSlug: handleSetActiveTileSlug,
-        setMapBrushTileSlug,
+        setMapBrushAssetKey,
         setTileDraftSlots,
         sprites: spriteRecords,
+        tileLibraryFolderAssetCounts: tileLibraryFolderCountsByPath,
         tileLibraryFolders: tileLibraryFolderPaths,
         tiles: tileRecords,
         upsertSprite: (spriteRecord) => {
+          let isNewSprite = false;
+
           setSpriteRecords((currentSprites) => {
             const spriteKey = `${spriteRecord.path}/${spriteRecord.filename}`;
             const existingIndex = currentSprites.findIndex(
@@ -1272,6 +1482,7 @@ export function TileServerApp({
             );
 
             if (existingIndex === -1) {
+              isNewSprite = true;
               return [...currentSprites, spriteRecord].sort(
                 (left, right) =>
                   left.path.localeCompare(right.path) ||
@@ -1284,6 +1495,12 @@ export function TileServerApp({
             nextSprites[existingIndex] = spriteRecord;
             return nextSprites;
           });
+
+          if (isNewSprite) {
+            setTileLibraryFolderCountsByPath((currentCounts) =>
+              applyFolderAssetCountDelta(currentCounts, spriteRecord.path, 1)
+            );
+          }
         },
         updateTileDraftSlot,
         upsertMap: (mapRecord) => {
@@ -1302,12 +1519,15 @@ export function TileServerApp({
           });
         },
         upsertTile: (tileRecord) => {
+          let isNewTile = false;
+
           setTileRecords((currentTiles) => {
             const existingIndex = currentTiles.findIndex(
               (candidate) => candidate.slug === tileRecord.slug
             );
 
             if (existingIndex === -1) {
+              isNewTile = true;
               return [...currentTiles, tileRecord];
             }
 
@@ -1315,6 +1535,12 @@ export function TileServerApp({
             nextTiles[existingIndex] = tileRecord;
             return nextTiles;
           });
+
+          if (isNewTile) {
+            setTileLibraryFolderCountsByPath((currentCounts) =>
+              applyFolderAssetCountDelta(currentCounts, tileRecord.path, 1)
+            );
+          }
         }
       }}
     >
@@ -1421,11 +1647,13 @@ export function TileServerApp({
             <div className={activeView === "map-designer" ? "block h-full" : "hidden h-full"}>
               <MapDesigner />
             </div>
-            {paintEditors.map((editor) => (
-              <div className={activeView === editor.id ? "block h-full" : "hidden h-full"} key={editor.id}>
-                <PaintMode session={editor} />
-              </div>
-            ))}
+            {paintEditors
+              .filter((editor) => activeView === editor.id)
+              .map((editor) => (
+                <div className="block h-full" key={editor.id}>
+                  <PaintMode session={editor} />
+                </div>
+              ))}
           </div>
         </div>
       </div>

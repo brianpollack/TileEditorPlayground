@@ -6,10 +6,11 @@ import {
 } from "@vitejs/plugin-rsc/rsc";
 
 import AppDocument from "../app/AppDocument";
-import { createTileRecord, importSpriteFile, saveSpriteRecord } from "../lib/serverStore";
+import { createTileRecord, deleteAssetRecord, importSpriteFile, saveSpriteRecord } from "../lib/serverStore";
 import type { SpriteRecord } from "../types";
 
 const CREATE_TILE_PATH = "/__tiles/create";
+const DELETE_ASSET_PATH = "/__tiles/delete-asset";
 const IMPORT_SPRITE_PATH = "/__tiles/import-sprite";
 const SAVE_SPRITE_PATH = "/__tiles/save-sprite";
 
@@ -34,6 +35,29 @@ export default async function handler(request: Request) {
       return Response.json(createdTile);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Could not create tile.";
+
+      return Response.json({ error: message }, { status: 400 });
+    }
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === DELETE_ASSET_PATH) {
+    try {
+      const requestBody = (await request.json()) as Partial<{
+        assetType: "sprite" | "tile";
+        filename: string;
+        path: string;
+        slug: string;
+      }>;
+      const deletedAsset = await deleteAssetRecord({
+        assetType: requestBody.assetType ?? "tile",
+        filename: requestBody.filename,
+        path: requestBody.path,
+        slug: requestBody.slug
+      });
+
+      return Response.json(deletedAsset);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Could not delete asset.";
 
       return Response.json({ error: message }, { status: 400 });
     }
