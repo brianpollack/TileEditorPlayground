@@ -28,7 +28,7 @@ export default async function AppDocument({ requestUrl }: AppDocumentProps) {
           <style>{getThemeCssText()}</style>
         </head>
         <body>
-          <main className="min-h-screen bg-[#f3eee2] px-6 py-10 text-[#142127]">
+          <main className="min-h-screen theme-bg-paper-soft px-6 py-10 theme-text-primary">
             <p className="mx-auto max-w-2xl text-lg font-semibold">{databaseStatus.message}</p>
           </main>
         </body>

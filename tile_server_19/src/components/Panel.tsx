@@ -1,6 +1,7 @@
 "use client";
 
 import { PanelHeader } from "./PanelHeader";
+import { cx, panelFooterClass, panelSurfaceClass } from "./uiStyles";
 
 interface PanelProps {
   actions?: React.ReactNode;
@@ -21,21 +22,14 @@ export function Panel({
   subheader,
   title
 }: PanelProps) {
-  const classes = [
-    "flex min-h-0 flex-col overflow-hidden border border-white/80 bg-[linear-gradient(180deg,rgba(255,253,248,0.96),rgba(255,253,248,0.88))] shadow-[0_18px_40px_rgba(20,33,39,0.12)]",
-    className
-  ]
-      .filter(Boolean)
-      .join(" ");
+  const classes = cx(panelSurfaceClass, className);
 
   return (
     <section className={classes}>
       <PanelHeader actions={actions} description={description} subheader={subheader} title={title} />
       <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 py-4">{children}</div>
       {footer ? (
-        <footer className="border-t border-[#c3d0cb]/65 bg-[rgba(244,239,226,0.7)] px-4 py-4">
-          {footer}
-        </footer>
+        <footer className={panelFooterClass}>{footer}</footer>
       ) : null}
     </section>
   );

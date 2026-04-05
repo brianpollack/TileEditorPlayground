@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { faClipboard, faTrashCan } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 
 import { useStudio } from "../app/StudioContext";
+import { CheckerboardFrame } from "./CheckerboardFrame";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import {
   closeButtonClass,
@@ -131,7 +132,7 @@ export function ClipboardManager() {
       style={{ left: `${position.left}px`, top: `${position.top}px` }}
     >
       <div
-        className={`flex items-center justify-between gap-3 border-b border-[#c3d0cb]/65 px-4 py-3 ${
+        className={`flex items-center justify-between gap-3 border-b theme-border-panel-faint px-4 py-3 ${
           isDragging ? "cursor-grabbing" : "cursor-grab"
         }`}
         onPointerDown={handleHeaderPointerDown}
@@ -139,11 +140,11 @@ export function ClipboardManager() {
         onPointerUp={handleHeaderPointerEnd}
         onPointerCancel={handleHeaderPointerEnd}
       >
-        <div className="flex items-center gap-2 text-[#142127]">
+        <div className="flex items-center gap-2 theme-text-primary">
           <FontAwesomeIcon className="h-4 w-4" icon={faClipboard} />
           <div>
             <div className="text-sm font-semibold">Clipboard Manager</div>
-            <div className="text-xs text-[#4a6069]">10 slots, auto-filled from browser clipboard images.</div>
+            <div className="text-xs theme-text-muted">10 slots, auto-filled from browser clipboard images.</div>
           </div>
         </div>
         <button
@@ -160,7 +161,7 @@ export function ClipboardManager() {
       <div className="grid grid-cols-5 gap-3 p-4">
         {clipboardSlots.map((slot, index) => (
           <div className="grid gap-1" key={index}>
-            <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.08em] text-[#4a6069]">
+            <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.08em] theme-text-muted">
               <span>Slot {index + 1}</span>
               <button
                 className={`${iconButtonClass} h-5 w-5 disabled:opacity-35`}
@@ -175,10 +176,10 @@ export function ClipboardManager() {
               </button>
             </div>
             <button
-              className={`grid h-16 w-16 place-items-center overflow-hidden border bg-[linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%),linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%)] bg-[length:16px_16px] bg-[position:0_0,8px_8px] transition ${
+              className={`transition ${
                 selectedClipboardSlotIndex === index
-                  ? "border-[#d88753] shadow-[inset_0_0_0_1px_rgba(216,135,83,0.35)]"
-                  : "border-[#c3d0cb] hover:border-[#4b86ff]"
+                  ? "theme-border-accent theme-ring-inset-accent-strong"
+                  : "theme-border-panel theme-hover-border-info"
               }`}
               onClick={() => {
                 setSelectedClipboardSlotIndex(index);
@@ -186,21 +187,23 @@ export function ClipboardManager() {
               title={`Use clipboard slot ${index + 1}`}
               type="button"
             >
-              {slot ? (
-                <img
-                  alt={`Clipboard slot ${index + 1}`}
-                  className="h-full w-full object-contain [image-rendering:pixelated]"
-                  src={slot.image}
-                />
-              ) : (
-                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#4a6069]">
-                  Empty
-                </span>
-              )}
+              <CheckerboardFrame className="h-16 w-16 border">
+                {slot ? (
+                  <img
+                    alt={`Clipboard slot ${index + 1}`}
+                    className="h-full w-full object-contain [image-rendering:pixelated]"
+                    src={slot.image}
+                  />
+                ) : (
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] theme-text-muted">
+                    Empty
+                  </span>
+                )}
+              </CheckerboardFrame>
             </button>
             <div
               className={`text-[10px] font-semibold uppercase tracking-[0.08em] ${
-                selectedClipboardSlotIndex === index ? "text-[#d88753]" : "text-[#4a6069]"
+                selectedClipboardSlotIndex === index ? "theme-text-accent" : "theme-text-muted"
               }`}
             >
               {selectedClipboardSlotIndex === index ? "Selected" : "\u00a0"}
@@ -209,7 +212,7 @@ export function ClipboardManager() {
         ))}
       </div>
 
-      <div className="border-t border-[#c3d0cb]/65 px-4 py-3 text-xs text-[#4a6069]">
+      <div className="border-t theme-border-panel-faint px-4 py-3 text-xs theme-text-muted">
         {clipboardStatus}
       </div>
     </div>

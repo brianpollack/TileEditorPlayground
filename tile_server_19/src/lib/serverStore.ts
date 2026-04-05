@@ -32,6 +32,7 @@ import {
   TILE_LIBRARY_LAYERS,
   tileLibraryPathSupportsSprites
 } from "./tileLibrary";
+import { getDefaultSpriteMount } from "./sprites";
 import type {
   ClipboardSlotRecord,
   ExportArtifact,
@@ -635,6 +636,8 @@ function sanitizeSpriteFilename(fileName: string) {
 }
 
 function createInitialSpriteRecord(relativePath: string, fileName: string, imageWidth: number, imageHeight: number) {
+  const defaultMount = getDefaultSpriteMount(imageWidth, imageHeight);
+
   return normalizeSpriteRecord({
     filename: fileName,
     image_h: imageHeight,
@@ -642,8 +645,8 @@ function createInitialSpriteRecord(relativePath: string, fileName: string, image
     impassible: false,
     is_flat: false,
     item_id: 0,
-    mount_x: imageWidth / 2,
-    mount_y: imageHeight / 2,
+    mount_x: defaultMount.mount_x,
+    mount_y: defaultMount.mount_y,
     name: path.parse(fileName).name,
     offset_x: 0,
     offset_y: 0,
@@ -663,6 +666,7 @@ function normalizeSpriteRecord(record: SpriteRecord): SpriteRecord {
   const normalizedFilename = sanitizeSpriteFilename(record.filename);
   const imageWidth = Math.max(1, normalizeFiniteNumber(record.image_w, TILE_SIZE));
   const imageHeight = Math.max(1, normalizeFiniteNumber(record.image_h, TILE_SIZE));
+  const defaultMount = getDefaultSpriteMount(imageWidth, imageHeight);
 
   return {
     filename: normalizedFilename,
@@ -671,8 +675,8 @@ function normalizeSpriteRecord(record: SpriteRecord): SpriteRecord {
     impassible: Boolean(record.impassible),
     is_flat: Boolean(record.is_flat),
     item_id: Math.max(0, Math.round(normalizeFiniteNumber(record.item_id, 0))),
-    mount_x: normalizeFiniteNumber(record.mount_x, imageWidth / 2),
-    mount_y: normalizeFiniteNumber(record.mount_y, imageHeight / 2),
+    mount_x: normalizeFiniteNumber(record.mount_x, defaultMount.mount_x),
+    mount_y: normalizeFiniteNumber(record.mount_y, defaultMount.mount_y),
     name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : path.parse(normalizedFilename).name,
     offset_x: normalizeFiniteNumber(record.offset_x, 0),
     offset_y: normalizeFiniteNumber(record.offset_y, 0),
@@ -692,24 +696,27 @@ function parseSpriteRecord(relativePath: string, jsonFileName: string, candidate
   const fallbackFilename = `${path.parse(jsonFileName).name}${SPRITE_IMAGE_EXTENSION}`;
   const filename =
     typeof record.filename === "string" && record.filename.trim() ? record.filename.trim() : fallbackFilename;
+  const fallbackImageWidth = normalizeFiniteNumber(record.image_w, TILE_SIZE);
+  const fallbackImageHeight = normalizeFiniteNumber(record.image_h, TILE_SIZE);
+  const defaultMount = getDefaultSpriteMount(fallbackImageWidth, fallbackImageHeight);
 
   try {
     return normalizeSpriteRecord({
       filename,
-      image_h: normalizeFiniteNumber(record.image_h, TILE_SIZE),
-      image_w: normalizeFiniteNumber(record.image_w, TILE_SIZE),
+      image_h: fallbackImageHeight,
+      image_w: fallbackImageWidth,
       impassible: Boolean(record.impassible),
       is_flat: Boolean(record.is_flat),
       item_id: normalizeFiniteNumber(record.item_id, 0),
-      mount_x: normalizeFiniteNumber(record.mount_x, normalizeFiniteNumber(record.image_w, TILE_SIZE) / 2),
-      mount_y: normalizeFiniteNumber(record.mount_y, normalizeFiniteNumber(record.image_h, TILE_SIZE) / 2),
+      mount_x: normalizeFiniteNumber(record.mount_x, defaultMount.mount_x),
+      mount_y: normalizeFiniteNumber(record.mount_y, defaultMount.mount_y),
       name: typeof record.name === "string" ? record.name : path.parse(filename).name,
       offset_x: normalizeFiniteNumber(record.offset_x, 0),
       offset_y: normalizeFiniteNumber(record.offset_y, 0),
       path: relativePath,
       thumbnail: "",
-      tile_h: normalizeFiniteNumber(record.tile_h, normalizeFiniteNumber(record.image_h, TILE_SIZE) / TILE_SIZE),
-      tile_w: normalizeFiniteNumber(record.tile_w, normalizeFiniteNumber(record.image_w, TILE_SIZE) / TILE_SIZE)
+      tile_h: normalizeFiniteNumber(record.tile_h, fallbackImageHeight / TILE_SIZE),
+      tile_w: normalizeFiniteNumber(record.tile_w, fallbackImageWidth / TILE_SIZE)
     });
   } catch {
     return null;

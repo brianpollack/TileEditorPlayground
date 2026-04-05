@@ -1,16 +1,21 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo } from "react";
 import { faPenToSquare, faTrashCan } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 
 import { PREVIEW_SIZE, TILE_SIZE } from "../lib/constants";
 import { describeSlot, type SlotKey } from "../lib/slots";
 import { actionButtonClass } from "./buttonStyles";
+import { CheckerboardFrame } from "./CheckerboardFrame";
+import { ConfirmationDialog } from "./ConfirmationDialog";
+import { FileDropTarget } from "./FileDropTarget";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
+import { SectionEyebrow } from "./SectionEyebrow";
 import {
   canvasViewportClass,
-  modalSurfaceClass,
+  darkCanvasClass,
+  destructiveButtonClass,
   secondaryButtonClass
 } from "./uiStyles";
 import type { SlotRecord, TileRecord } from "../types";
@@ -68,19 +73,6 @@ function TileEditorWorkspaceImpl({
   sourceCanvasRef,
   sourceImage
 }: TileEditorWorkspaceProps) {
-  const [isImageDropActive, setImageDropActive] = useState(false);
-
-  function handleImageDrop(event: React.DragEvent<HTMLDivElement>) {
-    event.preventDefault();
-    setImageDropActive(false);
-
-    const nextFile = event.dataTransfer.files?.[0];
-
-    if (nextFile) {
-      onFileSelected(nextFile);
-    }
-  }
-
   return (
     <div className="grid min-h-0 gap-4 xl:grid-cols-2">
       <Panel
@@ -93,33 +85,7 @@ function TileEditorWorkspaceImpl({
             >
               Browse Image
             </button>
-            <div
-              className={`flex min-h-11 min-w-[10rem] items-center justify-center border border-dashed px-3 py-2 text-sm font-semibold transition ${
-                isImageDropActive
-                  ? "border-[#d88753] bg-white text-[#142127] shadow-[inset_0_0_0_1px_rgba(216,135,83,0.22)]"
-                  : "border-[#c3d0cb] bg-white/86 text-[#4a6069]"
-              }`}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                setImageDropActive(true);
-              }}
-              onDragLeave={(event) => {
-                event.preventDefault();
-                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                  setImageDropActive(false);
-                }
-              }}
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "copy";
-                if (!isImageDropActive) {
-                  setImageDropActive(true);
-                }
-              }}
-              onDrop={handleImageDrop}
-            >
-              Drop From Finder
-            </div>
+            <FileDropTarget idleLabel="Drop From Finder" onFileSelected={onFileSelected} />
             <input
               accept="image/*"
               hidden
@@ -140,9 +106,7 @@ function TileEditorWorkspaceImpl({
         title="Source Image"
       >
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-            Selector Size
-          </span>
+          <SectionEyebrow>Selector Size</SectionEyebrow>
           {SELECTOR_SIZES.map((size) => {
             const disabled = selectedSlotKey === "main" && size !== TILE_SIZE;
 
@@ -150,8 +114,8 @@ function TileEditorWorkspaceImpl({
               <button
                 className={`min-h-10 border px-3 py-2 text-sm font-semibold transition ${
                   activeSelectorSize === size
-                    ? "border-[#d88753] bg-white text-[#142127] shadow-[inset_0_0_0_1px_rgba(216,135,83,0.25)]"
-                    : "border-[#c3d0cb] bg-white/85 text-[#4a6069] hover:bg-white hover:text-[#142127]"
+                    ? "theme-border-accent theme-bg-panel theme-text-primary theme-ring-inset-accent"
+                    : "theme-border-panel theme-bg-input-soft theme-text-muted theme-hover-bg-panel theme-hover-text-primary"
                 }`}
                 disabled={disabled}
                 key={size}
@@ -168,14 +132,14 @@ function TileEditorWorkspaceImpl({
 
         <div className={`relative flex min-h-[24rem] items-center justify-center ${canvasViewportClass}`}>
           <canvas
-            className={`${sourceImage ? "block" : "hidden"} max-w-full bg-[#0d161b] [image-rendering:pixelated]`}
+            className={`${sourceImage ? "block" : "hidden"} ${darkCanvasClass} max-w-full`}
             onClick={onSourceCanvasClick}
             onMouseMove={onSourceCanvasMouseMove}
             ref={sourceCanvasRef}
           />
           {!sourceImage ? (
-            <div className="absolute inset-0 grid place-items-center gap-1 p-6 text-center text-sm text-[#4a6069]">
-              <strong className="font-serif text-[1.35rem] text-[#142127]">
+            <div className="absolute inset-0 grid place-items-center gap-1 p-6 text-center text-sm theme-text-muted">
+              <strong className="font-serif text-[1.35rem] theme-text-primary">
                 Source image goes here
               </strong>
               <span>Use Browse Image or provide `?image=maps/example.png` in the URL.</span>
@@ -213,7 +177,7 @@ function TileEditorWorkspaceImpl({
           </div>
 
           <canvas
-            className="block h-auto w-full bg-[#0d161b] [image-rendering:pixelated]"
+            className={`block h-auto w-full ${darkCanvasClass}`}
             height={PREVIEW_SIZE}
             ref={previewCanvasRef}
             width={PREVIEW_SIZE}
@@ -226,12 +190,12 @@ function TileEditorWorkspaceImpl({
 
               return (
                 <div
-                  className={`flex min-w-0 flex-col gap-2 border bg-[#13262f]/96 p-2 text-left transition ${
+                  className={`flex min-w-0 flex-col gap-2 border theme-bg-canvas p-2 text-left transition ${
                     selected
-                      ? "border-[#d88753] shadow-[inset_0_0_0_1px_rgba(216,135,83,0.25)]"
+                      ? "theme-border-accent theme-ring-inset-accent"
                       : slotRecord
-                        ? "border-[#5a7b4d]/45 hover:border-[#4b86ff]"
-                        : "border-[#c3d0cb]/85 hover:border-[#4b86ff]"
+                        ? "theme-border-success theme-hover-border-info"
+                        : "theme-border-panel-quiet theme-hover-border-info"
                   }`}
                   key={slotKey}
                 >
@@ -249,17 +213,18 @@ function TileEditorWorkspaceImpl({
                         src={slotRecord.pixels}
                       />
                     ) : (
-                      <div
-                        className={`grid aspect-square w-full place-items-center bg-[linear-gradient(45deg,rgba(255,255,255,0.05)_25%,transparent_25%,transparent_75%,rgba(255,255,255,0.05)_75%),linear-gradient(45deg,rgba(255,255,255,0.05)_25%,transparent_25%,transparent_75%,rgba(255,255,255,0.05)_75%)] bg-[length:24px_24px] bg-[position:0_0,12px_12px] text-center text-[0.95rem] font-extrabold ${
-                          selected ? "text-[#d88753]" : "text-white/76"
+                      <CheckerboardFrame
+                        className={`aspect-square w-full text-center text-[0.95rem] font-extrabold ${
+                          selected ? "theme-text-accent" : "theme-text-inverse-soft"
                         }`}
+                        size="md"
                       >
                         {describeSlot(slotKey as SlotKey)}
-                      </div>
+                      </CheckerboardFrame>
                     )}
-                    <div className={`grid gap-0.5 ${selected ? "text-[#d88753]" : "text-white/86"}`}>
+                    <div className={`grid gap-0.5 ${selected ? "theme-text-accent" : "theme-text-inverse-soft"}`}>
                       <strong className="truncate text-xs">{describeSlot(slotKey as SlotKey)}</strong>
-                      <span className={`truncate text-[10px] ${selected ? "text-[#d88753]" : "text-white/58"}`}>
+                      <span className={`truncate text-[10px] ${selected ? "theme-text-accent" : "theme-text-inverse-muted"}`}>
                         {slotRecord
                           ? `${slotRecord.size}px @ ${slotRecord.source_x}, ${slotRecord.source_y}`
                           : "Empty"}
@@ -268,7 +233,7 @@ function TileEditorWorkspaceImpl({
                   </button>
                   <div className="flex items-center gap-1">
                     <button
-                      className="grid h-6 w-6 place-items-center border border-white/15 bg-white/8 text-white/80 transition hover:border-[#4b86ff] hover:text-[#4b86ff]"
+                      className="grid h-6 w-6 place-items-center border theme-border-inverse-soft bg-white/8 theme-text-inverse-soft transition theme-hover-border-info hover:text-[var(--info)]"
                       onClick={() => {
                         onOpenPaintEditor(slotKey as SlotKey);
                       }}
@@ -278,7 +243,7 @@ function TileEditorWorkspaceImpl({
                       <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
                     </button>
                     <button
-                      className="grid h-6 w-6 place-items-center border border-white/15 bg-white/8 text-white/80 transition hover:border-[#d88753] hover:text-[#d88753] disabled:cursor-not-allowed disabled:opacity-40"
+                      className="grid h-6 w-6 place-items-center border theme-border-inverse-soft bg-white/8 theme-text-inverse-soft transition theme-hover-border-accent theme-hover-text-accent disabled:cursor-not-allowed disabled:opacity-40"
                       disabled={!slotRecord}
                       onClick={() => {
                         onRequestClearSlot(slotKey as SlotKey);
@@ -295,12 +260,12 @@ function TileEditorWorkspaceImpl({
           </div>
           </div>
           {!activeTile ? (
-            <div className="absolute inset-0 z-20 grid place-items-center border border-[#c3d0cb]/70 bg-[rgba(236,239,238,0.9)] px-6 text-center">
+            <div className="absolute inset-0 z-20 grid place-items-center border theme-border-panel-faint theme-bg-empty-state px-6 text-center">
               <div className="grid gap-2">
-                <strong className="font-serif text-[1.3rem] text-[#5c6d68]">
+                <strong className="font-serif text-[1.3rem] theme-text-success">
                   Select a tile
                 </strong>
-                <span className="text-sm leading-6 text-[#6f817c]">
+                <span className="text-sm leading-6 theme-text-success-soft">
                   Choose a tile from the Tile Library before editing slots or previewing output.
                 </span>
               </div>
@@ -310,33 +275,26 @@ function TileEditorWorkspaceImpl({
       </Panel>
 
       {slotPendingClear && activeTile ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-[#0d161b]/55 px-4">
-          <div className={`${modalSurfaceClass} max-w-md p-5`}>
-            <div className="grid gap-2">
-              <h3 className="font-serif text-[1.45rem] text-[#142127]">Clear Slot?</h3>
-              <p className="text-sm leading-6 text-[#4a6069]">
-                Remove {describeSlot(slotPendingClear)} from <span className="font-semibold text-[#142127]">{activeTile.slug}</span>?
-                This only clears the working draft until you save the tile.
-              </p>
-            </div>
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                className={secondaryButtonClass}
-                onClick={onCancelClearSlot}
-                type="button"
-              >
+        <ConfirmationDialog
+          actions={
+            <>
+              <button className={secondaryButtonClass} onClick={onCancelClearSlot} type="button">
                 Cancel
               </button>
-              <button
-                className="min-h-10 border border-[#d88753] bg-[#d88753] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#c97842]"
-                onClick={onConfirmClearSlot}
-                type="button"
-              >
+              <button className={destructiveButtonClass} onClick={onConfirmClearSlot} type="button">
                 Clear Slot
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          description={
+            <>
+              Remove {describeSlot(slotPendingClear)} from{" "}
+              <span className="font-semibold theme-text-primary">{activeTile.slug}</span>? This only
+              clears the working draft until you save the tile.
+            </>
+          }
+          title="Clear Slot?"
+        />
       ) : null}
     </div>
   );

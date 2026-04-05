@@ -20,6 +20,7 @@ import {
   revokeObjectUrl,
   triggerDownload
 } from "../lib/images";
+import { getDefaultSpriteMount, spriteUsesDefaultMount } from "../lib/sprites";
 import {
   buildPreviewPlacements,
   clampSelection,
@@ -520,7 +521,10 @@ export function TileWorkshop() {
           ? {
               ...currentSprite,
               image_h: nextImage.height,
-              image_w: nextImage.width
+              image_w: nextImage.width,
+              ...(spriteUsesDefaultMount(currentSprite)
+                ? getDefaultSpriteMount(nextImage.width, nextImage.height)
+                : {})
             }
           : currentSprite
       );

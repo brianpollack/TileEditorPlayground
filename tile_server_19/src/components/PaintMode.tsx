@@ -31,9 +31,13 @@ import {
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
+import { SectionEyebrow } from "./SectionEyebrow";
 import {
   canvasViewportClass,
   compactTextInputClass,
+  iconButtonClass,
+  modalBackdropClass,
+  modalSurfaceClass,
   previewCanvasClass,
   previewSelectionButtonClass,
   sectionCardClass,
@@ -452,7 +456,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
             >
               -
             </button>
-            <span className="text-sm font-medium text-[#142127]">Zoom {zoomPercent}% ([ / ])</span>
+            <span className="text-sm font-medium theme-text-primary">Zoom {zoomPercent}% ([ / ])</span>
             <button
               className={zoomButtonClass}
               disabled={!canZoomOut}
@@ -467,12 +471,10 @@ const PaintWorkspace = memo(function PaintWorkspace({
 
       <div className="grid content-start gap-4">
         <div className={sectionCardClass}>
-          <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-            Preview
-          </div>
+          <SectionEyebrow>Preview</SectionEyebrow>
           <div className="flex items-start gap-3">
             <div className="grid gap-1">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#4a6069]">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.08em] theme-text-muted">
                 128x128
               </div>
               <canvas
@@ -481,7 +483,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
               />
             </div>
             <div className="grid gap-1">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#4a6069]">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.08em] theme-text-muted">
                 64x64
               </div>
               <canvas
@@ -502,7 +504,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
             >
               <div className="flex items-center justify-between gap-2">
                 <button
-                  className="text-left text-xs font-extrabold uppercase tracking-[0.12em] text-[#142127]"
+                  className="text-left text-xs font-extrabold uppercase tracking-[0.12em] theme-text-primary"
                   onClick={() => {
                     onSelectLayer(layerIndex);
                   }}
@@ -511,7 +513,7 @@ const PaintWorkspace = memo(function PaintWorkspace({
                   Layer {layerIndex}
                 </button>
                 <button
-                  className="grid h-6 w-6 place-items-center border border-[#c3d0cb] text-[#4a6069] transition hover:border-[#d88753] hover:text-[#d88753]"
+                  className={iconButtonClass}
                   onClick={() => {
                     onClearLayer(layerIndex);
                   }}
@@ -1885,7 +1887,7 @@ export function PaintMode({ session }: PaintModeProps) {
   if (!tileRecord) {
     return (
       <Panel title="Paint Mode">
-        <p className="text-sm text-[#4a6069]">This slot no longer exists in the tile library.</p>
+        <p className="text-sm theme-text-muted">This slot no longer exists in the tile library.</p>
       </Panel>
     );
   }
@@ -1913,8 +1915,8 @@ export function PaintMode({ session }: PaintModeProps) {
                 <button
                   className={`relative flex min-h-[3.25rem] items-center justify-center border px-2 py-[6px] text-center transition ${
                     active
-                      ? "border-[#d88753] bg-white text-[#142127] shadow-[inset_0_0_0_1px_rgba(216,135,83,0.25)]"
-                      : "border-[#c3d0cb]/80 bg-white/88 text-[#4a6069] hover:border-[#4b86ff] hover:bg-white hover:text-[#142127]"
+                      ? "theme-border-accent theme-bg-panel theme-text-primary theme-ring-inset-accent"
+                      : "theme-border-panel-quiet theme-bg-input theme-text-muted theme-hover-border-info theme-hover-bg-panel theme-hover-text-primary"
                   }`}
                   key={tool.id}
                   onClick={() => {
@@ -1927,7 +1929,7 @@ export function PaintMode({ session }: PaintModeProps) {
                   </span>
                   <span className="text-[11px] font-semibold leading-tight">{tool.label}</span>
                   {tool.shortcut ? (
-                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-[#c3d0cb] bg-white/80 px-1.5 py-0.5 text-[10px] leading-none text-[#4a6069]">
+                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border theme-border-panel theme-bg-input px-1.5 py-0.5 text-[10px] leading-none theme-text-muted">
                       {tool.shortcut}
                     </span>
                   ) : null}
@@ -1938,10 +1940,10 @@ export function PaintMode({ session }: PaintModeProps) {
 
           {selectedTool === "marquee" && marqueeSelection && !marqueeSelectingRef.current ? (
             <div className={toolSectionCardClass}>
-              <div className="text-sm font-semibold text-[#142127]">Marquee Selection</div>
+              <div className="text-sm font-semibold theme-text-primary">Marquee Selection</div>
               <div className="grid grid-cols-2 gap-2">
                 <button
-                  className="min-h-10 border border-[#c3d0cb] bg-white px-3 py-2 text-sm font-semibold text-[#142127] transition hover:border-[#4b86ff] hover:bg-white"
+                  className="min-h-10 border theme-border-panel theme-bg-panel px-3 py-2 text-sm font-semibold theme-text-primary transition theme-hover-border-info theme-hover-bg-panel"
                   onClick={() => {
                     if (copyMarqueeSelectionToClipboard(marqueeSelection)) {
                       clearMarqueeSelection();
@@ -1952,7 +1954,7 @@ export function PaintMode({ session }: PaintModeProps) {
                   Copy to Clipboard [C]
                 </button>
                 <button
-                  className="min-h-10 border border-[#c3d0cb] bg-white px-3 py-2 text-sm font-semibold text-[#142127] transition hover:border-[#d88753] hover:bg-white"
+                  className="min-h-10 border theme-border-panel theme-bg-panel px-3 py-2 text-sm font-semibold theme-text-primary transition theme-hover-border-accent theme-hover-bg-panel"
                   onClick={() => {
                     eraseMarqueeSelectionFromLayer(marqueeSelection);
                   }}
@@ -1965,12 +1967,12 @@ export function PaintMode({ session }: PaintModeProps) {
           ) : null}
 
           <div className={toolSectionCardClass}>
-            <div className="flex items-center gap-2 text-sm font-semibold text-[#142127]">
-              <FontAwesomeIcon className="h-4 w-4 text-[#4b86ff]" icon={faDroplet} />
+            <div className="flex items-center gap-2 text-sm font-semibold theme-text-primary">
+              <FontAwesomeIcon className="h-4 w-4 text-[var(--info)]" icon={faDroplet} />
               Color Selection
             </div>
             <input
-              className="h-11 w-full cursor-pointer border border-[#c3d0cb] bg-white"
+              className="h-11 w-full cursor-pointer border theme-border-panel theme-bg-panel"
               onChange={(event) => {
                 updatePaintEditorUiState({ paintColor: event.currentTarget.value });
               }}
@@ -1982,8 +1984,8 @@ export function PaintMode({ session }: PaintModeProps) {
                 <button
                   className={`h-8 w-8 border transition ${
                     paintColor === presetColor
-                      ? "border-[#142127] shadow-[inset_0_0_0_2px_rgba(255,255,255,0.9)]"
-                      : "border-[#c3d0cb]"
+                      ? "theme-border-brand shadow-[inset_0_0_0_2px_color-mix(in_srgb,var(--panel)_90%,transparent)]"
+                      : "theme-border-panel"
                   }`}
                   key={presetColor}
                   onClick={() => {
@@ -1998,12 +2000,12 @@ export function PaintMode({ session }: PaintModeProps) {
           </div>
 
           <div className={toolSectionCardClass}>
-            <div className="flex items-center gap-2 text-sm font-semibold text-[#142127]">
-              <FontAwesomeIcon className="h-4 w-4 text-[#d88753]" icon={faCropSimple} />
+            <div className="flex items-center gap-2 text-sm font-semibold theme-text-primary">
+              <FontAwesomeIcon className="h-4 w-4 theme-text-accent" icon={faCropSimple} />
               Advanced Tools
             </div>
             <button
-              className="min-h-10 border border-[#c3d0cb] bg-white px-3 py-2 text-sm font-semibold text-[#142127] transition hover:border-[#d88753] hover:bg-white"
+              className="min-h-10 border theme-border-panel theme-bg-panel px-3 py-2 text-sm font-semibold theme-text-primary transition theme-hover-border-accent theme-hover-bg-panel"
               onClick={() => {
                 setIsEdgerConfirmOpen(true);
               }}
@@ -2013,8 +2015,8 @@ export function PaintMode({ session }: PaintModeProps) {
             </button>
           </div>
 
-          <div className={`${toolSectionCardClass} gap-2 text-sm text-[#4a6069]`}>
-            <div className="font-semibold text-[#142127]">{session.title}</div>
+          <div className={`${toolSectionCardClass} gap-2 text-sm theme-text-muted`}>
+            <div className="font-semibold theme-text-primary">{session.title}</div>
             <div>Editing Layer {selectedLayerIndex}.</div>
             <div>
               {slotRecord
@@ -2081,15 +2083,15 @@ export function PaintMode({ session }: PaintModeProps) {
       </Panel>
 
       {isEdgerConfirmOpen ? (
-        <div className="fixed inset-0 z-[120] grid place-items-center bg-[rgba(20,33,39,0.45)] p-4">
-          <div className="w-full max-w-md border border-[#c3d0cb] bg-[linear-gradient(180deg,rgba(255,253,248,0.99),rgba(255,251,244,0.97))] p-5 shadow-[0_24px_60px_rgba(20,33,39,0.28)]">
+        <div className={`${modalBackdropClass} z-[120] p-4`}>
+          <div className={`${modalSurfaceClass} w-full max-w-md p-5`}>
             <div className="grid gap-3">
-              <div className="text-lg font-semibold text-[#142127]">Run Edger?</div>
-              <div className="text-sm text-[#4a6069]">
+              <div className="text-lg font-semibold theme-text-primary">Run Edger?</div>
+              <div className="text-sm theme-text-muted">
                 Are you sure you would like to run the Edger tool which will erase the contents of layer {selectedLayerIndex} and replace it with the new image?
               </div>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span className="font-semibold text-[#142127]">Edger Mode Size</span>
+              <label className="grid gap-1 text-sm theme-text-muted">
+                <span className="font-semibold theme-text-primary">Edger Mode Size</span>
                 <input
                   className={compactTextInputClass}
                   inputMode="numeric"
@@ -2112,7 +2114,7 @@ export function PaintMode({ session }: PaintModeProps) {
                   No
                 </button>
                 <button
-                  className="min-h-10 border border-[#d88753] bg-[#d88753] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#c77641]"
+                  className="min-h-10 border theme-border-accent theme-bg-accent px-4 py-2 text-sm font-semibold theme-text-inverse transition hover:bg-[color-mix(in_srgb,var(--accent)_90%,black)]"
                   onClick={handleConfirmEdger}
                   type="button"
                 >

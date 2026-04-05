@@ -1,15 +1,19 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo } from "react";
 import { faUpDownLeftRight } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 
 import { TILE_SIZE } from "../lib/constants";
 import { actionButtonClass } from "./buttonStyles";
+import { FileDropTarget } from "./FileDropTarget";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
+import { SectionEyebrow } from "./SectionEyebrow";
 import {
   canvasViewportClass,
-  compactTextInputClass
+  compactTextInputClass,
+  darkCanvasClass,
+  readOnlyInputClass
 } from "./uiStyles";
 import type { SpriteRecord } from "../types";
 
@@ -59,18 +63,8 @@ function SpriteEditorWorkspaceImpl({
   spriteRecord,
   statusMessage
 }: SpriteEditorWorkspaceProps) {
-  const [isImageDropActive, setImageDropActive] = useState(false);
-
-  function handleImageDrop(event: React.DragEvent<HTMLDivElement>) {
-    event.preventDefault();
-    setImageDropActive(false);
-
-    const nextFile = event.dataTransfer.files?.[0];
-
-    if (nextFile) {
-      onFileSelected(nextFile);
-    }
-  }
+  const metadataFieldClass = `${compactTextInputClass} w-full max-w-[200px]`;
+  const readOnlyMetadataFieldClass = `${metadataFieldClass} ${readOnlyInputClass}`;
 
   return (
     <Panel
@@ -83,33 +77,7 @@ function SpriteEditorWorkspaceImpl({
           >
             Browse Image
           </button>
-          <div
-            className={`flex min-h-11 min-w-[10rem] items-center justify-center border border-dashed px-3 py-2 text-sm font-semibold transition ${
-              isImageDropActive
-                ? "border-[#d88753] bg-white text-[#142127] shadow-[inset_0_0_0_1px_rgba(216,135,83,0.22)]"
-                : "border-[#c3d0cb] bg-white/86 text-[#4a6069]"
-            }`}
-            onDragEnter={(event) => {
-              event.preventDefault();
-              setImageDropActive(true);
-            }}
-            onDragLeave={(event) => {
-              event.preventDefault();
-              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                setImageDropActive(false);
-              }
-            }}
-            onDragOver={(event) => {
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "copy";
-              if (!isImageDropActive) {
-                setImageDropActive(true);
-              }
-            }}
-            onDrop={handleImageDrop}
-          >
-            Drop From Finder
-          </div>
+          <FileDropTarget idleLabel="Drop From Finder" onFileSelected={onFileSelected} />
           <button
             className={actionButtonClass}
             disabled={!spriteRecord || isSaving}
@@ -142,8 +110,8 @@ function SpriteEditorWorkspaceImpl({
           <button
             className={`absolute left-3 top-3 z-10 min-h-10 rounded-[4px] border px-3 py-2 text-sm font-semibold transition ${
               isMoveToolActive
-                ? "border-[#16324f] bg-[#16324f] text-white"
-                : "border-[#c3d0cb] bg-white/94 text-[#142127] hover:bg-white"
+                ? "theme-border-brand theme-bg-brand theme-text-inverse"
+                : "theme-border-panel theme-bg-input theme-text-primary theme-hover-bg-panel"
             }`}
             disabled={!spriteRecord}
             onClick={onToggleMoveTool}
@@ -155,7 +123,7 @@ function SpriteEditorWorkspaceImpl({
             </span>
           </button>
           <canvas
-            className={`${sourceImage ? "block" : "hidden"} max-w-full [image-rendering:pixelated] ${
+            className={`${sourceImage ? "block" : "hidden"} ${darkCanvasClass} max-w-full ${
               isMoveToolDragging ? "cursor-grabbing" : isMoveToolActive ? "cursor-move" : "cursor-default"
             }`}
             onMouseDown={onSourceCanvasMouseDown}
@@ -165,8 +133,8 @@ function SpriteEditorWorkspaceImpl({
             ref={sourceCanvasRef}
           />
           {!sourceImage ? (
-            <div className="absolute inset-0 grid place-items-center gap-1 p-6 text-center text-sm text-[#4a6069]">
-              <strong className="font-serif text-[1.35rem] text-[#142127]">
+            <div className="absolute inset-0 grid place-items-center gap-1 p-6 text-center text-sm theme-text-muted">
+              <strong className="font-serif text-[1.35rem] theme-text-primary">
                 Sprite image goes here
               </strong>
               <span>Use Browse Image or drop a replacement image from Finder.</span>
@@ -174,140 +142,151 @@ function SpriteEditorWorkspaceImpl({
           ) : null}
         </div>
 
-        {statusMessage ? <div className="text-sm text-[#4a6069]">{statusMessage}</div> : null}
+        {statusMessage ? <div className="text-sm theme-text-muted">{statusMessage}</div> : null}
 
         {spriteRecord ? (
-          <div className="grid gap-4 border border-[#c3d0cb]/75 bg-white/88 p-4">
+          <div className="grid gap-4 border theme-border-panel-soft theme-bg-input p-4">
             <div className="grid gap-1">
-              <strong className="text-sm text-[#142127]">Sprite Metadata</strong>
-              <span className="text-xs text-[#4a6069]">
+              <strong className="text-sm theme-text-primary">Sprite Metadata</strong>
+              <span className="text-xs theme-text-muted">
                 The image is shown with a {TILE_SIZE}x{TILE_SIZE} grid overlay at 25% opacity.
               </span>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Filename</span>
-                <input className={`${compactTextInputClass} bg-[#e6e8e7] text-[#5d6a65]`} readOnly value={spriteRecord.filename} />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Image Width</span>
-                <input className={`${compactTextInputClass} bg-[#e6e8e7] text-[#5d6a65]`} readOnly value={String(spriteRecord.image_w)} />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Image Height</span>
-                <input className={`${compactTextInputClass} bg-[#e6e8e7] text-[#5d6a65]`} readOnly value={String(spriteRecord.image_h)} />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069] md:col-span-2 xl:col-span-1">
-                <span>Name</span>
-                <input
-                  className={compactTextInputClass}
-                  onChange={(event) => {
-                    onSpriteTextChange("name", event.currentTarget.value);
-                  }}
-                  value={spriteRecord.name}
-                />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Tile Width</span>
-                <input
-                  className={compactTextInputClass}
-                  onChange={(event) => {
-                    onSpriteNumberChange("tile_w", event.currentTarget.value);
-                  }}
-                  type="number"
-                  value={String(spriteRecord.tile_w)}
-                />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Tile Height</span>
-                <input
-                  className={compactTextInputClass}
-                  onChange={(event) => {
-                    onSpriteNumberChange("tile_h", event.currentTarget.value);
-                  }}
-                  type="number"
-                  value={String(spriteRecord.tile_h)}
-                />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Item ID</span>
-                <input
-                  className={compactTextInputClass}
-                  onChange={(event) => {
-                    onSpriteNumberChange("item_id", event.currentTarget.value);
-                  }}
-                  type="number"
-                  value={String(spriteRecord.item_id)}
-                />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Offset X</span>
-                <input
-                  className={compactTextInputClass}
-                  onChange={(event) => {
-                    onSpriteNumberChange("offset_x", event.currentTarget.value);
-                  }}
-                  type="number"
-                  value={String(spriteRecord.offset_x)}
-                />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Offset Y</span>
-                <input
-                  className={compactTextInputClass}
-                  onChange={(event) => {
-                    onSpriteNumberChange("offset_y", event.currentTarget.value);
-                  }}
-                  type="number"
-                  value={String(spriteRecord.offset_y)}
-                />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Mount X</span>
-                <input
-                  className={compactTextInputClass}
-                  onChange={(event) => {
-                    onSpriteNumberChange("mount_x", event.currentTarget.value);
-                  }}
-                  type="number"
-                  value={String(spriteRecord.mount_x)}
-                />
-              </label>
-              <label className="grid gap-1 text-sm text-[#4a6069]">
-                <span>Mount Y</span>
-                <input
-                  className={compactTextInputClass}
-                  onChange={(event) => {
-                    onSpriteNumberChange("mount_y", event.currentTarget.value);
-                  }}
-                  type="number"
-                  value={String(spriteRecord.mount_y)}
-                />
-              </label>
-            </div>
+            <div className="grid gap-6 xl:grid-cols-2">
+              <div className="grid content-start gap-3">
+                <SectionEyebrow>Read Only</SectionEyebrow>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Filename</span>
+                    <input className={readOnlyMetadataFieldClass} readOnly value={spriteRecord.filename} />
+                  </label>
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Image Width</span>
+                    <input className={readOnlyMetadataFieldClass} readOnly value={String(spriteRecord.image_w)} />
+                  </label>
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Image Height</span>
+                    <input className={readOnlyMetadataFieldClass} readOnly value={String(spriteRecord.image_h)} />
+                  </label>
+                </div>
+              </div>
 
-            <div className="flex flex-wrap items-center gap-5">
-              <label className="flex items-center gap-2 text-sm text-[#4a6069]">
-                <input
-                  checked={spriteRecord.is_flat}
-                  onChange={(event) => {
-                    onSpriteBooleanChange("is_flat", event.currentTarget.checked);
-                  }}
-                  type="checkbox"
-                />
-                Flat
-              </label>
-              <label className="flex items-center gap-2 text-sm text-[#4a6069]">
-                <input
-                  checked={spriteRecord.impassible}
-                  onChange={(event) => {
-                    onSpriteBooleanChange("impassible", event.currentTarget.checked);
-                  }}
-                  type="checkbox"
-                />
-                Impassible
-              </label>
+              <div className="grid content-start gap-3">
+                <SectionEyebrow>Editable</SectionEyebrow>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Name</span>
+                    <input
+                      className={metadataFieldClass}
+                      onChange={(event) => {
+                        onSpriteTextChange("name", event.currentTarget.value);
+                      }}
+                      value={spriteRecord.name}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Tile Width</span>
+                    <input
+                      className={metadataFieldClass}
+                      onChange={(event) => {
+                        onSpriteNumberChange("tile_w", event.currentTarget.value);
+                      }}
+                      type="number"
+                      value={String(spriteRecord.tile_w)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Tile Height</span>
+                    <input
+                      className={metadataFieldClass}
+                      onChange={(event) => {
+                        onSpriteNumberChange("tile_h", event.currentTarget.value);
+                      }}
+                      type="number"
+                      value={String(spriteRecord.tile_h)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Item ID</span>
+                    <input
+                      className={metadataFieldClass}
+                      onChange={(event) => {
+                        onSpriteNumberChange("item_id", event.currentTarget.value);
+                      }}
+                      type="number"
+                      value={String(spriteRecord.item_id)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Offset X</span>
+                    <input
+                      className={metadataFieldClass}
+                      onChange={(event) => {
+                        onSpriteNumberChange("offset_x", event.currentTarget.value);
+                      }}
+                      type="number"
+                      value={String(spriteRecord.offset_x)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Offset Y</span>
+                    <input
+                      className={metadataFieldClass}
+                      onChange={(event) => {
+                        onSpriteNumberChange("offset_y", event.currentTarget.value);
+                      }}
+                      type="number"
+                      value={String(spriteRecord.offset_y)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Mount X</span>
+                    <input
+                      className={metadataFieldClass}
+                      onChange={(event) => {
+                        onSpriteNumberChange("mount_x", event.currentTarget.value);
+                      }}
+                      type="number"
+                      value={String(spriteRecord.mount_x)}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm theme-text-muted">
+                    <span>Mount Y</span>
+                    <input
+                      className={metadataFieldClass}
+                      onChange={(event) => {
+                        onSpriteNumberChange("mount_y", event.currentTarget.value);
+                      }}
+                      type="number"
+                      value={String(spriteRecord.mount_y)}
+                    />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-5 pt-1">
+                  <label className="flex items-center gap-2 text-sm theme-text-muted">
+                    <input
+                      checked={spriteRecord.is_flat}
+                      onChange={(event) => {
+                        onSpriteBooleanChange("is_flat", event.currentTarget.checked);
+                      }}
+                      type="checkbox"
+                    />
+                    Flat
+                  </label>
+                  <label className="flex items-center gap-2 text-sm theme-text-muted">
+                    <input
+                      checked={spriteRecord.impassible}
+                      onChange={(event) => {
+                        onSpriteBooleanChange("impassible", event.currentTarget.checked);
+                      }}
+                      type="checkbox"
+                    />
+                    Impassible
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         ) : null}

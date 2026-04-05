@@ -17,8 +17,17 @@ import {
   TILE_LIBRARY_LAYERS
 } from "../lib/tileLibrary";
 import { actionButtonClass } from "./buttonStyles";
+import { CheckerboardFrame } from "./CheckerboardFrame";
+import { ConfirmationDialog } from "./ConfirmationDialog";
+import { FileDropTarget } from "./FileDropTarget";
 import { Panel } from "./Panel";
 import {
+  badgePillClass,
+  emptyStateCardClass,
+  menuItemButtonClass,
+  menuSurfaceClass,
+  overflowMenuButtonClass,
+  previewFrameClass,
   selectableCardClass,
   textInputClass
 } from "./uiStyles";
@@ -73,7 +82,6 @@ export function TileLibraryPanel() {
   const [newTileName, setNewTileName] = useState("");
   const [tileQuery, setTileQuery] = useState("");
   const [spriteImportStatus, setSpriteImportStatus] = useState("");
-  const [isSpriteDragActive, setSpriteDragActive] = useState(false);
   const [assetMenu, setAssetMenu] = useState<TileLibraryAssetMenuState | null>(null);
   const [assetPendingDelete, setAssetPendingDelete] = useState<TileLibraryAssetMenuState | null>(null);
   const [deleteStatus, setDeleteStatus] = useState("");
@@ -192,7 +200,6 @@ export function TileLibraryPanel() {
 
   useEffect(() => {
     setSpriteImportStatus("");
-    setSpriteDragActive(false);
     resetSpriteInput();
   }, [currentLibraryPath]);
 
@@ -410,14 +417,14 @@ export function TileLibraryPanel() {
       subheader={
         <div className="flex flex-wrap items-center gap-2 text-xs leading-5">
           {!breadcrumbItems.length ? (
-            <span className="text-[#7c8d88]">Select Layer</span>
+            <span className="theme-text-subtle">Select Layer</span>
           ) : (
             <>
               {breadcrumbItems.map((breadcrumb, index) => (
                 <div className="flex items-center gap-2" key={`${breadcrumb.label}:${breadcrumb.targetPath}`}>
-                  {index > 0 ? <span className="text-[#7c8d88]">/</span> : null}
+                  {index > 0 ? <span className="theme-text-subtle">/</span> : null}
                   <button
-                    className="text-[#4a6069] transition hover:text-[#142127]"
+                    className="theme-text-muted transition theme-hover-text-primary"
                     onClick={() => {
                       navigateToLibraryPath(breadcrumb.targetPath);
                     }}
@@ -427,8 +434,8 @@ export function TileLibraryPanel() {
                   </button>
                 </div>
               ))}
-              <span className="text-[#7c8d88]">/</span>
-              <span className="text-[#7c8d88]">Select Tile or Folder</span>
+              <span className="theme-text-subtle">/</span>
+              <span className="theme-text-subtle">Select Tile or Folder</span>
             </>
           )}
         </div>
@@ -445,10 +452,10 @@ export function TileLibraryPanel() {
           value={tileQuery}
         />
         {spriteImportStatus ? (
-          <div className="text-xs text-[#4a6069]">{spriteImportStatus}</div>
+          <div className="text-xs theme-text-muted">{spriteImportStatus}</div>
         ) : null}
         {newTileName && newTileName !== normalizedNewTileName ? (
-          <div className="text-xs text-[#4a6069]">
+          <div className="text-xs theme-text-muted">
             New tile will be created as <span className="font-mono">{normalizedNewTileName}</span>
           </div>
         ) : null}
@@ -458,7 +465,7 @@ export function TileLibraryPanel() {
           <button
             className={`${selectableCardClass(
               false,
-              "border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(255,253,248,0.96),rgba(244,239,226,0.84))] hover:border-[#d88753]/55 hover:bg-white"
+              "theme-border-panel-quiet theme-surface-panel theme-hover-border-accent-soft theme-hover-bg-panel"
             )} flex min-h-[4.5rem] flex-col justify-between gap-2 px-3 py-3 text-left`}
             key={folderEntry.path}
             onClick={() => {
@@ -468,21 +475,19 @@ export function TileLibraryPanel() {
           >
             <div className="flex items-start justify-between gap-3">
               <div className="grid min-w-0 gap-1">
-                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
                   Folder
                 </span>
-                <span className="truncate text-sm font-semibold text-[#142127]">{folderEntry.label}</span>
+                <span className="truncate text-sm font-semibold theme-text-primary">{folderEntry.label}</span>
               </div>
-              <span className="inline-flex min-w-7 shrink-0 items-center justify-center rounded-full border border-[#c3d0cb] bg-white/90 px-2 py-0.5 text-xs font-bold text-[#4a6069]">
-                {folderEntry.assetCount}
-              </span>
+              <span className={badgePillClass}>{folderEntry.assetCount}</span>
             </div>
           </button>
         ))}
         {filteredTiles.map((tileRecord) => (
           <div className="relative" key={tileRecord.slug}>
             <button
-              className="absolute top-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#c3d0cb] bg-white/90 text-sm font-bold text-[#4a6069] transition hover:border-[#d88753]/55 hover:text-[#142127]"
+              className={overflowMenuButtonClass}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -504,9 +509,9 @@ export function TileLibraryPanel() {
               ⋮
             </button>
             {assetMenu?.key === `tile:${tileRecord.slug}` ? (
-              <div className="absolute top-10 right-2 z-20 min-w-36 border border-[#c3d0cb] bg-white shadow-[0_18px_40px_rgba(20,33,39,0.16)]">
+              <div className={menuSurfaceClass}>
                 <button
-                  className="block w-full px-3 py-2 text-left text-sm font-semibold text-[#142127] transition hover:bg-[#f5efe3]"
+                  className={menuItemButtonClass}
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -527,7 +532,7 @@ export function TileLibraryPanel() {
             <button
               className={`${selectableCardClass(
                 tileRecord.slug === activeTileSlug,
-                "border-[#c3d0cb]/80 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
+                "theme-border-panel-quiet theme-bg-input theme-hover-border-accent-soft theme-hover-bg-panel"
               )} flex min-h-[4.5rem] w-full flex-col justify-between gap-2 px-3 py-3 pr-12 text-left`}
               onClick={() => {
                 setLibraryPath(normalizeTileLibraryPath(tileRecord.path));
@@ -537,7 +542,7 @@ export function TileLibraryPanel() {
               type="button"
             >
               <div className="grid min-w-0 gap-2">
-                <span className="truncate text-sm font-medium text-[#142127]">{tileRecord.name}</span>
+                <span className="truncate text-sm font-medium theme-text-primary">{tileRecord.name}</span>
                 {tileRecord.thumbnail ? (
                   <img
                     alt={`${tileRecord.name} thumbnail`}
@@ -554,7 +559,7 @@ export function TileLibraryPanel() {
         {filteredSprites.map((spriteRecord) => (
           <div className="relative" key={`${spriteRecord.path}/${spriteRecord.filename}`}>
             <button
-              className="absolute top-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#c3d0cb] bg-white/90 text-sm font-bold text-[#4a6069] transition hover:border-[#d88753]/55 hover:text-[#142127]"
+              className={overflowMenuButtonClass}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -577,9 +582,9 @@ export function TileLibraryPanel() {
               ⋮
             </button>
             {assetMenu?.key === getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) ? (
-              <div className="absolute top-10 right-2 z-20 min-w-36 border border-[#c3d0cb] bg-white shadow-[0_18px_40px_rgba(20,33,39,0.16)]">
+              <div className={menuSurfaceClass}>
                 <button
-                  className="block w-full px-3 py-2 text-left text-sm font-semibold text-[#142127] transition hover:bg-[#f5efe3]"
+                  className={menuItemButtonClass}
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -600,8 +605,8 @@ export function TileLibraryPanel() {
             <button
               className={`${selectableCardClass(
                 getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === activeSpriteKey,
-                "border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(239,246,239,0.92),rgba(228,236,227,0.86))] hover:border-[#d88753]/55"
-              )} flex min-h-[5.5rem] w-full items-center gap-3 px-3 py-3 pr-12 text-left shadow-[0_14px_30px_rgba(20,33,39,0.08)]`}
+                "theme-border-panel-quiet theme-bg-input theme-hover-border-accent-soft"
+              )} flex min-h-[5.5rem] w-full items-center gap-3 px-3 py-3 pr-12 text-left theme-shadow-lift`}
               onClick={() => {
                 setLibraryPath(normalizeTileLibraryPath(spriteRecord.path));
                 setActiveTileSlug("");
@@ -609,7 +614,7 @@ export function TileLibraryPanel() {
               }}
               type="button"
             >
-              <div className="flex h-20 w-20 shrink-0 items-center justify-center border border-[#c3d0cb] bg-white/90 p-2">
+              <CheckerboardFrame className={`${previewFrameClass} h-20 w-20 shrink-0 p-2`}>
                 {spriteRecord.thumbnail ? (
                   <img
                     alt={`${spriteRecord.name} sprite thumbnail`}
@@ -617,14 +622,14 @@ export function TileLibraryPanel() {
                     src={spriteRecord.thumbnail}
                   />
                 ) : null}
-              </div>
+              </CheckerboardFrame>
               <div className="grid min-w-0 gap-1">
-                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
                   Sprite
                 </span>
-                <span className="truncate text-sm font-semibold text-[#142127]">{spriteRecord.name}</span>
-                <span className="truncate text-xs font-mono text-[#4a6069]">{spriteRecord.filename}</span>
-                <span className="text-xs text-[#4a6069]">
+                <span className="truncate text-sm font-semibold theme-text-primary">{spriteRecord.name}</span>
+                <span className="truncate text-xs font-mono theme-text-muted">{spriteRecord.filename}</span>
+                <span className="text-xs theme-text-muted">
                   {spriteRecord.image_w}x{spriteRecord.image_h} px
                 </span>
               </div>
@@ -646,44 +651,19 @@ export function TileLibraryPanel() {
               ref={spriteFileInputRef}
               type="file"
             />
-            <button
-              className={`border border-dashed border-[#c3d0cb] px-4 py-4 text-center text-sm text-[#4a6069] transition ${
-                isSpriteDragActive ? "bg-[#f5efe3]" : "bg-transparent"
-              }`}
+            <FileDropTarget
+              className="w-full px-4 py-4 text-center"
               disabled={isPending}
+              idleLabel={isPending ? "Importing sprite..." : "Click or drop a PNG here to import a sprite."}
               onClick={() => {
                 spriteFileInputRef.current?.click();
               }}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                setSpriteDragActive(true);
-              }}
-              onDragLeave={(event) => {
-                event.preventDefault();
-                setSpriteDragActive(false);
-              }}
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "copy";
-                setSpriteDragActive(true);
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                setSpriteDragActive(false);
-                const nextFile = event.dataTransfer.files?.[0];
-
-                if (nextFile) {
-                  handleSpriteImport(nextFile);
-                }
-              }}
-              type="button"
-            >
-              {isPending ? "Importing sprite..." : "Click or drop a PNG here to import a sprite."}
-            </button>
+              onFileSelected={handleSpriteImport}
+            />
           </>
         ) : null}
         {!filteredFolderEntries.length && !filteredTiles.length && !filteredSprites.length ? (
-          <div className="border border-dashed border-[#c3d0cb] px-4 py-4 text-center text-sm text-[#4a6069]">
+          <div className={emptyStateCardClass}>
             {hasSelectedLibraryFolder
               ? "This folder does not contain any matching subfolders, tiles, or sprites yet."
               : "No layers match that filter."}
@@ -691,42 +671,37 @@ export function TileLibraryPanel() {
         ) : null}
       </div>
       {assetPendingDelete ? (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-[rgba(20,33,39,0.45)] px-4"
+        <ConfirmationDialog
+          actions={
+            <>
+              <button
+                className="min-h-11 border theme-border-panel theme-bg-panel px-4 py-2 font-semibold theme-text-muted transition theme-hover-text-primary"
+                disabled={isDeletingAsset}
+                onClick={() => {
+                  setAssetPendingDelete(null);
+                  setDeletingAsset(false);
+                  setDeleteStatus("");
+                }}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={actionButtonClass}
+                disabled={isDeletingAsset}
+                onClick={handleDeleteAsset}
+                type="button"
+              >
+                {isDeletingAsset ? "Removing..." : "Delete asset"}
+              </button>
+            </>
+          }
+          description={assetPendingDelete.name}
           key={assetPendingDelete.key}
+          title="Are you sure you want to remove this asset?"
         >
-          <div className="w-full max-w-md border border-[#c3d0cb] bg-[linear-gradient(180deg,rgba(255,253,248,0.98),rgba(244,239,226,0.96))] p-5 shadow-[0_24px_60px_rgba(20,33,39,0.22)]">
-            <div className="grid gap-4">
-              <div className="grid gap-1">
-                <strong className="text-base text-[#142127]">Are you sure you want to remove this asset?</strong>
-                <span className="text-sm text-[#4a6069]">{assetPendingDelete.name}</span>
-              </div>
-              {deleteStatus ? <div className="text-sm text-[#4a6069]">{deleteStatus}</div> : null}
-              <div className="flex justify-end gap-3">
-                <button
-                  className="min-h-11 border border-[#c3d0cb] bg-white px-4 py-2 font-semibold text-[#4a6069] transition hover:text-[#142127]"
-                  disabled={isDeletingAsset}
-                  onClick={() => {
-                    setAssetPendingDelete(null);
-                    setDeletingAsset(false);
-                    setDeleteStatus("");
-                  }}
-                  type="button"
-                >
-                  Cancel
-                </button>
-                <button
-                  className={actionButtonClass}
-                  disabled={isDeletingAsset}
-                  onClick={handleDeleteAsset}
-                  type="button"
-                >
-                  {isDeletingAsset ? "Removing..." : "Delete asset"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          {deleteStatus ? <div className="text-sm theme-text-muted">{deleteStatus}</div> : null}
+        </ConfirmationDialog>
       ) : null}
     </Panel>
   );

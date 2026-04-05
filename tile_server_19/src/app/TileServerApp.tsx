@@ -1547,7 +1547,7 @@ export function TileServerApp({
       <div className="min-h-screen p-5">
         <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] max-w-[1600px] flex-col gap-4">
           <div className="relative flex items-start justify-between gap-4">
-            <div className="flex w-fit flex-wrap items-center gap-1 border border-[#c3d0cb] bg-white/70 p-1 shadow-[0_1px_2px_rgba(20,33,39,0.06)] backdrop-blur">
+            <div className="flex w-fit flex-wrap items-center gap-1 border theme-border-panel theme-bg-input p-1 theme-shadow-soft backdrop-blur">
               {[
                 { id: "tile-workshop" as const, label: "Tile Editor" },
                 { id: "map-designer" as const, label: "Map Designer" }
@@ -1558,8 +1558,8 @@ export function TileServerApp({
                   <button
                     className={`px-4 py-2 text-sm font-semibold transition ${
                       isActive
-                        ? "border border-[#c3d0cb] bg-white text-[#142127] shadow-[0_1px_3px_rgba(20,33,39,0.08)]"
-                        : "border border-transparent bg-transparent text-[#4a6069] hover:bg-white/80 hover:text-[#142127]"
+                        ? "border theme-border-panel theme-bg-panel theme-text-primary theme-shadow-soft"
+                        : "border theme-border-transparent bg-transparent theme-text-muted theme-hover-bg-panel theme-hover-text-primary"
                     }`}
                     key={tab.id}
                     onClick={() => {
@@ -1589,8 +1589,8 @@ export function TileServerApp({
                   <div
                     className={`flex min-w-0 items-center border transition ${
                       isActive
-                        ? "border-[#c3d0cb] bg-white text-[#142127] shadow-[0_1px_3px_rgba(20,33,39,0.08)]"
-                        : "border-transparent bg-transparent text-[#4a6069] hover:bg-white/80 hover:text-[#142127]"
+                        ? "theme-border-panel theme-bg-panel theme-text-primary theme-shadow-soft"
+                        : "theme-border-transparent bg-transparent theme-text-muted theme-hover-bg-panel theme-hover-text-primary"
                     }`}
                     key={editor.id}
                   >
@@ -1604,7 +1604,7 @@ export function TileServerApp({
                       {editor.title}
                     </button>
                     <button
-                      className="px-2 py-2 text-xs text-[#4a6069] transition hover:text-[#142127]"
+                      className="px-2 py-2 text-xs theme-text-muted transition theme-hover-text-primary"
                       onClick={() => {
                         closePaintEditor(editor.id);
                       }}
@@ -1620,8 +1620,8 @@ export function TileServerApp({
             <button
               className={`relative inline-flex min-h-11 min-w-11 items-center justify-center border px-3 py-2 text-sm font-semibold transition ${
                 isClipboardManagerOpen
-                  ? "border-[#d88753] bg-white text-[#142127] shadow-[0_1px_3px_rgba(20,33,39,0.08)]"
-                  : "border-[#c3d0cb] bg-white/90 text-[#4a6069] hover:bg-white hover:text-[#142127]"
+                  ? "theme-border-accent theme-bg-panel theme-text-primary theme-shadow-soft"
+                  : "theme-border-panel theme-bg-input theme-text-muted theme-hover-bg-panel theme-hover-text-primary"
               }`}
               onClick={() => {
                 setClipboardManagerOpen(!isClipboardManagerOpen);
@@ -1631,7 +1631,7 @@ export function TileServerApp({
             >
               <FontAwesomeIcon className="h-4 w-4" icon={faClipboard} />
               {filledClipboardSlots > 0 ? (
-                <span className="ml-2 rounded-full bg-[#16324f] px-2 py-0.5 text-[10px] font-bold text-white">
+                <span className="ml-2 rounded-full theme-bg-brand px-2 py-0.5 text-[10px] font-bold theme-text-inverse">
                   {filledClipboardSlots}
                 </span>
               ) : null}

@@ -20,10 +20,10 @@
   body {
     min-height: 100vh;
     background:
-      radial-gradient(circle at top left, rgba(213, 224, 181, 0.7), transparent 32%),
-      radial-gradient(circle at top right, rgba(216, 135, 83, 0.24), transparent 28%),
-      linear-gradient(180deg, #faf5ea 0%, #eef5f1 100%);
-    color: #142127;
+      radial-gradient(circle at top left, color-mix(in srgb, var(--moss-soft) 70%, transparent), transparent 32%),
+      radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 24%, transparent), transparent 28%),
+      linear-gradient(180deg, var(--paper-soft) 0%, color-mix(in srgb, var(--sky) 40%, white) 100%);
+    color: var(--ink);
     font-family: var(--font-sans);
   }
 
@@ -49,5 +49,157 @@
   button:disabled,
   [aria-disabled="true"] {
     cursor: not-allowed;
+  }
+}
+
+@layer components {
+  .theme-text-primary { color: var(--ink); }
+  .theme-text-muted { color: var(--ink-soft); }
+  .theme-text-subtle { color: var(--ink-subtle); }
+  .theme-text-readonly { color: var(--ink-readonly); }
+  .theme-text-accent { color: var(--accent); }
+  .theme-text-brand { color: var(--brand); }
+  .theme-text-inverse { color: var(--panel); }
+  .theme-text-inverse-soft { color: color-mix(in srgb, var(--panel) 80%, transparent); }
+  .theme-text-inverse-muted { color: color-mix(in srgb, var(--panel) 58%, transparent); }
+  .theme-text-success { color: var(--ink-success); }
+  .theme-text-success-soft { color: var(--ink-success-soft); }
+  .theme-text-disabled { color: var(--disabled-text); }
+
+  .theme-border-panel { border-color: var(--line); }
+  .theme-border-panel-soft { border-color: color-mix(in srgb, var(--line) 75%, transparent); }
+  .theme-border-panel-faint { border-color: color-mix(in srgb, var(--line) 65%, transparent); }
+  .theme-border-panel-quiet { border-color: color-mix(in srgb, var(--line) 80%, transparent); }
+  .theme-border-accent { border-color: var(--accent); }
+  .theme-border-accent-soft { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .theme-border-brand { border-color: var(--brand); }
+  .theme-border-info { border-color: var(--info); }
+  .theme-border-success { border-color: color-mix(in srgb, var(--moss) 45%, transparent); }
+  .theme-border-disabled { border-color: var(--disabled-text); }
+  .theme-border-inverse-soft { border-color: color-mix(in srgb, white 15%, transparent); }
+  .theme-border-transparent { border-color: transparent; }
+
+  .theme-bg-input { background-color: color-mix(in srgb, var(--panel) 90%, transparent); }
+  .theme-bg-input-soft { background-color: color-mix(in srgb, var(--panel) 85%, transparent); }
+  .theme-bg-input-readonly { background-color: var(--readonly-surface); }
+  .theme-bg-panel { background-color: var(--panel); }
+  .theme-bg-paper { background-color: var(--paper); }
+  .theme-bg-paper-soft { background-color: color-mix(in srgb, var(--paper) 70%, transparent); }
+  .theme-bg-brand { background-color: var(--brand); }
+  .theme-bg-brand-muted { background-color: var(--canvas-muted); }
+  .theme-bg-accent { background-color: var(--accent); }
+  .theme-bg-accent-soft { background-color: var(--accent-surface); }
+  .theme-bg-disabled { background-color: var(--disabled-surface); }
+  .theme-bg-canvas { background-color: var(--canvas); }
+  .theme-bg-overlay { background-color: color-mix(in srgb, var(--overlay) 55%, transparent); }
+  .theme-bg-overlay-soft { background-color: color-mix(in srgb, var(--overlay) 45%, transparent); }
+  .theme-bg-empty-state { background-color: var(--empty-state); }
+
+  .theme-hover-text-primary:hover { color: var(--ink); }
+  .theme-hover-text-accent:hover { color: var(--accent); }
+  .theme-hover-border-accent:hover { border-color: var(--accent); }
+  .theme-hover-border-accent-soft:hover { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .theme-hover-border-info:hover { border-color: var(--info); }
+  .theme-hover-bg-panel:hover { background-color: var(--panel); }
+  .theme-hover-bg-input:hover { background-color: var(--panel); }
+  .theme-focus-border-accent:focus,
+  .theme-focus-border-accent:focus-visible { border-color: var(--accent); }
+  .theme-disabled-surface:disabled { background-color: var(--disabled-surface); }
+
+  .theme-shadow-card { box-shadow: var(--shadow-card); }
+  .theme-shadow-lift { box-shadow: var(--shadow-lift); }
+  .theme-shadow-modal { box-shadow: var(--shadow-modal); }
+  .theme-shadow-soft { box-shadow: var(--shadow-soft); }
+  .theme-ring-inset-accent { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .theme-ring-inset-accent-strong { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+
+  .theme-surface-panel {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), color-mix(in srgb, var(--panel) 88%, transparent));
+  }
+
+  .theme-surface-panel-header {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--moss-soft) 16%, transparent), color-mix(in srgb, var(--panel) 70%, transparent));
+  }
+
+  .theme-surface-panel-footer {
+    background: color-mix(in srgb, var(--paper) 70%, transparent);
+  }
+
+  .theme-surface-canvas-viewport {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--paper) 82%, transparent), color-mix(in srgb, var(--sky) 36%, transparent));
+  }
+
+  .theme-surface-modal {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 98%, transparent), color-mix(in srgb, var(--panel) 94%, var(--paper) 6%));
+  }
+
+  .theme-surface-floating {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 98%, transparent), color-mix(in srgb, var(--panel) 94%, transparent));
+  }
+
+  .theme-surface-menu { background-color: var(--panel); }
+
+  .theme-button-primary {
+    border-color: var(--brand);
+    background-color: var(--brand);
+    color: var(--panel);
+  }
+
+  .theme-button-primary:hover {
+    outline-color: var(--brand-hover);
+  }
+
+  .theme-button-primary:disabled {
+    border-color: var(--disabled-text);
+    background-color: var(--disabled-text);
+    color: var(--ink-disabled);
+  }
+
+  .theme-surface-checker-sm {
+    background-image:
+      linear-gradient(45deg, color-mix(in srgb, var(--paper-deep) 60%, transparent) 25%, color-mix(in srgb, var(--panel) 90%, transparent) 25%, color-mix(in srgb, var(--panel) 90%, transparent) 75%, color-mix(in srgb, var(--paper-deep) 60%, transparent) 75%),
+      linear-gradient(45deg, color-mix(in srgb, var(--paper-deep) 60%, transparent) 25%, color-mix(in srgb, var(--panel) 90%, transparent) 25%, color-mix(in srgb, var(--panel) 90%, transparent) 75%, color-mix(in srgb, var(--paper-deep) 60%, transparent) 75%);
+    background-position: 0 0, 8px 8px;
+    background-size: 16px 16px;
+  }
+
+  .theme-surface-checker-md {
+    background-image:
+      linear-gradient(45deg, color-mix(in srgb, var(--paper-deep) 60%, transparent) 25%, color-mix(in srgb, var(--panel) 90%, transparent) 25%, color-mix(in srgb, var(--panel) 90%, transparent) 75%, color-mix(in srgb, var(--paper-deep) 60%, transparent) 75%),
+      linear-gradient(45deg, color-mix(in srgb, var(--paper-deep) 60%, transparent) 25%, color-mix(in srgb, var(--panel) 90%, transparent) 25%, color-mix(in srgb, var(--panel) 90%, transparent) 75%, color-mix(in srgb, var(--paper-deep) 60%, transparent) 75%);
+    background-position: 0 0, 12px 12px;
+    background-size: 24px 24px;
+  }
+
+  .brush-palette-effects > label {
+    display: flex;
+    min-height: 2.5rem;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid var(--line);
+    background-color: var(--panel);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    color: var(--ink);
+  }
+
+  .brush-palette-effects > label > input[type="checkbox"] {
+    accent-color: var(--accent);
+    height: 1rem;
+    width: 1rem;
+  }
+
+  .brush-palette-effects > label > input[type="color"] {
+    margin-left: auto;
+    height: 2.25rem;
+    width: 3.5rem;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background-color: var(--panel);
+  }
+
+  .brush-palette-effects > label > input[type="color"]:disabled {
+    cursor: not-allowed;
+    background-color: var(--disabled-surface);
   }
 }

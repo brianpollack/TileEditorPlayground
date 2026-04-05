@@ -42,6 +42,7 @@ import {
   getMapLayerDimensions,
   isMapSpritePlacement,
   isMapTilePlacement,
+  normalizeMapLayers,
   normalizeMapDimension,
   normalizeMapTileOptions,
   serializeMapTileOptionsKey
@@ -56,12 +57,15 @@ import {
 } from "../lib/tileLibrary";
 import { useImageCache } from "../lib/useImageCache";
 import { actionButtonClass } from "./buttonStyles";
+import { CheckerboardFrame } from "./CheckerboardFrame";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
+import { SectionEyebrow } from "./SectionEyebrow";
 import {
   canvasViewportClass,
   closeButtonClass,
   compactTextInputClass,
+  emptyStateCardClass,
   iconButtonClass,
   modalSurfaceClass,
   previewCanvasClass,
@@ -205,7 +209,7 @@ const MapWorkspace = memo(function MapWorkspace({
             >
               -
             </button>
-            <span className="text-sm font-medium text-[#142127]">Scale {scalePercent}%</span>
+            <span className="text-sm font-medium theme-text-primary">Scale {scalePercent}%</span>
             <button
               className={zoomButtonClass}
               disabled={!canZoomOut}
@@ -219,9 +223,7 @@ const MapWorkspace = memo(function MapWorkspace({
 
         {brushSlotOptions.length ? (
           <div className={`${sectionCardClass} grid gap-3`}>
-            <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-              Tile Variant
-            </div>
+            <SectionEyebrow>Tile Variant</SectionEyebrow>
             <div className="flex flex-wrap gap-2">
               {brushSlotOptions.map((option) => {
                 const selected = option.slotNum === activeBrushSlotNum;
@@ -230,8 +232,8 @@ const MapWorkspace = memo(function MapWorkspace({
                   <button
                     className={`flex min-h-11 items-center gap-2 border px-2 py-2 text-left transition ${
                       selected
-                        ? "border-[#d88753] bg-[#fff4e4] text-[#142127]"
-                        : "border-[#c3d0cb] bg-white text-[#4a6069] hover:border-[#d88753] hover:text-[#142127]"
+                        ? "theme-border-accent theme-bg-accent-soft theme-text-primary"
+                        : "theme-border-panel theme-bg-panel theme-text-muted theme-hover-border-accent theme-hover-text-primary"
                     }`}
                     key={option.slotNum}
                     onClick={() => {
@@ -239,13 +241,13 @@ const MapWorkspace = memo(function MapWorkspace({
                     }}
                     type="button"
                   >
-                    <span className="grid h-9 w-9 place-items-center overflow-hidden border border-[#c3d0cb]/70 bg-[linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%),linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%)] bg-[length:16px_16px] bg-[position:0_0,8px_8px]">
+                    <CheckerboardFrame className="h-9 w-9 border theme-border-panel-faint">
                       <img
                         alt={option.label}
                         className="h-8 w-8 object-contain [image-rendering:pixelated]"
                         src={option.previewUrl}
                       />
-                    </span>
+                    </CheckerboardFrame>
                     <span className="text-sm font-medium">{option.label}</span>
                   </button>
                 );
@@ -257,9 +259,7 @@ const MapWorkspace = memo(function MapWorkspace({
 
       <div className="grid content-start gap-4">
         <div className={sectionCardClass}>
-          <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-            Preview
-          </div>
+          <SectionEyebrow>Preview</SectionEyebrow>
           <canvas
             className={`${previewCanvasClass} h-32 w-32`}
             ref={previewCanvasRef}
@@ -276,7 +276,7 @@ const MapWorkspace = memo(function MapWorkspace({
             >
               <div className="flex items-center justify-between gap-2">
                 <button
-                  className="text-left text-xs font-extrabold uppercase tracking-[0.12em] text-[#142127]"
+                  className="text-left text-xs font-extrabold uppercase tracking-[0.12em] theme-text-primary"
                   onClick={() => {
                     onSelectLayer(layerIndex);
                   }}
@@ -339,11 +339,9 @@ const MapWorkspace = memo(function MapWorkspace({
         })}
 
         <div className={sectionCardClass}>
-          <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-            Active Layer
-          </div>
-          <div className="text-sm font-semibold text-[#142127]">{activeLayerTitle}</div>
-          <div className="text-xs text-[#4a6069]">
+          <SectionEyebrow>Active Layer</SectionEyebrow>
+          <div className="text-sm font-semibold theme-text-primary">{activeLayerTitle}</div>
+          <div className="text-xs theme-text-muted">
             Opacity {Math.round(activeOpacityValue * 100)}% • Brush: {selectedBrushLabel}
           </div>
           <div className="flex flex-wrap gap-2">
@@ -538,6 +536,7 @@ export function MapDesigner() {
   const [newMapHeight, setNewMapHeight] = useState(String(MAP_DEFAULT_GRID_SIZE));
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
+  const [saveConfirmationMessage, setSaveConfirmationMessage] = useState("");
   const [brushOptions, setBrushOptions] = useState(DEFAULT_MAP_BRUSH_OPTIONS);
   const [, startTransition] = useTransition();
   const drawingRef = useRef(false);
@@ -561,6 +560,7 @@ export function MapDesigner() {
   const layerPreviewCanvasRefs = useRef<Array<HTMLCanvasElement | null>>([]);
   const fallbackTileCanvasCacheRef = useRef(new Map<string, HTMLCanvasElement>());
   const renderedPlacementCanvasCacheRef = useRef(new Map<string, HTMLCanvasElement>());
+  const saveConfirmationTimeoutRef = useRef<number | null>(null);
   const assetImageUrlsRef = useRef<string[]>([]);
   const tileSourceUrlsRef = useRef<string[]>([]);
   const imageCache = useImageCache();
@@ -576,6 +576,10 @@ export function MapDesigner() {
     activeMap?.height
   );
   const { height: mapHeight, width: mapWidth } = getMapLayerDimensions(draftLayers, activeMap?.cells);
+  const savedLayers = activeMap
+    ? normalizeMapLayers(activeMap.layers, activeMap.width, activeMap.height, activeMap.cells)
+    : null;
+  const hasMapDraftChanges = savedLayers ? JSON.stringify(draftLayers) !== JSON.stringify(savedLayers) : false;
   const mapCanvasWidth = getMapCanvasWidth(mapWidth);
   const mapCanvasHeight = getMapCanvasHeight(mapHeight);
   const tilesBySlug = new Map(tiles.map((tileRecord) => [tileRecord.slug, tileRecord]));
@@ -608,6 +612,14 @@ export function MapDesigner() {
       setMapStatus(`Editing ${activeMap.name} (${activeMap.width}x${activeMap.height}).`);
     }
   }, [activeMap]);
+
+  useEffect(() => {
+    return () => {
+      if (saveConfirmationTimeoutRef.current !== null) {
+        window.clearTimeout(saveConfirmationTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     mapScalePercentRef.current = mapScalePercent;
@@ -1338,6 +1350,12 @@ export function MapDesigner() {
       return;
     }
 
+    if (saveConfirmationTimeoutRef.current !== null) {
+      window.clearTimeout(saveConfirmationTimeoutRef.current);
+      saveConfirmationTimeoutRef.current = null;
+    }
+
+    setSaveConfirmationMessage("");
     setBusyLabel("Saving map");
 
     startTransition(() => {
@@ -1354,6 +1372,11 @@ export function MapDesigner() {
           setMapStatus(
             `Saved ${savedMap.name} (${savedMap.width}x${savedMap.height}) at ${savedMap.updatedAt}.`
           );
+          setSaveConfirmationMessage("map saved");
+          saveConfirmationTimeoutRef.current = window.setTimeout(() => {
+            setSaveConfirmationMessage("");
+            saveConfirmationTimeoutRef.current = null;
+          }, 3000);
         })
         .catch((error: unknown) => {
           setMapStatus(error instanceof Error ? error.message : "Could not save map.");
@@ -1496,19 +1519,19 @@ export function MapDesigner() {
                 type="button"
               >
                 <div className="grid gap-1">
-                  <strong className="truncate text-sm font-semibold text-[#142127]">
+                  <strong className="truncate text-sm font-semibold theme-text-primary">
                     {mapRecord.name}
                   </strong>
-                  <span className="font-mono text-xs text-[#4a6069]">{mapRecord.slug}</span>
+                  <span className="font-mono text-xs theme-text-muted">{mapRecord.slug}</span>
                 </div>
-                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
                   {mapRecord.width}x{mapRecord.height}
                 </span>
               </button>
             ))}
           </div>
           {!filteredMaps.length ? (
-            <div className="text-sm text-[#4a6069]">No maps match that filter.</div>
+            <div className="text-sm theme-text-muted">No maps match that filter.</div>
           ) : null}
         </Panel>
 
@@ -1520,41 +1543,17 @@ export function MapDesigner() {
             >
               <div className="grid gap-4">
                 <div className={`${sectionCardClass} ${activeBrushTile ? "" : "opacity-65"}`}>
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-                      Brush Effects
-                    </div>
-                    <input
-                      className="h-9 w-14 cursor-pointer border border-[#c3d0cb] bg-white disabled:cursor-not-allowed disabled:bg-[#eef1ef]"
-                      disabled={!activeBrushTile}
-                      onChange={(event) => {
-                        const nextColorValue = event.currentTarget.value;
-
-                        setBrushOptions((currentOptions) =>
-                          normalizeMapTileOptions({
-                            ...currentOptions,
-                            colorValue: nextColorValue
-                          })
-                        );
-                      }}
-                      type="color"
-                      value={brushOptions.colorValue}
-                    />
-                  </div>
-                  <div className="mb-3 text-xs text-[#4a6069]">
+                  <SectionEyebrow>Brush Effects</SectionEyebrow>
+                  <div className="mb-3 text-xs theme-text-muted">
                     {activeBrushTile
                       ? "Flip, rotate, multiply, and tint apply to tile brushes."
                       : "Sprite brushes use their own image and mount point, so tile effects are disabled."}
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="brush-palette-effects grid gap-2 sm:grid-cols-2">
                     {BRUSH_OPTION_DEFINITIONS.map((option) => (
-                      <label
-                        className="flex min-h-10 items-center gap-3 border border-[#c3d0cb] bg-white px-3 py-2 text-sm text-[#142127]"
-                        key={option.id}
-                      >
+                      <label key={option.id}>
                         <input
                           checked={brushOptions[option.id]}
-                          className="h-4 w-4 accent-[#d88753]"
                           disabled={!activeBrushTile}
                           onChange={(event) => {
                             const isChecked = event.currentTarget.checked;
@@ -1569,15 +1568,30 @@ export function MapDesigner() {
                           type="checkbox"
                         />
                         <span>{option.label}</span>
+                        {option.id === "color" ? (
+                          <input
+                            disabled={!activeBrushTile}
+                            onChange={(event) => {
+                              const nextColorValue = event.currentTarget.value;
+
+                              setBrushOptions((currentOptions) =>
+                                normalizeMapTileOptions({
+                                  ...currentOptions,
+                                  colorValue: nextColorValue
+                                })
+                              );
+                            }}
+                            type="color"
+                            value={brushOptions.colorValue}
+                          />
+                        ) : null}
                       </label>
                     ))}
                   </div>
                 </div>
 
                 <div className="grid gap-3">
-                  <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-                    Tiles
-                  </div>
+                  <SectionEyebrow>Tiles</SectionEyebrow>
                   <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
                     <button
                       className={`${selectableCardClass(
@@ -1589,10 +1603,10 @@ export function MapDesigner() {
                       }}
                       type="button"
                     >
-                      <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden bg-[linear-gradient(135deg,rgba(19,38,47,0.92),rgba(36,66,79,0.88))] text-[#fffdf8]/84">
+                      <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden theme-bg-brand theme-text-inverse-soft">
                         <FontAwesomeIcon className="h-10 w-10" icon={faEraser} title="Erase" />
                       </div>
-                      <div className="text-center text-sm font-normal leading-tight text-[#4a6069]">
+                      <div className="text-center text-sm font-normal leading-tight theme-text-muted">
                         <div>Tool</div>
                         <div>eraser</div>
                       </div>
@@ -1619,7 +1633,7 @@ export function MapDesigner() {
                             }}
                             type="button"
                           >
-                            <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden bg-[linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%),linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%)] bg-[length:24px_24px] bg-[position:0_0,12px_12px]">
+                            <CheckerboardFrame className="h-32 max-h-32 w-full max-w-32 place-self-center" size="md">
                               {mainSlot?.pixels ? (
                                 <img
                                   alt={tileRecord.name}
@@ -1629,11 +1643,11 @@ export function MapDesigner() {
                               ) : (
                                 <span>No Main</span>
                               )}
-                            </div>
+                            </CheckerboardFrame>
                           </button>
                           <div className="flex w-full items-start gap-2">
                             <button
-                              className="grid h-7 w-7 shrink-0 place-items-center border border-[#c3d0cb] text-[#4a6069] transition hover:border-[#d88753] hover:text-[#d88753]"
+                              className="grid h-7 w-7 shrink-0 place-items-center border theme-border-panel theme-text-muted transition theme-hover-border-accent theme-hover-text-accent"
                               onClick={() => {
                                 setActiveTileSlug(tileRecord.slug);
                                 openPaintEditor(tileRecord, "main");
@@ -1644,7 +1658,7 @@ export function MapDesigner() {
                               <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
                             </button>
                             <button
-                              className="min-w-0 flex-1 text-left text-sm font-normal leading-tight text-[#4a6069]"
+                              className="min-w-0 flex-1 text-left text-sm font-normal leading-tight theme-text-muted"
                               onClick={() => {
                                 setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(tileRecord.slug, 0));
                               }}
@@ -1659,16 +1673,14 @@ export function MapDesigner() {
                     })}
                   </div>
                   {!visibleBrushTiles.length ? (
-                    <div className="text-sm text-[#4a6069]">
+                    <div className="text-sm theme-text-muted">
                       No tiles are available in {selectedLayer.folder}/ yet.
                     </div>
                   ) : null}
                 </div>
 
                 <div className="grid gap-3">
-                  <div className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]">
-                    Sprites
-                  </div>
+                  <SectionEyebrow>Sprites</SectionEyebrow>
                   <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
                     {visibleBrushSprites.map((spriteRecord) => {
                       const spriteKey = getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename);
@@ -1688,7 +1700,7 @@ export function MapDesigner() {
                           }}
                           type="button"
                         >
-                          <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden bg-[linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%),linear-gradient(45deg,rgba(231,220,197,0.6)_25%,rgba(255,255,255,0.9)_25%,rgba(255,255,255,0.9)_75%,rgba(231,220,197,0.6)_75%)] bg-[length:24px_24px] bg-[position:0_0,12px_12px]">
+                          <CheckerboardFrame className="h-32 max-h-32 w-full max-w-32 place-self-center" size="md">
                             {spriteRecord.thumbnail ? (
                               <img
                                 alt={spriteRecord.name}
@@ -1698,8 +1710,8 @@ export function MapDesigner() {
                             ) : (
                               <span>No Image</span>
                             )}
-                          </div>
-                          <div className="w-full text-left text-sm font-normal leading-tight text-[#4a6069]">
+                          </CheckerboardFrame>
+                          <div className="w-full text-left text-sm font-normal leading-tight theme-text-muted">
                             <div className="truncate">{folderLabel}</div>
                             <div className="truncate">{spriteRecord.name}</div>
                             <div className="truncate font-mono text-[11px]">{spriteRecord.filename}</div>
@@ -1709,7 +1721,7 @@ export function MapDesigner() {
                     })}
                   </div>
                   {!visibleBrushSprites.length ? (
-                    <div className="text-sm text-[#4a6069]">
+                    <div className={emptyStateCardClass}>
                       No sprites are available in {selectedLayer.folder}/ yet.
                     </div>
                   ) : null}
@@ -1720,9 +1732,21 @@ export function MapDesigner() {
 
           <Panel
             actions={
-              <button className={actionButtonClass} onClick={handleSaveMap} type="button">
-                Save Map
-              </button>
+              <div className="grid justify-items-start gap-1">
+                <button
+                  className={actionButtonClass}
+                  disabled={!activeMap || !hasMapDraftChanges || busyLabel === "Saving map"}
+                  onClick={handleSaveMap}
+                  type="button"
+                >
+                  Save Map
+                </button>
+                {saveConfirmationMessage ? (
+                  <div className="text-xs font-medium theme-text-muted">
+                    {saveConfirmationMessage}
+                  </div>
+                ) : null}
+              </div>
             }
             description={`Paint directly on the ${mapWidth}x${mapHeight} layered map canvas. The scale controls only change the viewing size.`}
             footer={
@@ -1836,7 +1860,7 @@ export function MapDesigner() {
       {isCreateDialogOpen ? (
         <div
           aria-modal="true"
-          className="fixed inset-0 z-50 overflow-y-auto bg-[rgba(20,33,39,0.55)] px-4 py-8"
+          className="fixed inset-0 z-50 overflow-y-auto theme-bg-overlay px-4 py-8"
           role="dialog"
         >
           <div
@@ -1847,18 +1871,18 @@ export function MapDesigner() {
           />
           <div className="flex min-h-full items-center justify-center">
             <div className={`${modalSurfaceClass} relative max-w-2xl`}>
-              <div className="border-b border-[#c3d0cb]/65 px-6 py-5">
+              <div className="border-b theme-border-panel-faint px-6 py-5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <h2 className="font-serif text-[1.4rem] leading-tight text-[#142127]">
+                    <h2 className="font-serif text-[1.4rem] leading-tight theme-text-primary">
                       Create Map
                     </h2>
-                    <p className="mt-1 text-sm leading-6 text-[#4a6069]">
+                    <p className="mt-1 text-sm leading-6 theme-text-muted">
                       Name the map and choose its grid size before creating the server-backed map.
                     </p>
                   </div>
                   <button
-                    className={`${closeButtonClass} min-h-11 min-w-11 bg-white`}
+                    className={`${closeButtonClass} min-h-11 min-w-11 theme-bg-panel`}
                     onClick={() => {
                       setIsCreateDialogOpen(false);
                     }}
@@ -1872,7 +1896,7 @@ export function MapDesigner() {
               <div className="grid gap-4 px-6 py-6">
                 <div className="grid gap-2">
                   <label
-                    className="text-xs font-extrabold uppercase tracking-[0.12em] text-[#4a6069]"
+                    className="text-xs font-extrabold uppercase tracking-[0.12em] theme-text-muted"
                     htmlFor="new-map-name"
                   >
                     New map name
@@ -1916,18 +1940,18 @@ export function MapDesigner() {
                 </div>
 
                 {newMapName && newMapName !== normalizedNewMapName ? (
-                  <div className="text-xs text-[#4a6069]">
+                  <div className="text-xs theme-text-muted">
                     New map will be created as{" "}
                     <span className="font-mono">{normalizedNewMapName}</span>
                   </div>
                 ) : null}
 
-                <div className="text-xs text-[#4a6069]">
+                <div className="text-xs theme-text-muted">
                   New map size: {normalizedNewMapWidth}x{normalizedNewMapHeight}
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center justify-end gap-3 border-t border-[#c3d0cb]/65 bg-[rgba(244,239,226,0.58)] px-6 py-4">
+              <div className="flex flex-wrap items-center justify-end gap-3 border-t theme-border-panel-faint theme-bg-paper-soft px-6 py-4">
                 <button
                   className={secondaryButtonClass}
                   onClick={() => {
