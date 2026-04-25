@@ -10,14 +10,22 @@ import {
   useTransition
 } from "react";
 import {
+  faChevronRight,
   faEraser,
   faEye,
+  faEyeDropper,
   faEyeSlash,
+  faFolderArrowUp,
+  faFolder,
   faPenToSquare,
   faTrashCan
 } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 
-import { createMapAction, saveMapAction } from "../actions/mapActions";
+import {
+  prepareMapAiRunAction,
+  runMapAiModelAction
+} from "../actions/mapAiActions";
+import { createMapAction, resizeMapAction, saveMapAction } from "../actions/mapActions";
 import { useStudio } from "../app/StudioContext";
 import {
   MAP_DEFAULT_GRID_SIZE,
@@ -27,6 +35,10 @@ import {
   MAP_SCALE_STEP_PERCENT,
   TILE_SIZE
 } from "../lib/constants";
+import {
+  MAP_AI_SUPPORTED_MODELS,
+  type MapAiSelectionSummary
+} from "../lib/mapAi";
 import {
   clampMapScalePercent,
   createEmptyMapCells,
@@ -45,11 +57,15 @@ import {
   normalizeMapLayers,
   normalizeMapDimension,
   normalizeMapTileOptions,
+  resizeMapLayersExpandingEdges,
   serializeMapTileOptionsKey
 } from "../lib/map";
 import { normalizeUnderscoreName } from "../lib/naming";
 import { describeSlot, sanitizeSlotRecord, type SlotKey } from "../lib/slots";
 import {
+  formatTileLibraryPath,
+  getTileLibraryParentPath,
+  getTileLibrarySegmentLabel,
   getTileLibrarySpriteKey,
   normalizeTileLibraryPath,
   splitTileLibraryPath,
@@ -62,31 +78,66 @@ import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
 import {
+  assetListActionButtonClass,
+  assetListCheckerThumbClass,
+  assetListEyebrowClass,
+  assetListMetaClass,
+  assetListMonoClass,
+  assetListRowClass,
+  assetListSubtitleClass,
+  assetListThumbClass,
+  assetListTitleClass,
+  compactBrushEffectsClass,
   canvasViewportClass,
   closeButtonClass,
   compactTextInputClass,
   emptyStateCardClass,
+  gridVisibilitySwitchClass,
+  gridVisibilitySwitchInputClass,
+  gridVisibilitySwitchLabelClass,
+  gridVisibilitySwitchTrackClass,
   iconButtonClass,
   modalSurfaceClass,
-  previewCanvasClass,
+  panelTabButtonClass,
   previewSelectionButtonClass,
   sectionCardClass,
   secondaryButtonClass,
-  selectableCardClass,
   selectablePanelClass,
+  scrollableAssetListClass,
   statusChipClass,
+  smoothPreviewCanvasClass,
   textInputClass,
   visibilityOptionButtonClass,
   zoomButtonClass
 } from "./uiStyles";
 import type { MapTileOptions, SpriteRecord, TileCell, TileRecord } from "../types";
+import type { MapAssetPlacement, MapLayerStack } from "../types";
 
 const MAP_PREVIEW_SIZE = 128;
+const MAP_MINI_MAP_MAX_SIZE = 512;
+const AI_PREVIEW_SIZE = 1024;
 const VISIBILITY_OPTIONS = [
   { label: "Hide", value: 0 },
   { label: "20%", value: 0.2 },
   { label: "50%", value: 0.5 },
   { label: "100%", value: 1 }
+] as const;
+const AI_TOOL_OPTIONS = [
+  {
+    description: "Add clicked tiles to the current AI mask.",
+    id: "mask",
+    label: "Mask"
+  },
+  {
+    description: "Remove clicked tiles from the current AI mask.",
+    id: "erase",
+    label: "Erase"
+  },
+  {
+    description: "Drag across the canvas to prepare the AI image and edit mask.",
+    id: "select",
+    label: "Select"
+  }
 ] as const;
 const BRUSH_OPTION_DEFINITIONS = [
   { id: "flipHorizontal", label: "Flip Horizontal" },
@@ -98,9 +149,42 @@ const BRUSH_OPTION_DEFINITIONS = [
   { id: "color", label: "Color" }
 ] as const;
 const DEFAULT_MAP_BRUSH_OPTIONS = normalizeMapTileOptions(undefined);
+type MapSidebarTab = "ai" | "brushes" | "maps";
+type MapAiTool = (typeof AI_TOOL_OPTIONS)[number]["id"];
+
+interface MapAiSelection {
+  bottomTileY: number;
+  leftTileX: number;
+  pixelHeight: number;
+  pixelWidth: number;
+  rightTileX: number;
+  tileHeight: number;
+  tileWidth: number;
+  topTileY: number;
+}
+
+interface MapAiModelStatus {
+  detail: string;
+  modelId: string;
+  modelLabel: string;
+  requestId: string;
+  status: "error" | "idle" | "running" | "skipped" | "success";
+}
+
+interface MapAiPreviewSnapshot {
+  assetImageUrls: string[];
+  layerVisibilities: number[];
+  layers: MapLayerStack;
+  maskedCells: Set<string>;
+  selection: MapAiSelection;
+}
 
 interface MapWorkspaceProps {
   activeLayerIndex: number;
+  activeModeLabel: string;
+  activeMapAboutPrompt: string;
+  activeSidebarTab: MapSidebarTab;
+  activeAiTool: MapAiTool;
   activeBrushSlotNum: number;
   activeLayerTitle: string;
   activeOpacityValue: number;
@@ -111,24 +195,28 @@ interface MapWorkspaceProps {
   }>;
   canZoomIn: boolean;
   canZoomOut: boolean;
-  hoverLabel: string;
   hoverCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  isGridVisible: boolean;
   layerPreviewCanvasRefs: React.MutableRefObject<Array<HTMLCanvasElement | null>>;
   layerVisibilities: number[];
   mapCanvasHeight: number;
   mapCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   mapCanvasWidth: number;
+  mapCursorClassName: string;
   mapFrameRef: React.RefObject<HTMLDivElement | null>;
   onCanvasClick(event: React.MouseEvent<HTMLCanvasElement>): void;
   onCanvasMouseDown(event: React.MouseEvent<HTMLCanvasElement>): void;
   onCanvasMouseLeave(): void;
   onCanvasMouseMove(event: React.MouseEvent<HTMLCanvasElement>): void;
   onCanvasMouseUp(): void;
+  onChangeActiveMapAboutPrompt(value: string): void;
   onClearAllLayers(): void;
   onClearLayer(layerIndex: number): void;
   onSelectBrushSlot(slotNum: number): void;
   onSelectLayer(layerIndex: number): void;
   onSetLayerVisibility(layerIndex: number, visibility: number): void;
+  onToggleGridVisibility(): void;
+  onZoomActual(): void;
   onZoomIn(): void;
   onZoomOut(): void;
   previewCanvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -138,30 +226,38 @@ interface MapWorkspaceProps {
 
 const MapWorkspace = memo(function MapWorkspace({
   activeLayerIndex,
+  activeModeLabel,
+  activeMapAboutPrompt,
+  activeSidebarTab,
+  activeAiTool,
   activeBrushSlotNum,
   activeLayerTitle,
   activeOpacityValue,
   brushSlotOptions,
   canZoomIn,
   canZoomOut,
-  hoverLabel,
   hoverCanvasRef,
+  isGridVisible,
   layerPreviewCanvasRefs,
   layerVisibilities,
   mapCanvasHeight,
   mapCanvasRef,
   mapCanvasWidth,
+  mapCursorClassName,
   mapFrameRef,
   onCanvasClick,
   onCanvasMouseDown,
   onCanvasMouseLeave,
   onCanvasMouseMove,
   onCanvasMouseUp,
+  onChangeActiveMapAboutPrompt,
   onClearAllLayers,
   onClearLayer,
   onSelectBrushSlot,
   onSelectLayer,
   onSetLayerVisibility,
+  onToggleGridVisibility,
+  onZoomActual,
   onZoomIn,
   onZoomOut,
   previewCanvasRef,
@@ -177,7 +273,7 @@ const MapWorkspace = memo(function MapWorkspace({
         >
           <div className="relative inline-block">
             <canvas
-              className="block max-h-none max-w-none bg-white/82 [image-rendering:pixelated]"
+              className={`block max-h-none max-w-none bg-white/82 [image-rendering:pixelated] ${mapCursorClassName}`}
               height={mapCanvasHeight}
               onClick={onCanvasClick}
               onMouseDown={onCanvasMouseDown}
@@ -197,9 +293,18 @@ const MapWorkspace = memo(function MapWorkspace({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className={statusChipClass}>
-            {hoverLabel}
-          </div>
+          <label className={gridVisibilitySwitchClass}>
+            <input
+              checked={isGridVisible}
+              className={gridVisibilitySwitchInputClass}
+              onChange={onToggleGridVisibility}
+              type="checkbox"
+            />
+            <div className={gridVisibilitySwitchTrackClass} />
+            <span className={gridVisibilitySwitchLabelClass(isGridVisible)}>
+              Gridlines {isGridVisible ? "On" : "Off"}
+            </span>
+          </label>
           <div className="flex flex-wrap items-center gap-3">
             <button
               className={zoomButtonClass}
@@ -218,10 +323,35 @@ const MapWorkspace = memo(function MapWorkspace({
             >
               +
             </button>
+            <button
+              className={zoomButtonClass}
+              onClick={onZoomActual}
+              type="button"
+            >
+              100
+            </button>
           </div>
         </div>
 
-        {brushSlotOptions.length ? (
+        <div className="grid gap-2">
+          <label
+            className="text-xs font-extrabold uppercase tracking-[0.12em] theme-text-muted"
+            htmlFor="map-about-prompt"
+          >
+            About Prompt
+          </label>
+          <textarea
+            className={`${textInputClass} min-h-28 w-full resize-y`}
+            id="map-about-prompt"
+            onChange={(event) => {
+              onChangeActiveMapAboutPrompt(event.currentTarget.value);
+            }}
+            placeholder="Add background, lore, or guidance for this map..."
+            value={activeMapAboutPrompt}
+          />
+        </div>
+
+        {activeSidebarTab === "brushes" && brushSlotOptions.length ? (
           <div className={`${sectionCardClass} grid gap-3`}>
             <SectionEyebrow>Tile Variant</SectionEyebrow>
             <div className="flex flex-wrap gap-2">
@@ -261,7 +391,7 @@ const MapWorkspace = memo(function MapWorkspace({
         <div className={sectionCardClass}>
           <SectionEyebrow>Preview</SectionEyebrow>
           <canvas
-            className={`${previewCanvasClass} h-32 w-32`}
+            className={`${smoothPreviewCanvasClass} h-32 w-32`}
             ref={previewCanvasRef}
           />
         </div>
@@ -305,7 +435,7 @@ const MapWorkspace = memo(function MapWorkspace({
                   type="button"
                 >
                   <canvas
-                    className="block h-32 w-32 [image-rendering:pixelated]"
+                    className={`${smoothPreviewCanvasClass} h-32 w-32`}
                     ref={(node) => {
                       layerPreviewCanvasRefs.current[layerIndex] = node;
                     }}
@@ -342,8 +472,13 @@ const MapWorkspace = memo(function MapWorkspace({
           <SectionEyebrow>Active Layer</SectionEyebrow>
           <div className="text-sm font-semibold theme-text-primary">{activeLayerTitle}</div>
           <div className="text-xs theme-text-muted">
-            Opacity {Math.round(activeOpacityValue * 100)}% • Brush: {selectedBrushLabel}
+            Opacity {Math.round(activeOpacityValue * 100)}% • {activeModeLabel}
           </div>
+          {activeSidebarTab === "ai" ? (
+            <div className="text-xs theme-text-muted">
+              AI tool: {AI_TOOL_OPTIONS.find((option) => option.id === activeAiTool)?.label ?? "Mask"}
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <button className={actionButtonClass} onClick={onClearAllLayers} type="button">
               Clear Map
@@ -370,19 +505,157 @@ function drawPreviewBackground(context: CanvasRenderingContext2D, width: number,
   context.fillRect(0, 0, width, height);
 }
 
+function getMapCellKey(tileX: number, tileY: number) {
+  return `${tileX},${tileY}`;
+}
+
+function cloneMapPlacement(placement: MapAssetPlacement) {
+  return placement.kind === "tile"
+    ? createMapTilePlacement(placement.tileSlug, placement.options, placement.slotNum)
+    : createMapSpritePlacement(placement.spriteKey);
+}
+
+function cloneMapLayers(layers: MapLayerStack): MapLayerStack {
+  return layers.map((layerCells) =>
+    layerCells.map((row) =>
+      row.map((placement) => (placement ? cloneMapPlacement(placement) : null))
+    )
+  );
+}
+
+function getCellsInLine(startCell: TileCell, endCell: TileCell) {
+  const cells: TileCell[] = [];
+  let currentX = startCell.tileX;
+  let currentY = startCell.tileY;
+  const deltaX = Math.abs(endCell.tileX - startCell.tileX);
+  const deltaY = Math.abs(endCell.tileY - startCell.tileY);
+  const stepX = startCell.tileX < endCell.tileX ? 1 : -1;
+  const stepY = startCell.tileY < endCell.tileY ? 1 : -1;
+  let error = deltaX - deltaY;
+
+  while (true) {
+    cells.push({ tileX: currentX, tileY: currentY });
+
+    if (currentX === endCell.tileX && currentY === endCell.tileY) {
+      break;
+    }
+
+    const doubledError = error * 2;
+
+    if (doubledError > -deltaY) {
+      error -= deltaY;
+      currentX += stepX;
+    }
+
+    if (doubledError < deltaX) {
+      error += deltaX;
+      currentY += stepY;
+    }
+  }
+
+  return cells;
+}
+
+function getAiSelectionFromCells(anchorCell: TileCell, focusCell: TileCell): MapAiSelection {
+  const leftTileX = Math.min(anchorCell.tileX, focusCell.tileX);
+  const rightTileX = Math.max(anchorCell.tileX, focusCell.tileX);
+  const topTileY = Math.min(anchorCell.tileY, focusCell.tileY);
+  const bottomTileY = Math.max(anchorCell.tileY, focusCell.tileY);
+  const tileWidth = rightTileX - leftTileX + 1;
+  const tileHeight = bottomTileY - topTileY + 1;
+
+  return {
+    bottomTileY,
+    leftTileX,
+    pixelHeight: tileHeight * TILE_SIZE,
+    pixelWidth: tileWidth * TILE_SIZE,
+    rightTileX,
+    tileHeight,
+    tileWidth,
+    topTileY
+  };
+}
+
+function formatAiSelectionSize(selection: MapAiSelection | null) {
+  if (!selection) {
+    return "No selection";
+  }
+
+  return `${selection.pixelWidth}x${selection.pixelHeight}`;
+}
+
+function toMapAiSelectionSummary(selection: MapAiSelection | null): MapAiSelectionSummary | null {
+  if (!selection) {
+    return null;
+  }
+
+  return {
+    pixelHeight: selection.pixelHeight,
+    pixelWidth: selection.pixelWidth,
+    tileHeight: selection.tileHeight,
+    tileWidth: selection.tileWidth
+  };
+}
+
+function getDefaultAiSelectedModelIds() {
+  return MAP_AI_SUPPORTED_MODELS.map((model) => model.id);
+}
+
+function getDefaultAiModelDetail(supportsNegativePrompt: boolean) {
+  return supportsNegativePrompt
+    ? "Ready to run with image, mask, prompt, and optional negative prompt."
+    : "Ready to run with image, mask, and prompt.";
+}
+
+function createInitialAiModelStatuses() {
+  return MAP_AI_SUPPORTED_MODELS.map((model) => ({
+    detail: getDefaultAiModelDetail(model.supportsNegativePrompt),
+    modelId: model.id,
+    modelLabel: model.label,
+    requestId: "",
+    status: "idle" as const
+  }));
+}
+
+function getClampedTileIndex(position: number, maxTiles: number) {
+  return Math.max(0, Math.min(maxTiles - 1, Math.floor(position / TILE_SIZE)));
+}
+
+function getScaledTileBounds(index: number, tileCount: number, outputSize: number) {
+  const start = Math.round((index * outputSize) / Math.max(1, tileCount));
+  const end = Math.round(((index + 1) * outputSize) / Math.max(1, tileCount));
+
+  return {
+    end,
+    size: Math.max(1, end - start),
+    start
+  };
+}
+
 function drawMapCellBackgroundAtSize(
   context: CanvasRenderingContext2D,
   drawX: number,
   drawY: number,
   tileSize: number
 ) {
-  const half = tileSize / 2;
+  drawMapCellBackgroundRect(context, drawX, drawY, tileSize, tileSize);
+}
+
+function drawMapCellBackgroundRect(
+  context: CanvasRenderingContext2D,
+  drawX: number,
+  drawY: number,
+  drawWidth: number,
+  drawHeight: number
+) {
+  const halfWidth = drawWidth / 2;
+  const halfHeight = drawHeight / 2;
 
   context.fillStyle = "#fffdf8";
-  context.fillRect(drawX, drawY, tileSize, tileSize);
+  context.fillRect(drawX, drawY, drawWidth, drawHeight);
   context.fillStyle = "#efe7d4";
-  context.fillRect(drawX, drawY, half, half);
-  context.fillRect(drawX + half, drawY + half, half, half);
+  context.fillRect(drawX, drawY, halfWidth, halfHeight);
+  context.fillRect(drawX + halfWidth, drawY + halfHeight, halfWidth, halfHeight);
 }
 
 function getPlacementRotationDegrees(options: Partial<MapTileOptions> | undefined) {
@@ -415,6 +688,26 @@ function getSpriteBrushOutlineRect(
     width: outlineWidth,
     x: anchorCenterX - spriteRecord.mount_x * mountScaleX,
     y: anchorCenterY - spriteRecord.mount_y * mountScaleY
+  };
+}
+
+function getSpritePlacementTileBounds(
+  spriteRecord: SpriteRecord,
+  anchorTileX: number,
+  anchorTileY: number
+) {
+  const anchorCenterX = anchorTileX * TILE_SIZE + TILE_SIZE / 2;
+  const anchorCenterY = anchorTileY * TILE_SIZE + TILE_SIZE / 2;
+  const left = anchorCenterX - spriteRecord.mount_x + spriteRecord.offset_x;
+  const top = anchorCenterY - spriteRecord.mount_y + spriteRecord.offset_y;
+  const right = left + spriteRecord.image_w;
+  const bottom = top + spriteRecord.image_h;
+
+  return {
+    bottomTileY: Math.ceil(bottom / TILE_SIZE) - 1,
+    leftTileX: Math.floor(left / TILE_SIZE),
+    rightTileX: Math.ceil(right / TILE_SIZE) - 1,
+    topTileY: Math.floor(top / TILE_SIZE)
   };
 }
 
@@ -502,6 +795,7 @@ function haveStringListsChanged(previousValues: string[], nextValues: string[]) 
 }
 
 export function MapDesigner() {
+  const [activeSidebarTab, setActiveSidebarTab] = useState<MapSidebarTab>("maps");
   const {
     activeMap,
     activeMapSlug,
@@ -517,12 +811,14 @@ export function MapDesigner() {
     setMapDraftLayers,
     setMapBrushAssetKey,
     sprites,
+    tileLibraryFolders,
     tiles,
     upsertMap
   } = useStudio();
   const initialMapDesignerUiState = getMapDesignerUiState(activeMapSlug);
   const [activeLayerIndex, setActiveLayerIndex] = useState(initialMapDesignerUiState.activeLayerIndex);
   const [hoverCell, setHoverCell] = useState<TileCell | null>(null);
+  const [isGridVisible, setGridVisible] = useState(initialMapDesignerUiState.isGridVisible);
   const [layerVisibilities, setLayerVisibilities] = useState<number[]>(initialMapDesignerUiState.layerVisibilities);
   const [mapScalePercent, setMapScalePercent] = useState<number | null>(
     initialMapDesignerUiState.zoomPercent
@@ -530,17 +826,47 @@ export function MapDesigner() {
   const [mapStatus, setMapStatus] = useState(
     "Choose a brush tile or sprite, pick a layer, and paint on the stacked map. Save writes to the database."
   );
+  const [hasMounted, setHasMounted] = useState(false);
   const [mapQuery, setMapQuery] = useState("");
+  const [activeAiTool, setActiveAiTool] = useState<MapAiTool>("mask");
+  const [maskedCells, setMaskedCells] = useState<Set<string>>(() => new Set());
+  const [aiSelection, setAiSelection] = useState<MapAiSelection | null>(null);
+  const [aiSelectionDraft, setAiSelectionDraft] = useState<{
+    anchorCell: TileCell;
+    focusCell: TileCell;
+  } | null>(null);
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [isAiRunningModalOpen, setIsAiRunningModalOpen] = useState(false);
+  const [aiPreviewImageUrl, setAiPreviewImageUrl] = useState("");
+  const [aiPreviewMaskUrl, setAiPreviewMaskUrl] = useState("");
+  const [aiPreviewSnapshot, setAiPreviewSnapshot] = useState<MapAiPreviewSnapshot | null>(null);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiNegativePrompt, setAiNegativePrompt] = useState("");
+  const [aiPreviewStatus, setAiPreviewStatus] = useState("");
+  const [aiRunDirectoryName, setAiRunDirectoryName] = useState("");
+  const [aiSelectedModelIds, setAiSelectedModelIds] = useState<string[]>(() => getDefaultAiSelectedModelIds());
+  const [aiModelStatuses, setAiModelStatuses] = useState<MapAiModelStatus[]>(() => createInitialAiModelStatuses());
+  const [isAiSubmitting, setAiSubmitting] = useState(false);
   const [newMapName, setNewMapName] = useState("");
   const [newMapWidth, setNewMapWidth] = useState(String(MAP_DEFAULT_GRID_SIZE));
   const [newMapHeight, setNewMapHeight] = useState(String(MAP_DEFAULT_GRID_SIZE));
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [resizeMapWidth, setResizeMapWidth] = useState(String(MAP_DEFAULT_GRID_SIZE));
+  const [resizeMapHeight, setResizeMapHeight] = useState(String(MAP_DEFAULT_GRID_SIZE));
+  const [isResizeDialogOpen, setIsResizeDialogOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
   const [saveConfirmationMessage, setSaveConfirmationMessage] = useState("");
+  const [mapAboutPromptDrafts, setMapAboutPromptDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(maps.map((mapRecord) => [mapRecord.slug, mapRecord.aboutPrompt ?? ""]))
+  );
+  const [areMapAssetsReady, setMapAssetsReady] = useState(false);
   const [brushOptions, setBrushOptions] = useState(DEFAULT_MAP_BRUSH_OPTIONS);
+  const [brushLibraryPath, setBrushLibraryPath] = useState("");
+  const [isBrushEyedropperActive, setBrushEyedropperActive] = useState(false);
   const [, startTransition] = useTransition();
   const drawingRef = useRef(false);
   const lastPaintedCellKeyRef = useRef("");
+  const lastPlacedPlacementRef = useRef<{ cell: TileCell; placement: MapAssetPlacement } | null>(null);
   const lastKnownScrollRef = useRef({
     scrollLeft: initialMapDesignerUiState.scrollLeft,
     scrollTop: initialMapDesignerUiState.scrollTop
@@ -563,23 +889,37 @@ export function MapDesigner() {
   const saveConfirmationTimeoutRef = useRef<number | null>(null);
   const assetImageUrlsRef = useRef<string[]>([]);
   const tileSourceUrlsRef = useRef<string[]>([]);
-  const imageCache = useImageCache();
+  const mapAssetLoadVersionRef = useRef(0);
+  const aiPreviewRenderVersionRef = useRef(0);
+  const imageCache = useImageCache({ maxEntries: 2000, maxTransientEntries: 2000 });
   const createNameInputRef = useRef<HTMLInputElement | null>(null);
+  const resizeWidthInputRef = useRef<HTMLInputElement | null>(null);
   const deferredMapQuery = useDeferredValue(mapQuery.trim().toLowerCase());
   const normalizedNewMapName = normalizeUnderscoreName(newMapName);
   const normalizedNewMapWidth = normalizeMapDimension(newMapWidth);
   const normalizedNewMapHeight = normalizeMapDimension(newMapHeight);
+  const normalizedResizeMapWidth = normalizeMapDimension(resizeMapWidth);
+  const normalizedResizeMapHeight = normalizeMapDimension(resizeMapHeight);
   const draftLayers = getMapDraftLayers(
     activeMapSlug,
     activeMap?.layers,
     activeMap?.width,
     activeMap?.height
   );
+  const activeMapAboutPrompt = activeMap
+    ? (mapAboutPromptDrafts[activeMap.slug] ?? activeMap.aboutPrompt ?? "")
+    : "";
   const { height: mapHeight, width: mapWidth } = getMapLayerDimensions(draftLayers, activeMap?.cells);
   const savedLayers = activeMap
     ? normalizeMapLayers(activeMap.layers, activeMap.width, activeMap.height, activeMap.cells)
     : null;
-  const hasMapDraftChanges = savedLayers ? JSON.stringify(draftLayers) !== JSON.stringify(savedLayers) : false;
+  const hasMapLayerDraftChanges = savedLayers
+    ? JSON.stringify(draftLayers) !== JSON.stringify(savedLayers)
+    : false;
+  const hasMapAboutPromptDraftChanges = activeMap
+    ? activeMapAboutPrompt !== (activeMap.aboutPrompt ?? "")
+    : false;
+  const hasMapDraftChanges = hasMapLayerDraftChanges || hasMapAboutPromptDraftChanges;
   const mapCanvasWidth = getMapCanvasWidth(mapWidth);
   const mapCanvasHeight = getMapCanvasHeight(mapHeight);
   const tilesBySlug = new Map(tiles.map((tileRecord) => [tileRecord.slug, tileRecord]));
@@ -603,15 +943,58 @@ export function MapDesigner() {
   const activeBrushSpriteKey = getBrushSpriteKey(mapBrushAssetKey);
   const brushOptionLabels = describeMapTileOptions(brushOptions);
   const tileSlotUrls = tiles.flatMap((tileRecord) =>
-    (tileSlotsBySlug.get(tileRecord.slug) ?? []).map((slotRecord) => slotRecord?.pixels ?? "")
+    (tileSlotsBySlug.get(tileRecord.slug) ?? []).map(
+      (slotRecord) => slotRecord?.pixels || slotRecord?.layers?.[0] || ""
+    )
   );
   const spriteThumbnailUrls = sprites.map((spriteRecord) => spriteRecord.thumbnail ?? "");
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
 
   useEffect(() => {
     if (activeMap) {
       setMapStatus(`Editing ${activeMap.name} (${activeMap.width}x${activeMap.height}).`);
     }
   }, [activeMap]);
+
+  useEffect(() => {
+    if (!activeMap) {
+      return;
+    }
+
+    setMapAboutPromptDrafts((currentDrafts) => {
+      if (activeMap.slug in currentDrafts) {
+        return currentDrafts;
+      }
+
+      return {
+        ...currentDrafts,
+        [activeMap.slug]: activeMap.aboutPrompt ?? ""
+      };
+    });
+  }, [activeMap]);
+
+  useEffect(() => {
+    setMaskedCells(new Set());
+    setAiSelection(null);
+    setAiSelectionDraft(null);
+    setAiPreviewImageUrl("");
+    setAiPreviewMaskUrl("");
+    setAiPreviewSnapshot(null);
+    setAiPreviewStatus("");
+    setAiPrompt("");
+    setAiNegativePrompt("");
+    setAiRunDirectoryName("");
+    setAiSelectedModelIds(getDefaultAiSelectedModelIds());
+    setAiModelStatuses(createInitialAiModelStatuses());
+    setAiSubmitting(false);
+    setIsAiModalOpen(false);
+    setIsAiRunningModalOpen(false);
+    setBrushEyedropperActive(false);
+    lastPlacedPlacementRef.current = null;
+  }, [activeMapSlug]);
 
   useEffect(() => {
     return () => {
@@ -637,6 +1020,7 @@ export function MapDesigner() {
       scrollTop: storedUiState.scrollTop
     };
     setActiveLayerIndex(storedUiState.activeLayerIndex);
+    setGridVisible(storedUiState.isGridVisible);
     setLayerVisibilities(storedUiState.layerVisibilities);
     setMapScalePercent(storedUiState.zoomPercent);
   }, [activeMapSlug]);
@@ -672,6 +1056,48 @@ export function MapDesigner() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [isCreateDialogOpen]);
+
+  useEffect(() => {
+    if (!isResizeDialogOpen) {
+      return;
+    }
+
+    const focusTimer = window.setTimeout(() => {
+      resizeWidthInputRef.current?.focus();
+      resizeWidthInputRef.current?.select();
+    }, 0);
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsResizeDialogOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isResizeDialogOpen]);
+
+  useEffect(() => {
+    if (!isAiModalOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsAiModalOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAiModalOpen]);
 
   useEffect(() => {
     const resizeObserver = new ResizeObserver(() => {
@@ -763,10 +1189,11 @@ export function MapDesigner() {
 
     setMapDesignerUiState(activeMapSlug, {
       activeLayerIndex,
+      isGridVisible,
       layerVisibilities,
       zoomPercent: mapScalePercent
     });
-  }, [activeLayerIndex, activeMapSlug, layerVisibilities, mapScalePercent, setMapDesignerUiState]);
+  }, [activeLayerIndex, activeMapSlug, isGridVisible, layerVisibilities, mapScalePercent]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -806,40 +1233,14 @@ export function MapDesigner() {
 
       setMapDesignerUiState(activeMapSlug, {
         activeLayerIndex,
+        isGridVisible,
         layerVisibilities,
         scrollLeft: lastKnownScrollRef.current.scrollLeft,
         scrollTop: lastKnownScrollRef.current.scrollTop,
         zoomPercent: mapScalePercentRef.current
       });
     };
-  }, [activeLayerIndex, activeMapSlug, layerVisibilities, setMapDesignerUiState]);
-
-  useEffect(() => {
-    if (haveStringListsChanged(tileSourceUrlsRef.current, tileSlotUrls)) {
-      tileSourceUrlsRef.current = tileSlotUrls;
-      fallbackTileCanvasCacheRef.current.clear();
-      renderedPlacementCanvasCacheRef.current.clear();
-    }
-
-    const nextAssetImageUrls = [...tileSlotUrls, ...spriteThumbnailUrls].filter(Boolean);
-
-    if (!haveStringListsChanged(assetImageUrlsRef.current, nextAssetImageUrls)) {
-      return;
-    }
-
-    assetImageUrlsRef.current = nextAssetImageUrls;
-    let cancelled = false;
-
-    void Promise.all(nextAssetImageUrls.map((imageUrl) => imageCache.ensureImage(imageUrl))).finally(() => {
-      if (cancelled) {
-        return;
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  });
+  }, [activeLayerIndex, activeMapSlug, isGridVisible, layerVisibilities]);
 
   const renderTilePlacement = useEffectEvent(
     (
@@ -864,8 +1265,12 @@ export function MapDesigner() {
       const tileSlots = tileSlotsBySlug.get(placement.tileSlug) ?? [];
       const selectedSlot = tileSlots[placement.slotNum] ?? null;
       const mainSlot = tileSlots[0] ?? null;
-      const renderSlot = selectedSlot?.pixels ? selectedSlot : mainSlot;
-      const tileImage = renderSlot?.pixels ? imageCache.getCachedImage(renderSlot.pixels) : null;
+      const renderSlot =
+        selectedSlot?.pixels || selectedSlot?.layers?.[0]
+          ? selectedSlot
+          : mainSlot;
+      const renderSlotSource = renderSlot?.pixels || renderSlot?.layers?.[0] || "";
+      const tileImage = renderSlotSource ? imageCache.getCachedImage(renderSlotSource) : null;
 
       if (!tileImage && simplified) {
         context.fillStyle = "rgba(216, 135, 83, 0.2)";
@@ -873,7 +1278,7 @@ export function MapDesigner() {
         return;
       }
 
-      const sourceKey = tileImage ? renderSlot?.pixels ?? placement.tileSlug : `fallback:${tileRecord.name}`;
+      const sourceKey = tileImage ? renderSlotSource : `fallback:${tileRecord.name}`;
       const variantKey = `${placement.tileSlug}:${placement.slotNum}:${sourceKey}:${serializeMapTileOptionsKey(placement.options)}`;
       let variantCanvas = renderedPlacementCanvasCacheRef.current.get(variantKey) ?? null;
 
@@ -961,7 +1366,8 @@ export function MapDesigner() {
       placement: { kind: "sprite"; spriteKey: string } | null,
       drawX: number,
       drawY: number,
-      tileDrawSize: number,
+      tileDrawWidth: number,
+      tileDrawHeight = tileDrawWidth,
       simplified = false
     ) => {
       if (!placement?.spriteKey) {
@@ -977,15 +1383,16 @@ export function MapDesigner() {
       const spriteImage = spriteRecord.thumbnail
         ? imageCache.getCachedImage(spriteRecord.thumbnail)
         : null;
-      const scale = tileDrawSize / TILE_SIZE;
-      const anchorCenterX = drawX + tileDrawSize / 2;
-      const anchorCenterY = drawY + tileDrawSize / 2;
-      const spriteDrawWidth = spriteRecord.image_w * scale;
-      const spriteDrawHeight = spriteRecord.image_h * scale;
+      const scaleX = tileDrawWidth / TILE_SIZE;
+      const scaleY = tileDrawHeight / TILE_SIZE;
+      const anchorCenterX = drawX + tileDrawWidth / 2;
+      const anchorCenterY = drawY + tileDrawHeight / 2;
+      const spriteDrawWidth = spriteRecord.image_w * scaleX;
+      const spriteDrawHeight = spriteRecord.image_h * scaleY;
       const spriteDrawX =
-        anchorCenterX - spriteRecord.mount_x * scale + spriteRecord.offset_x * scale;
+        anchorCenterX - spriteRecord.mount_x * scaleX + spriteRecord.offset_x * scaleX;
       const spriteDrawY =
-        anchorCenterY - spriteRecord.mount_y * scale + spriteRecord.offset_y * scale;
+        anchorCenterY - spriteRecord.mount_y * scaleY + spriteRecord.offset_y * scaleY;
 
       if (!spriteImage) {
         if (!simplified) {
@@ -995,7 +1402,7 @@ export function MapDesigner() {
         context.fillStyle = "rgba(216, 135, 83, 0.2)";
         context.fillRect(spriteDrawX, spriteDrawY, spriteDrawWidth, spriteDrawHeight);
         context.strokeStyle = "rgba(20, 33, 39, 0.38)";
-        context.lineWidth = Math.max(1, tileDrawSize * 0.03);
+        context.lineWidth = Math.max(1, Math.min(tileDrawWidth, tileDrawHeight) * 0.03);
         context.strokeRect(spriteDrawX, spriteDrawY, spriteDrawWidth, spriteDrawHeight);
         return;
       }
@@ -1014,12 +1421,14 @@ export function MapDesigner() {
       opacityForLayer: (layerIndex: number) => number,
       options?: {
         clearCanvas?: boolean;
+        height?: number;
         hoverCell?: TileCell | null;
         offsetX?: number;
         offsetY?: number;
         showGrid?: boolean;
         simplifiedFallback?: boolean;
         tileDrawSize?: number;
+        width?: number;
       }
     ) => {
       const tileDrawSize = options?.tileDrawSize ?? TILE_SIZE;
@@ -1028,13 +1437,17 @@ export function MapDesigner() {
       const showGrid = options?.showGrid ?? true;
       const simplifiedFallback = options?.simplifiedFallback ?? false;
       const clearCanvas = options?.clearCanvas ?? true;
+      const renderWidth = options?.width ?? mapWidth;
+      const renderHeight = options?.height ?? mapHeight;
 
       if (clearCanvas) {
         context.clearRect(0, 0, context.canvas.width, context.canvas.height);
       }
 
-      for (let tileY = 0; tileY < mapHeight; tileY += 1) {
-        for (let tileX = 0; tileX < mapWidth; tileX += 1) {
+      const impassibleCellKeys = showGrid ? new Set<string>() : null;
+
+      for (let tileY = 0; tileY < renderHeight; tileY += 1) {
+        for (let tileX = 0; tileX < renderWidth; tileX += 1) {
           const drawX = offsetX + tileX * tileDrawSize;
           const drawY = offsetY + tileY * tileDrawSize;
 
@@ -1049,14 +1462,40 @@ export function MapDesigner() {
           continue;
         }
 
-        for (let tileY = 0; tileY < mapHeight; tileY += 1) {
-          for (let tileX = 0; tileX < mapWidth; tileX += 1) {
+        for (let tileY = 0; tileY < renderHeight; tileY += 1) {
+          for (let tileX = 0; tileX < renderWidth; tileX += 1) {
             const placement = layers[layerIndex]?.[tileY]?.[tileX] ?? null;
             const drawX = offsetX + tileX * tileDrawSize;
             const drawY = offsetY + tileY * tileDrawSize;
 
             if (!placement) {
               continue;
+            }
+
+            if (impassibleCellKeys) {
+              if (isMapTilePlacement(placement)) {
+                const tileRecord = tilesBySlug.get(placement.tileSlug) ?? null;
+
+                if (tileRecord?.impassible) {
+                  impassibleCellKeys.add(getMapCellKey(tileX, tileY));
+                }
+              } else if (isMapSpritePlacement(placement)) {
+                const spriteRecord = spritesByKey.get(placement.spriteKey) ?? null;
+
+                if (spriteRecord?.impassible) {
+                  const bounds = getSpritePlacementTileBounds(spriteRecord, tileX, tileY);
+                  const startTileX = Math.max(0, bounds.leftTileX);
+                  const endTileX = Math.min(renderWidth - 1, bounds.rightTileX);
+                  const startTileY = Math.max(0, bounds.topTileY);
+                  const endTileY = Math.min(renderHeight - 1, bounds.bottomTileY);
+
+                  for (let occupiedTileY = startTileY; occupiedTileY <= endTileY; occupiedTileY += 1) {
+                    for (let occupiedTileX = startTileX; occupiedTileX <= endTileX; occupiedTileX += 1) {
+                      impassibleCellKeys.add(getMapCellKey(occupiedTileX, occupiedTileY));
+                    }
+                  }
+                }
+              }
             }
 
             context.save();
@@ -1073,7 +1512,15 @@ export function MapDesigner() {
                 simplifiedFallback
               );
             } else if (isMapSpritePlacement(placement)) {
-              renderSpritePlacement(context, placement, drawX, drawY, tileDrawSize, simplifiedFallback);
+              renderSpritePlacement(
+                context,
+                placement,
+                drawX,
+                drawY,
+                tileDrawSize,
+                tileDrawSize,
+                simplifiedFallback
+              );
             }
 
             context.restore();
@@ -1081,8 +1528,8 @@ export function MapDesigner() {
         }
       }
 
-      for (let tileY = 0; tileY < mapHeight; tileY += 1) {
-        for (let tileX = 0; tileX < mapWidth; tileX += 1) {
+      for (let tileY = 0; tileY < renderHeight; tileY += 1) {
+        for (let tileX = 0; tileX < renderWidth; tileX += 1) {
           const drawX = offsetX + tileX * tileDrawSize;
           const drawY = offsetY + tileY * tileDrawSize;
 
@@ -1090,6 +1537,12 @@ export function MapDesigner() {
             context.strokeStyle = "rgba(20, 33, 39, 0.12)";
             context.lineWidth = 1;
             context.strokeRect(drawX + 0.5, drawY + 0.5, tileDrawSize - 1, tileDrawSize - 1);
+
+            if (impassibleCellKeys?.has(getMapCellKey(tileX, tileY))) {
+              context.strokeStyle = "rgba(240, 0, 0, 0.2)";
+              context.lineWidth = Math.max(1.5, tileDrawSize * 0.08);
+              context.strokeRect(drawX + 1, drawY + 1, Math.max(1, tileDrawSize - 2), Math.max(1, tileDrawSize - 2));
+            }
           }
 
           if (
@@ -1143,21 +1596,227 @@ export function MapDesigner() {
       }
 
       drawPreviewBackground(context, MAP_PREVIEW_SIZE, MAP_PREVIEW_SIZE);
+
+      if (!areMapAssetsReady) {
+        return;
+      }
+
+      const sourceCanvas = document.createElement("canvas");
+      ensureCanvasSize(sourceCanvas, mapCanvasWidth, mapCanvasHeight);
+      const sourceContext = sourceCanvas.getContext("2d");
+
+      if (!sourceContext) {
+        return;
+      }
+
+      renderMapGrid(sourceContext, layers, opacityForLayer, {
+        showGrid: false
+      });
+
       const scale = Math.min(MAP_PREVIEW_SIZE / mapCanvasWidth, MAP_PREVIEW_SIZE / mapCanvasHeight);
       const scaledWidth = Math.max(1, Math.round(mapCanvasWidth * scale));
       const scaledHeight = Math.max(1, Math.round(mapCanvasHeight * scale));
       const offsetX = Math.floor((MAP_PREVIEW_SIZE - scaledWidth) / 2);
       const offsetY = Math.floor((MAP_PREVIEW_SIZE - scaledHeight) / 2);
 
-      renderMapGrid(context, layers, opacityForLayer, {
-        clearCanvas: false,
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      context.drawImage(
+        sourceCanvas,
+        0,
+        0,
+        mapCanvasWidth,
+        mapCanvasHeight,
         offsetX,
         offsetY,
-        showGrid: false,
-        tileDrawSize: TILE_SIZE * scale
-      });
+        scaledWidth,
+        scaledHeight
+      );
     }
   );
+
+  const renderMiniMapDataUrl = useEffectEvent(
+    async (
+      layers: typeof draftLayers = draftLayers,
+      width = mapWidth,
+      height = mapHeight
+    ) => {
+      const miniMapCanvasWidth = getMapCanvasWidth(width);
+      const miniMapCanvasHeight = getMapCanvasHeight(height);
+      const assetImageUrls = [...tileSlotUrls, ...spriteThumbnailUrls].filter(Boolean);
+
+      await Promise.all(assetImageUrls.map((imageUrl) => imageCache.ensureImage(imageUrl)));
+
+      const sourceCanvas = document.createElement("canvas");
+      ensureCanvasSize(sourceCanvas, miniMapCanvasWidth, miniMapCanvasHeight);
+      const sourceContext = sourceCanvas.getContext("2d");
+
+      if (!sourceContext) {
+        throw new Error("Could not render the map mini-map source.");
+      }
+
+      renderMapGrid(sourceContext, layers, () => 1, {
+        height,
+        showGrid: false,
+        width
+      });
+
+      const scale = Math.min(
+        MAP_MINI_MAP_MAX_SIZE / miniMapCanvasWidth,
+        MAP_MINI_MAP_MAX_SIZE / miniMapCanvasHeight
+      );
+      const outputWidth = Math.max(1, Math.round(miniMapCanvasWidth * scale));
+      const outputHeight = Math.max(1, Math.round(miniMapCanvasHeight * scale));
+      const outputCanvas = document.createElement("canvas");
+      ensureCanvasSize(outputCanvas, outputWidth, outputHeight);
+      const outputContext = outputCanvas.getContext("2d");
+
+      if (!outputContext) {
+        throw new Error("Could not render the map mini-map output.");
+      }
+
+      outputContext.imageSmoothingEnabled = true;
+      outputContext.imageSmoothingQuality = "high";
+      outputContext.clearRect(0, 0, outputWidth, outputHeight);
+      outputContext.drawImage(
+        sourceCanvas,
+        0,
+        0,
+        miniMapCanvasWidth,
+        miniMapCanvasHeight,
+        0,
+        0,
+        outputWidth,
+        outputHeight
+      );
+
+      return outputCanvas.toDataURL("image/png");
+    }
+  );
+
+  const renderAiPreviewData = useEffectEvent(async (snapshot: MapAiPreviewSnapshot) => {
+    await Promise.all(snapshot.assetImageUrls.map((imageUrl) => imageCache.ensureImage(imageUrl)));
+
+    const imageCanvas = document.createElement("canvas");
+    ensureCanvasSize(imageCanvas, AI_PREVIEW_SIZE, AI_PREVIEW_SIZE);
+    const imageContext = imageCanvas.getContext("2d");
+
+    if (!imageContext) {
+      throw new Error("Could not render the AI image preview.");
+    }
+
+    imageContext.clearRect(0, 0, AI_PREVIEW_SIZE, AI_PREVIEW_SIZE);
+    imageContext.imageSmoothingEnabled = true;
+    imageContext.imageSmoothingQuality = "high";
+
+    for (let tileY = snapshot.selection.topTileY; tileY <= snapshot.selection.bottomTileY; tileY += 1) {
+      const relativeTileY = tileY - snapshot.selection.topTileY;
+      const yBounds = getScaledTileBounds(relativeTileY, snapshot.selection.tileHeight, AI_PREVIEW_SIZE);
+
+      for (let tileX = snapshot.selection.leftTileX; tileX <= snapshot.selection.rightTileX; tileX += 1) {
+        const relativeTileX = tileX - snapshot.selection.leftTileX;
+        const xBounds = getScaledTileBounds(relativeTileX, snapshot.selection.tileWidth, AI_PREVIEW_SIZE);
+
+        drawMapCellBackgroundRect(
+          imageContext,
+          xBounds.start,
+          yBounds.start,
+          xBounds.size,
+          yBounds.size
+        );
+      }
+    }
+
+    for (let layerIndex = 0; layerIndex < MAP_LAYER_COUNT; layerIndex += 1) {
+      const opacity = snapshot.layerVisibilities[layerIndex] ?? 1;
+
+      if (opacity <= 0) {
+        continue;
+      }
+
+      for (let tileY = snapshot.selection.topTileY; tileY <= snapshot.selection.bottomTileY; tileY += 1) {
+        const relativeTileY = tileY - snapshot.selection.topTileY;
+        const yBounds = getScaledTileBounds(relativeTileY, snapshot.selection.tileHeight, AI_PREVIEW_SIZE);
+
+        for (let tileX = snapshot.selection.leftTileX; tileX <= snapshot.selection.rightTileX; tileX += 1) {
+          const placement = snapshot.layers[layerIndex]?.[tileY]?.[tileX] ?? null;
+
+          if (!placement) {
+            continue;
+          }
+
+          const relativeTileX = tileX - snapshot.selection.leftTileX;
+          const xBounds = getScaledTileBounds(relativeTileX, snapshot.selection.tileWidth, AI_PREVIEW_SIZE);
+
+          imageContext.save();
+          imageContext.globalAlpha = opacity;
+
+          if (isMapTilePlacement(placement)) {
+            renderTilePlacement(
+              imageContext,
+              placement,
+              xBounds.start,
+              yBounds.start,
+              xBounds.size,
+              yBounds.size
+            );
+          } else if (isMapSpritePlacement(placement)) {
+            renderSpritePlacement(
+              imageContext,
+              placement,
+              xBounds.start,
+              yBounds.start,
+              xBounds.size,
+              yBounds.size
+            );
+          }
+
+          imageContext.restore();
+        }
+      }
+    }
+
+    const maskCanvas = document.createElement("canvas");
+    ensureCanvasSize(maskCanvas, AI_PREVIEW_SIZE, AI_PREVIEW_SIZE);
+    const maskContext = maskCanvas.getContext("2d");
+
+    if (!maskContext) {
+      throw new Error("Could not render the AI edit mask.");
+    }
+
+    maskContext.fillStyle = "#000000";
+    maskContext.fillRect(0, 0, AI_PREVIEW_SIZE, AI_PREVIEW_SIZE);
+    maskContext.fillStyle = "#ffffff";
+
+    snapshot.maskedCells.forEach((cellKey) => {
+      const [rawTileX, rawTileY] = cellKey.split(",");
+      const tileX = Number.parseInt(rawTileX ?? "", 10);
+      const tileY = Number.parseInt(rawTileY ?? "", 10);
+
+      if (
+        !Number.isFinite(tileX) ||
+        !Number.isFinite(tileY) ||
+        tileX < snapshot.selection.leftTileX ||
+        tileX > snapshot.selection.rightTileX ||
+        tileY < snapshot.selection.topTileY ||
+        tileY > snapshot.selection.bottomTileY
+      ) {
+        return;
+      }
+
+      maskContext.fillRect(
+        getScaledTileBounds(tileX - snapshot.selection.leftTileX, snapshot.selection.tileWidth, AI_PREVIEW_SIZE).start,
+        getScaledTileBounds(tileY - snapshot.selection.topTileY, snapshot.selection.tileHeight, AI_PREVIEW_SIZE).start,
+        getScaledTileBounds(tileX - snapshot.selection.leftTileX, snapshot.selection.tileWidth, AI_PREVIEW_SIZE).size,
+        getScaledTileBounds(tileY - snapshot.selection.topTileY, snapshot.selection.tileHeight, AI_PREVIEW_SIZE).size
+      );
+    });
+
+    return {
+      imageUrl: imageCanvas.toDataURL("image/png"),
+      maskUrl: maskCanvas.toDataURL("image/png")
+    };
+  });
 
   const renderHoverCanvas = useEffectEvent(() => {
     const hoverCanvas = hoverCanvasRef.current;
@@ -1174,6 +1833,72 @@ export function MapDesigner() {
     }
 
     context.clearRect(0, 0, hoverCanvas.width, hoverCanvas.height);
+
+    if (activeSidebarTab === "ai") {
+      maskedCells.forEach((cellKey) => {
+        const [rawTileX, rawTileY] = cellKey.split(",");
+        const tileX = Number.parseInt(rawTileX ?? "", 10);
+        const tileY = Number.parseInt(rawTileY ?? "", 10);
+
+        if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) {
+          return;
+        }
+
+        context.fillStyle = "rgba(0, 0, 0, 0.8)";
+        context.fillRect(tileX * TILE_SIZE, tileY * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      });
+
+      const activeSelectionDraft = aiSelectionDraft
+        ? getAiSelectionFromCells(aiSelectionDraft.anchorCell, aiSelectionDraft.focusCell)
+        : null;
+      const visibleSelection = activeSelectionDraft ?? aiSelection;
+
+      if (visibleSelection) {
+        const drawX = visibleSelection.leftTileX * TILE_SIZE;
+        const drawY = visibleSelection.topTileY * TILE_SIZE;
+
+        context.save();
+        context.fillStyle = "rgba(241, 201, 123, 0.18)";
+        context.strokeStyle = "#f1c97b";
+        context.lineWidth = 5;
+        context.fillRect(drawX, drawY, visibleSelection.pixelWidth, visibleSelection.pixelHeight);
+        context.strokeRect(
+          drawX + 2.5,
+          drawY + 2.5,
+          Math.max(1, visibleSelection.pixelWidth - 5),
+          Math.max(1, visibleSelection.pixelHeight - 5)
+        );
+        context.font = "700 24px Inter, sans-serif";
+        context.textAlign = "left";
+        context.textBaseline = "middle";
+        const label = formatAiSelectionSize(visibleSelection);
+        const labelWidth = Math.ceil(context.measureText(label).width) + 28;
+        const labelHeight = 38;
+        const labelX = drawX + 10;
+        const labelY = Math.max(10, drawY + 10);
+
+        context.fillStyle = "rgba(20, 33, 39, 0.88)";
+        context.fillRect(labelX, labelY, labelWidth, labelHeight);
+        context.fillStyle = "#fffdf8";
+        context.fillText(label, labelX + 14, labelY + labelHeight / 2);
+        context.restore();
+      }
+
+      if (hoverCell) {
+        context.save();
+        context.strokeStyle = activeAiTool === "erase" ? "#d88753" : "#f1c97b";
+        context.lineWidth = 4;
+        context.strokeRect(
+          hoverCell.tileX * TILE_SIZE + 2,
+          hoverCell.tileY * TILE_SIZE + 2,
+          TILE_SIZE - 4,
+          TILE_SIZE - 4
+        );
+        context.restore();
+      }
+
+      return;
+    }
 
     if (!hoverCell) {
       return;
@@ -1218,8 +1943,13 @@ export function MapDesigner() {
       return;
     }
 
+    if (!areMapAssetsReady) {
+      context.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
+      return;
+    }
+
     renderMapGrid(context, draftLayers, (layerIndex) => layerVisibilities[layerIndex] ?? 1, {
-      showGrid: true
+      showGrid: isGridVisible
     });
   });
 
@@ -1236,18 +1966,174 @@ export function MapDesigner() {
   });
 
   useEffect(() => {
+    if (haveStringListsChanged(tileSourceUrlsRef.current, tileSlotUrls)) {
+      tileSourceUrlsRef.current = tileSlotUrls;
+      fallbackTileCanvasCacheRef.current.clear();
+      renderedPlacementCanvasCacheRef.current.clear();
+    }
+
+    const nextAssetImageUrls = [...tileSlotUrls, ...spriteThumbnailUrls].filter(Boolean);
+    const assetImageUrlsChanged = haveStringListsChanged(assetImageUrlsRef.current, nextAssetImageUrls);
+
+    if (!assetImageUrlsChanged) {
+      return;
+    }
+
+    const loadVersion = mapAssetLoadVersionRef.current + 1;
+
+    mapAssetLoadVersionRef.current = loadVersion;
+    setMapAssetsReady(nextAssetImageUrls.length === 0);
+    assetImageUrlsRef.current = nextAssetImageUrls;
+
+    if (nextAssetImageUrls.length === 0) {
+      renderMapCanvas();
+      renderPreviewCanvases();
+      return;
+    }
+
+    let cancelled = false;
+
+    void Promise.all(nextAssetImageUrls.map((imageUrl) => imageCache.ensureImage(imageUrl))).finally(() => {
+      if (cancelled || mapAssetLoadVersionRef.current !== loadVersion) {
+        return;
+      }
+
+      setMapAssetsReady(true);
+      renderMapCanvas();
+      renderPreviewCanvases();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [imageCache, renderMapCanvas, renderPreviewCanvases, spriteThumbnailUrls, tileSlotUrls]);
+
+  useEffect(() => {
     renderMapCanvas();
-  }, [draftLayers, layerVisibilities, mapCanvasHeight, mapCanvasWidth, mapHeight, mapWidth, renderMapCanvas]);
+  }, [
+    areMapAssetsReady,
+    draftLayers,
+    isGridVisible,
+    layerVisibilities,
+    mapCanvasHeight,
+    mapCanvasWidth,
+    mapHeight,
+    mapWidth,
+    renderMapCanvas
+  ]);
 
   useEffect(() => {
     renderPreviewCanvases();
-  }, [draftLayers, layerVisibilities, mapCanvasHeight, mapCanvasWidth, mapHeight, mapWidth, renderPreviewCanvases]);
+  }, [
+    areMapAssetsReady,
+    draftLayers,
+    layerVisibilities,
+    mapCanvasHeight,
+    mapCanvasWidth,
+    mapHeight,
+    mapWidth,
+    renderPreviewCanvases
+  ]);
 
   useEffect(() => {
     renderHoverCanvas();
-  }, [activeBrushSpriteKey, hoverCell, mapCanvasHeight, mapCanvasWidth, renderHoverCanvas, sprites]);
+  }, [
+    activeAiTool,
+    activeBrushSpriteKey,
+    activeSidebarTab,
+    aiSelection,
+    aiSelectionDraft,
+    hoverCell,
+    mapCanvasHeight,
+    mapCanvasWidth,
+    maskedCells,
+    renderHoverCanvas,
+    sprites
+  ]);
 
-  function paintCell(nextCell: TileCell) {
+  useEffect(() => {
+    if (!isAiModalOpen || !aiPreviewSnapshot) {
+      return;
+    }
+
+    const renderVersion = aiPreviewRenderVersionRef.current + 1;
+    aiPreviewRenderVersionRef.current = renderVersion;
+    setAiPreviewStatus("Rendering 1024x1024 previews...");
+
+    void renderAiPreviewData(aiPreviewSnapshot)
+      .then((previewData) => {
+        if (aiPreviewRenderVersionRef.current !== renderVersion) {
+          return;
+        }
+
+        setAiPreviewImageUrl(previewData.imageUrl);
+        setAiPreviewMaskUrl(previewData.maskUrl);
+        setAiPreviewStatus("");
+      })
+      .catch((error: unknown) => {
+        if (aiPreviewRenderVersionRef.current !== renderVersion) {
+          return;
+        }
+
+        setAiPreviewStatus(
+          error instanceof Error ? error.message : "Could not render the AI previews."
+        );
+      });
+  }, [aiPreviewSnapshot, isAiModalOpen, renderAiPreviewData]);
+
+  useEffect(() => {
+    if (activeSidebarTab !== "ai" || activeAiTool !== "select" || !aiSelectionDraft) {
+      return;
+    }
+
+    const handleWindowMouseMove = (event: MouseEvent) => {
+      if (!drawingRef.current) {
+        return;
+      }
+
+      const nextCell = getClampedMapCellFromClientPoint(event.clientX, event.clientY);
+
+      if (!nextCell) {
+        return;
+      }
+
+      setHoverCell(nextCell);
+      setAiSelectionDraft((currentDraft) =>
+        currentDraft
+          ? {
+              ...currentDraft,
+              focusCell: nextCell
+            }
+          : currentDraft
+      );
+    };
+
+    const handleWindowMouseUp = (event: MouseEvent) => {
+      const nextCell = getClampedMapCellFromClientPoint(event.clientX, event.clientY);
+      const focusCell = nextCell ?? aiSelectionDraft.focusCell;
+
+      finalizeAiSelection(aiSelectionDraft.anchorCell, focusCell);
+      finishPaint();
+    };
+
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+    };
+  }, [activeAiTool, activeSidebarTab, aiSelectionDraft, mapHeight, mapWidth]);
+
+  function getActiveBrushPlacement() {
+    return activeBrushTileSlug
+      ? createMapTilePlacement(activeBrushTileSlug, brushOptions, activeBrushTileSlotNum)
+      : activeBrushSpriteKey
+        ? createMapSpritePlacement(activeBrushSpriteKey)
+        : null;
+  }
+
+  function paintCell(nextCell: TileCell, placementOverride?: MapAssetPlacement | null) {
     if (!activeMapSlug) {
       return;
     }
@@ -1255,17 +2141,77 @@ export function MapDesigner() {
     const nextLayers = draftLayers.map((layerCells) => layerCells.map((row) => row.slice()));
     const nextLayer = nextLayers[activeLayerIndex];
     const nextRow = nextLayer?.[nextCell.tileY];
+    const nextPlacement = placementOverride ?? getActiveBrushPlacement();
 
     if (!nextRow) {
       return;
     }
 
-    nextRow[nextCell.tileX] = activeBrushTileSlug
-      ? createMapTilePlacement(activeBrushTileSlug, brushOptions, activeBrushTileSlotNum)
-      : activeBrushSpriteKey
-        ? createMapSpritePlacement(activeBrushSpriteKey)
-        : null;
+    nextRow[nextCell.tileX] = nextPlacement ? cloneMapPlacement(nextPlacement) : null;
     setMapDraftLayers(activeMapSlug, nextLayers, mapWidth, mapHeight);
+
+    if (nextPlacement) {
+      lastPlacedPlacementRef.current = {
+        cell: nextCell,
+        placement: cloneMapPlacement(nextPlacement) as MapAssetPlacement
+      };
+    }
+  }
+
+  function paintLineFromLastPlacement(targetCell: TileCell) {
+    if (!activeMapSlug || !lastPlacedPlacementRef.current) {
+      return false;
+    }
+
+    const linePlacement = cloneMapPlacement(lastPlacedPlacementRef.current.placement);
+
+    if (!linePlacement) {
+      return false;
+    }
+
+    const nextLayers = draftLayers.map((layerCells) => layerCells.map((row) => row.slice()));
+    const nextLayer = nextLayers[activeLayerIndex];
+
+    if (!nextLayer) {
+      return false;
+    }
+
+    for (const lineCell of getCellsInLine(lastPlacedPlacementRef.current.cell, targetCell)) {
+      const nextRow = nextLayer[lineCell.tileY];
+
+      if (nextRow) {
+        nextRow[lineCell.tileX] = cloneMapPlacement(linePlacement);
+      }
+    }
+
+    setMapDraftLayers(activeMapSlug, nextLayers, mapWidth, mapHeight);
+    lastPlacedPlacementRef.current = {
+      cell: targetCell,
+      placement: cloneMapPlacement(linePlacement) as MapAssetPlacement
+    };
+    return true;
+  }
+
+  function sampleBrushFromCell(nextCell: TileCell) {
+    const sampledPlacement = draftLayers[activeLayerIndex]?.[nextCell.tileY]?.[nextCell.tileX] ?? null;
+
+    if (isMapTilePlacement(sampledPlacement)) {
+      setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(sampledPlacement.tileSlug, sampledPlacement.slotNum));
+      setBrushOptions(normalizeMapTileOptions(sampledPlacement.options));
+      setMapStatus(
+        `Sampled ${sampledPlacement.tileSlug} ${getSlotLabel(sampledPlacement.slotNum)} from ${nextCell.tileX},${nextCell.tileY}.`
+      );
+    } else if (isMapSpritePlacement(sampledPlacement)) {
+      setMapBrushAssetKey(getSpriteBrushAssetKey(sampledPlacement.spriteKey));
+      setBrushOptions(DEFAULT_MAP_BRUSH_OPTIONS);
+      setMapStatus(`Sampled sprite ${sampledPlacement.spriteKey} from ${nextCell.tileX},${nextCell.tileY}.`);
+    } else {
+      setMapBrushAssetKey("");
+      setBrushOptions(DEFAULT_MAP_BRUSH_OPTIONS);
+      setMapStatus(`Sampled empty cell at ${nextCell.tileX},${nextCell.tileY}. Brush set to eraser.`);
+    }
+
+    setBrushEyedropperActive(false);
   }
 
   function clearLayer(layerIndex: number) {
@@ -1277,6 +2223,69 @@ export function MapDesigner() {
       index === layerIndex ? createEmptyMapCells(mapWidth, mapHeight) : layerCells.map((row) => row.slice())
     );
     setMapDraftLayers(activeMapSlug, nextLayers, mapWidth, mapHeight);
+  }
+
+  function applyAiMaskCell(nextCell: TileCell, tool: Extract<MapAiTool, "erase" | "mask">) {
+    const cellKey = getMapCellKey(nextCell.tileX, nextCell.tileY);
+
+    if (lastPaintedCellKeyRef.current === cellKey) {
+      return;
+    }
+
+    lastPaintedCellKeyRef.current = cellKey;
+    setMaskedCells((currentCells) => {
+      const nextCells = new Set(currentCells);
+
+      if (tool === "mask") {
+        nextCells.add(cellKey);
+      } else {
+        nextCells.delete(cellKey);
+      }
+
+      return nextCells;
+    });
+  }
+
+  function finalizeAiSelection(anchorCell: TileCell, focusCell: TileCell) {
+    const nextSelection = getAiSelectionFromCells(anchorCell, focusCell);
+
+    setAiSelection(nextSelection);
+    setAiSelectionDraft(null);
+    setAiPreviewSnapshot({
+      assetImageUrls: [...tileSlotUrls, ...spriteThumbnailUrls].filter(Boolean),
+      layerVisibilities: [...layerVisibilities],
+      layers: cloneMapLayers(draftLayers),
+      maskedCells: new Set(maskedCells),
+      selection: nextSelection
+    });
+    setIsAiModalOpen(true);
+    setMapStatus(
+      `Prepared AI selection ${formatAiSelectionSize(nextSelection)} from ${nextSelection.tileWidth}x${nextSelection.tileHeight} tiles.`
+    );
+  }
+
+  function getClampedMapCellFromClientPoint(clientX: number, clientY: number): TileCell | null {
+    const mapCanvas = mapCanvasRef.current;
+
+    if (!mapCanvas || mapWidth <= 0 || mapHeight <= 0) {
+      return null;
+    }
+
+    const rect = mapCanvas.getBoundingClientRect();
+
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+
+    const scaleX = mapCanvas.width / rect.width;
+    const scaleY = mapCanvas.height / rect.height;
+    const canvasX = (clientX - rect.left) * scaleX;
+    const canvasY = (clientY - rect.top) * scaleY;
+
+    return {
+      tileX: getClampedTileIndex(canvasX, mapWidth),
+      tileY: getClampedTileIndex(canvasY, mapHeight)
+    };
   }
 
   function beginPaint() {
@@ -1298,6 +2307,26 @@ export function MapDesigner() {
     );
 
     setHoverCell(nextCell);
+
+    if (activeSidebarTab === "ai") {
+      if (activeAiTool === "select") {
+        if (drawingRef.current && nextCell && aiSelectionDraft) {
+          setAiSelectionDraft({
+            ...aiSelectionDraft,
+            focusCell: nextCell
+          });
+        }
+
+        return;
+      }
+
+      if (!drawingRef.current || !nextCell) {
+        return;
+      }
+
+      applyAiMaskCell(nextCell, activeAiTool);
+      return;
+    }
 
     if (!drawingRef.current || !nextCell) {
       return;
@@ -1340,8 +2369,97 @@ export function MapDesigner() {
         })
         .finally(() => {
           setBusyLabel("");
-        });
+      });
     });
+  }
+
+  function handleResizeMap() {
+    if (!activeMap) {
+      setMapStatus("Choose a map before resizing.");
+      return;
+    }
+
+    const nextWidth = normalizedResizeMapWidth;
+    const nextHeight = normalizedResizeMapHeight;
+
+    if (nextWidth < mapWidth || nextHeight < mapHeight) {
+      setMapStatus("Reducing map size is not supported yet.");
+      return;
+    }
+
+    if (nextWidth === mapWidth && nextHeight === mapHeight) {
+      setMapStatus(`Map is already ${mapWidth}x${mapHeight}.`);
+      setIsResizeDialogOpen(false);
+      return;
+    }
+
+    let nextLayers: typeof draftLayers;
+
+    try {
+      nextLayers = resizeMapLayersExpandingEdges(
+        draftLayers,
+        mapWidth,
+        mapHeight,
+        nextWidth,
+        nextHeight
+      );
+    } catch (error) {
+      setMapStatus(error instanceof Error ? error.message : "Could not resize map.");
+      return;
+    }
+
+    if (saveConfirmationTimeoutRef.current !== null) {
+      window.clearTimeout(saveConfirmationTimeoutRef.current);
+      saveConfirmationTimeoutRef.current = null;
+    }
+
+    setSaveConfirmationMessage("");
+    setBusyLabel("Resizing map");
+
+    void renderMiniMapDataUrl(nextLayers, nextWidth, nextHeight)
+      .then((miniMap) => {
+        startTransition(() => {
+          void resizeMapAction({
+            aboutPrompt: activeMapAboutPrompt,
+            currentHeight: mapHeight,
+            currentWidth: mapWidth,
+            height: nextHeight,
+            isInstance: activeMap.isInstance,
+            layers: nextLayers,
+            miniMap,
+            name: activeMap.name,
+            slug: activeMap.slug,
+            width: nextWidth
+          })
+            .then((savedMap) => {
+              upsertMap(savedMap);
+              setMapDraftLayers(savedMap.slug, savedMap.layers, savedMap.width, savedMap.height);
+              setMapAboutPromptDrafts((currentDrafts) => ({
+                ...currentDrafts,
+                [savedMap.slug]: savedMap.aboutPrompt
+              }));
+              setIsResizeDialogOpen(false);
+              setMapStatus(
+                `Resized ${savedMap.name} to ${savedMap.width}x${savedMap.height} at ${savedMap.updatedAt}.`
+              );
+              setSaveConfirmationMessage("map resized");
+              saveConfirmationTimeoutRef.current = window.setTimeout(() => {
+                setSaveConfirmationMessage("");
+                saveConfirmationTimeoutRef.current = null;
+              }, 3000);
+            })
+            .catch((error: unknown) => {
+              setMapStatus(error instanceof Error ? error.message : "Could not resize map.");
+            })
+            .finally(() => {
+              setBusyLabel("");
+            });
+        });
+      })
+      .catch((error: unknown) => {
+        setMapStatus(error instanceof Error ? error.message : "Could not render map mini-map.");
+        setBusyLabel("");
+      });
   }
 
   function handleSaveMap() {
@@ -1358,41 +2476,211 @@ export function MapDesigner() {
     setSaveConfirmationMessage("");
     setBusyLabel("Saving map");
 
-    startTransition(() => {
-      void saveMapAction({
-        height: mapHeight,
-        layers: draftLayers,
-        name: activeMap.name,
-        slug: activeMap.slug,
-        width: mapWidth
-      })
-        .then((savedMap) => {
-          upsertMap(savedMap);
-          setMapDraftLayers(savedMap.slug, savedMap.layers, savedMap.width, savedMap.height);
-          setMapStatus(
-            `Saved ${savedMap.name} (${savedMap.width}x${savedMap.height}) at ${savedMap.updatedAt}.`
-          );
-          setSaveConfirmationMessage("map saved");
-          saveConfirmationTimeoutRef.current = window.setTimeout(() => {
-            setSaveConfirmationMessage("");
-            saveConfirmationTimeoutRef.current = null;
-          }, 3000);
-        })
-        .catch((error: unknown) => {
-          setMapStatus(error instanceof Error ? error.message : "Could not save map.");
-        })
-        .finally(() => {
-          setBusyLabel("");
+    void renderMiniMapDataUrl()
+      .then((miniMap) => {
+        startTransition(() => {
+          void saveMapAction({
+            aboutPrompt: activeMapAboutPrompt,
+            height: mapHeight,
+            isInstance: activeMap.isInstance,
+            layers: draftLayers,
+            miniMap,
+            name: activeMap.name,
+            slug: activeMap.slug,
+            width: mapWidth
+          })
+            .then((savedMap) => {
+              upsertMap(savedMap);
+              setMapDraftLayers(savedMap.slug, savedMap.layers, savedMap.width, savedMap.height);
+              setMapAboutPromptDrafts((currentDrafts) => ({
+                ...currentDrafts,
+                [savedMap.slug]: savedMap.aboutPrompt
+              }));
+              setMapStatus(
+                `Saved ${savedMap.name} (${savedMap.width}x${savedMap.height}) at ${savedMap.updatedAt}.`
+              );
+              setSaveConfirmationMessage("map saved");
+              saveConfirmationTimeoutRef.current = window.setTimeout(() => {
+                setSaveConfirmationMessage("");
+                saveConfirmationTimeoutRef.current = null;
+              }, 3000);
+            })
+            .catch((error: unknown) => {
+              setMapStatus(error instanceof Error ? error.message : "Could not save map.");
+            })
+            .finally(() => {
+              setBusyLabel("");
+            });
         });
-    });
+      })
+      .catch((error: unknown) => {
+        setMapStatus(error instanceof Error ? error.message : "Could not render map mini-map.");
+        setBusyLabel("");
+      });
+  }
+
+  function updateAiModelStatus(
+    modelId: string,
+    nextStatus: Partial<MapAiModelStatus> & Pick<MapAiModelStatus, "status">
+  ) {
+    setAiModelStatuses((currentStatuses) =>
+      currentStatuses.map((status) =>
+        status.modelId === modelId
+          ? {
+              ...status,
+              ...nextStatus
+            }
+          : status
+      )
+    );
+  }
+
+  function handleSubmitAiEdit() {
+    if (!activeMap) {
+      setAiPreviewStatus("Choose a map before submitting an AI edit.");
+      return;
+    }
+
+    if (!aiPreviewImageUrl || !aiPreviewMaskUrl || !aiSelection) {
+      setAiPreviewStatus("Create an AI selection before submitting.");
+      return;
+    }
+
+    if (!aiPrompt.trim()) {
+      setAiPreviewStatus("Description is required before submitting.");
+      return;
+    }
+
+    setIsAiModalOpen(false);
+    setIsAiRunningModalOpen(true);
+    setAiSubmitting(false);
+    setAiPreviewStatus("Choose one or more models, then press Start.");
+    setAiRunDirectoryName("");
+    setAiSelectedModelIds(getDefaultAiSelectedModelIds());
+    setAiModelStatuses(createInitialAiModelStatuses());
+  }
+
+  async function handleStartAiEdit() {
+    if (!activeMap) {
+      setAiPreviewStatus("Choose a map before starting an AI edit.");
+      return;
+    }
+
+    if (!aiPreviewImageUrl || !aiPreviewMaskUrl || !aiSelection) {
+      setAiPreviewStatus("Create an AI selection before starting.");
+      return;
+    }
+
+    if (!aiPrompt.trim()) {
+      setAiPreviewStatus("Description is required before starting.");
+      return;
+    }
+
+    if (!aiSelectedModelIds.length) {
+      setAiPreviewStatus("Select at least one model before starting.");
+      return;
+    }
+
+    const selectedModelIds = [...aiSelectedModelIds];
+
+    setAiSubmitting(true);
+    setAiPreviewStatus("Preparing AI run folder...");
+    setAiRunDirectoryName("");
+    setAiModelStatuses(
+      MAP_AI_SUPPORTED_MODELS.map((model) => ({
+        detail: selectedModelIds.includes(model.id)
+          ? model.supportsNegativePrompt
+            ? "Queued with prompt, image, mask, and optional negative prompt."
+            : "Queued with prompt, image, and mask."
+          : "Not selected for this run.",
+        modelId: model.id,
+        modelLabel: model.label,
+        requestId: "",
+        status: selectedModelIds.includes(model.id) ? "idle" : "skipped"
+      }))
+    );
+
+    try {
+      const selectionSummary = toMapAiSelectionSummary(aiSelection);
+      const preparedRun = await prepareMapAiRunAction({
+        imageDataUrl: aiPreviewImageUrl,
+        mapName: activeMap.name,
+        mapSlug: activeMap.slug,
+        maskDataUrl: aiPreviewMaskUrl,
+        negativePrompt: aiNegativePrompt,
+        prompt: aiPrompt,
+        selection: selectionSummary
+      });
+
+      setAiRunDirectoryName(preparedRun.runDirectoryName);
+
+      for (const modelId of selectedModelIds) {
+        const model = MAP_AI_SUPPORTED_MODELS.find((candidate) => candidate.id === modelId);
+
+        if (!model) {
+          continue;
+        }
+
+        updateAiModelStatus(model.id, {
+          detail: `Submitting ${model.label}...`,
+          requestId: "",
+          status: "running"
+        });
+        setAiPreviewStatus(`Running ${model.label}...`);
+
+        try {
+          const result = await runMapAiModelAction({
+            imageDataUrl: aiPreviewImageUrl,
+            mapName: activeMap.name,
+            mapSlug: activeMap.slug,
+            maskDataUrl: aiPreviewMaskUrl,
+            modelId: model.id,
+            negativePrompt: aiNegativePrompt,
+            prompt: aiPrompt,
+            runDirectoryName: preparedRun.runDirectoryName,
+            selection: selectionSummary
+          });
+
+          updateAiModelStatus(model.id, {
+            detail: `Saved output to ${result.outputImagePath} in ${Math.round(result.durationMs)}ms.`,
+            requestId: result.requestId,
+            status: "success"
+          });
+        } catch (error) {
+          updateAiModelStatus(model.id, {
+            detail: error instanceof Error ? error.message : "Model run failed.",
+            requestId: "",
+            status: "error"
+          });
+        }
+      }
+
+      setAiPreviewStatus(`Completed AI run in ../output/tile_map_ai/${preparedRun.runDirectoryName}/`);
+      setMapStatus(`Completed AI run for ${activeMap.name}.`);
+    } catch (error) {
+      setAiPreviewStatus(error instanceof Error ? error.message : "Could not submit the AI edit.");
+      setIsAiRunningModalOpen(true);
+    } finally {
+      setAiSubmitting(false);
+    }
   }
 
   const currentScale =
     mapScalePercent ?? mapScalePercentRef.current ?? MAP_MIN_SCALE_PERCENT;
   const selectedLayer = TILE_LIBRARY_LAYERS[activeLayerIndex] ?? TILE_LIBRARY_LAYERS[0];
   const selectedLayerFolder = selectedLayer?.folder ?? "";
+  const normalizedBrushLibraryPath = normalizeTileLibraryPath(brushLibraryPath);
+  const currentBrushLibraryPath =
+    normalizedBrushLibraryPath === selectedLayerFolder ||
+    normalizedBrushLibraryPath.startsWith(`${selectedLayerFolder}/`)
+      ? normalizedBrushLibraryPath
+      : selectedLayerFolder;
+  const currentBrushPathSegments = splitTileLibraryPath(currentBrushLibraryPath);
+  const brushLibraryParentPath = getTileLibraryParentPath(currentBrushLibraryPath);
+  const isAtBrushLayerRoot = currentBrushLibraryPath === selectedLayerFolder;
   const activeBrushTile = tiles.find((tileRecord) => tileRecord.slug === activeBrushTileSlug) ?? null;
   const activeBrushSprite = spritesByKey.get(activeBrushSpriteKey) ?? null;
+  const aiSelectedModelCount = aiSelectedModelIds.length;
   const activeLayerTitle = `${activeLayerIndex} - ${TILE_LIBRARY_LAYERS[activeLayerIndex]?.description ?? "Layer"}`;
   const activeOpacityValue = layerVisibilities[activeLayerIndex] ?? 1;
   const activeBrushTileSlots = activeBrushTile ? tileSlotsBySlug.get(activeBrushTile.slug) ?? [] : [];
@@ -1412,36 +2700,23 @@ export function MapDesigner() {
     : activeBrushSprite
       ? `${activeBrushSprite.name} • Sprite`
       : "Eraser";
-  const hoverLabel = hoverCell
-    ? (() => {
-        const layerDetails = draftLayers
-          .map((layerCells, layerIndex) => {
-            const placement = layerCells?.[hoverCell.tileY]?.[hoverCell.tileX] ?? null;
-
-            if (isMapTilePlacement(placement)) {
-              const tileRecord = tilesBySlug.get(placement.tileSlug) ?? null;
-              const optionLabels = describeMapTileOptions(placement.options);
-              const slotLabel = getSlotLabel(placement.slotNum);
-
-              return `L${layerIndex} ${tileRecord?.slug ?? placement.tileSlug} [${slotLabel}]${
-                optionLabels.length ? ` (${optionLabels.join(", ")})` : ""
-              }`;
-            }
-
-            if (isMapSpritePlacement(placement)) {
-              const spriteRecord = spritesByKey.get(placement.spriteKey) ?? null;
-              return `L${layerIndex} Sprite ${spriteRecord?.name ?? placement.spriteKey}`;
-            }
-
-            return null;
-          })
-          .filter((detail): detail is string => Boolean(detail));
-
-        return layerDetails.length
-          ? `Hover ${hoverCell.tileX}, ${hoverCell.tileY} • ${layerDetails.join(" • ")}`
-          : `Hover ${hoverCell.tileX}, ${hoverCell.tileY} • Empty`;
-      })()
-    : "Hover a cell to inspect it.";
+  const aiSelectionSizeLabel = formatAiSelectionSize(aiSelection);
+  const aiModeLabel = `AI: ${AI_TOOL_OPTIONS.find((option) => option.id === activeAiTool)?.label ?? "Mask"}`;
+  const activeModeLabel =
+    activeSidebarTab === "ai"
+      ? aiModeLabel
+      : isBrushEyedropperActive
+        ? "Brush: eyedropper"
+      : activeBrushTile || activeBrushSprite
+        ? `Brush: ${selectedBrushLabel}`
+        : "Brush: eraser";
+  const canvasDescription =
+    activeSidebarTab === "ai"
+      ? `Use ${AI_TOOL_OPTIONS.find((option) => option.id === activeAiTool)?.label ?? "Mask"} on the ${mapWidth}x${mapHeight} map canvas. The scale controls only change the viewing size.`
+      : isBrushEyedropperActive
+        ? `Click a cell on the ${mapWidth}x${mapHeight} layered map canvas to sample its brush and return to painting.`
+      : `Paint directly on the ${mapWidth}x${mapHeight} layered map canvas. The scale controls only change the viewing size.`;
+  const mapCursorClassName = activeSidebarTab === "ai" || isBrushEyedropperActive ? "cursor-crosshair" : "";
   const filteredMaps = maps.filter((mapRecord) => {
     if (!deferredMapQuery) {
       return true;
@@ -1452,104 +2727,168 @@ export function MapDesigner() {
       mapRecord.slug.toLowerCase().includes(deferredMapQuery)
     );
   });
+  const allBrushFolderPaths = Array.from(
+    new Set([
+      ...tileLibraryFolders,
+      ...tiles.flatMap((tileRecord) => {
+        const tilePathSegments = splitTileLibraryPath(tileRecord.path);
+        return tilePathSegments.map((_, index) => tilePathSegments.slice(0, index + 1).join("/"));
+      }),
+      ...sprites.flatMap((spriteRecord) => {
+        const spritePathSegments = splitTileLibraryPath(spriteRecord.path);
+        return spritePathSegments.map((_, index) => spritePathSegments.slice(0, index + 1).join("/"));
+      })
+    ])
+  ).filter(
+    (folderPath) => folderPath === selectedLayerFolder || folderPath.startsWith(`${selectedLayerFolder}/`)
+  );
+  const visibleBrushFolders = allBrushFolderPaths
+    .filter((folderPath) => {
+      if (folderPath === currentBrushLibraryPath) {
+        return false;
+      }
+
+      const folderSegments = splitTileLibraryPath(folderPath);
+
+      if (folderSegments.length !== currentBrushPathSegments.length + 1) {
+        return false;
+      }
+
+      return currentBrushPathSegments.every((segment, index) => folderSegments[index] === segment);
+    })
+    .sort((left, right) => left.localeCompare(right));
   const visibleBrushTiles = tiles
     .filter((tileRecord) => {
       const tilePath = normalizeTileLibraryPath(tileRecord.path);
 
-      return tilePath === selectedLayerFolder || tilePath.startsWith(`${selectedLayerFolder}/`);
+      return tilePath === currentBrushLibraryPath;
     })
     .slice()
     .sort(
       (left, right) =>
-        normalizeTileLibraryPath(left.path).localeCompare(normalizeTileLibraryPath(right.path)) ||
-        left.slug.localeCompare(right.slug)
+        left.name.localeCompare(right.name) || left.slug.localeCompare(right.slug)
     );
   const visibleBrushSprites = sprites
     .filter((spriteRecord) => {
       const spritePath = normalizeTileLibraryPath(spriteRecord.path);
 
-      return spritePath === selectedLayerFolder || spritePath.startsWith(`${selectedLayerFolder}/`);
+      return spritePath === currentBrushLibraryPath;
     })
     .slice()
     .sort(
       (left, right) =>
-        normalizeTileLibraryPath(left.path).localeCompare(normalizeTileLibraryPath(right.path)) ||
-        left.name.localeCompare(right.name) ||
-        left.filename.localeCompare(right.filename)
+        left.name.localeCompare(right.name) || left.filename.localeCompare(right.filename)
     );
+
+  useEffect(() => {
+    setBrushLibraryPath(selectedLayerFolder);
+  }, [selectedLayerFolder]);
 
   return (
     <div className="min-h-0">
-      <div className="grid min-h-0 gap-4">
-        <Panel
-          actions={
-            <button
-              className={actionButtonClass}
-              onClick={() => {
-                setIsCreateDialogOpen(true);
-              }}
-              type="button"
-            >
-              Create
-            </button>
-          }
-          title="Map Library"
-        >
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              className={textInputClass}
-              onChange={(event) => {
-                setMapQuery(event.currentTarget.value);
-              }}
-              placeholder="Filter maps"
-              value={mapQuery}
-            />
-          </div>
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
-            {filteredMaps.map((mapRecord) => (
+      <div className="grid min-h-0 gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
+        <div className="min-h-0 xl:h-[calc(100vh-7rem)]">
+          <Panel
+            className="h-full"
+            actions={
+              activeSidebarTab === "maps" ? (
+                <button
+                  className={actionButtonClass}
+                  onClick={() => {
+                    setIsCreateDialogOpen(true);
+                  }}
+                  type="button"
+                >
+                  Create
+                </button>
+              ) : undefined
+            }
+            description={
+              activeSidebarTab === "maps"
+                ? "Choose an existing map or create a new one."
+                : activeSidebarTab === "brushes"
+                  ? `Pick a tile or sprite from ${selectedLayer.index} - ${selectedLayer.description}, then paint it onto the active layer.`
+                  : "Build an AI mask on top of the current map, then drag a selection to generate the AI image and edit mask."
+            }
+            title="Map Tools"
+          >
+            <div className="panel-tabs">
               <button
-                className={`${selectableCardClass(
-                  mapRecord.slug === activeMapSlug,
-                  "border-[#c3d0cb]/80 bg-[linear-gradient(180deg,rgba(255,253,248,0.96),rgba(244,239,226,0.84))] hover:border-[#d88753]/55 hover:bg-white"
-                )} flex min-h-[4.5rem] flex-col justify-between gap-2 px-3 py-3 text-left`}
-                key={mapRecord.slug}
+                className={panelTabButtonClass(activeSidebarTab === "maps")}
                 onClick={() => {
-                  setActiveMapSlug(mapRecord.slug);
+                  setActiveSidebarTab("maps");
                 }}
                 type="button"
               >
-                <div className="grid gap-1">
-                  <strong className="truncate text-sm font-semibold theme-text-primary">
-                    {mapRecord.name}
-                  </strong>
-                  <span className="font-mono text-xs theme-text-muted">{mapRecord.slug}</span>
-                </div>
-                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
-                  {mapRecord.width}x{mapRecord.height}
-                </span>
+                Map Library
               </button>
-            ))}
-          </div>
-          {!filteredMaps.length ? (
-            <div className="text-sm theme-text-muted">No maps match that filter.</div>
-          ) : null}
-        </Panel>
+              <button
+                className={panelTabButtonClass(activeSidebarTab === "brushes")}
+                onClick={() => {
+                  setActiveSidebarTab("brushes");
+                }}
+                type="button"
+              >
+                Brushes
+              </button>
+              <button
+                className={panelTabButtonClass(activeSidebarTab === "ai")}
+                onClick={() => {
+                  setActiveSidebarTab("ai");
+                }}
+                type="button"
+              >
+                AI
+              </button>
+            </div>
 
-        <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(18rem,0.7fr)_minmax(0,1.65fr)]">
-          <div className="grid min-h-0 gap-4">
-            <Panel
-              description={`Pick a tile or sprite from ${selectedLayer.index} - ${selectedLayer.description}, then paint it onto the active layer.`}
-              title="Brush Palette"
-            >
-              <div className="grid gap-4">
-                <div className={`${sectionCardClass} ${activeBrushTile ? "" : "opacity-65"}`}>
+            {activeSidebarTab === "maps" ? (
+              <>
+                <div className="flex flex-col items-stretch gap-2">
+                  <input
+                    autoComplete="off"
+                    className={`${textInputClass} min-w-0 w-full`}
+                    onChange={(event) => {
+                      setMapQuery(event.currentTarget.value);
+                    }}
+                    placeholder="Filter maps"
+                    suppressHydrationWarning
+                    value={mapQuery}
+                  />
+                </div>
+                <div className={scrollableAssetListClass}>
+                  {filteredMaps.map((mapRecord) => (
+                    <button
+                      className={assetListRowClass(hasMounted && mapRecord.slug === activeMapSlug)}
+                      key={mapRecord.slug}
+                      onClick={() => {
+                        setActiveMapSlug(mapRecord.slug);
+                      }}
+                      type="button"
+                    >
+                      <div className={assetListMetaClass}>
+                        <strong className={assetListTitleClass}>{mapRecord.name}</strong>
+                        <span className={assetListMonoClass}>
+                          {mapRecord.slug} • {mapRecord.width}x{mapRecord.height}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                {!filteredMaps.length ? (
+                  <div className="text-sm theme-text-muted">No maps match that filter.</div>
+                ) : null}
+              </>
+            ) : activeSidebarTab === "brushes" ? (
+              <div className="grid min-h-0 gap-3">
+                <div className={`grid gap-2 ${activeBrushTile ? "" : "opacity-65"}`}>
                   <SectionEyebrow>Brush Effects</SectionEyebrow>
-                  <div className="mb-3 text-xs theme-text-muted">
+                  <div className="text-xs theme-text-muted">
                     {activeBrushTile
                       ? "Flip, rotate, multiply, and tint apply to tile brushes."
-                      : "Sprite brushes use their own image and mount point, so tile effects are disabled."}
+                      : "Tile effects are disabled for sprite brushes."}
                   </div>
-                  <div className="brush-palette-effects grid gap-2 sm:grid-cols-2">
+                  <div className={compactBrushEffectsClass}>
                     {BRUSH_OPTION_DEFINITIONS.map((option) => (
                       <label key={option.id}>
                         <input
@@ -1590,157 +2929,265 @@ export function MapDesigner() {
                   </div>
                 </div>
 
-                <div className="grid gap-3">
-                  <SectionEyebrow>Tiles</SectionEyebrow>
-                  <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+                <div className="grid min-h-0 gap-2">
+                  <SectionEyebrow>Brushes</SectionEyebrow>
+                  <div className="text-xs theme-text-muted">
+                    {formatTileLibraryPath(currentBrushLibraryPath)}
+                  </div>
+                  <div className={scrollableAssetListClass}>
                     <button
-                      className={`${selectableCardClass(
-                        mapBrushAssetKey === "",
-                        "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
-                      )} grid justify-items-center gap-2 p-3 text-center`}
+                      className={assetListRowClass(mapBrushAssetKey === "")}
                       onClick={() => {
+                        setBrushEyedropperActive(false);
                         setMapBrushAssetKey("");
                       }}
                       type="button"
                     >
-                      <div className="grid h-32 max-h-32 w-full max-w-32 place-self-center place-items-center overflow-hidden theme-bg-brand theme-text-inverse-soft">
-                        <FontAwesomeIcon className="h-10 w-10" icon={faEraser} title="Erase" />
+                      <div className={`${assetListThumbClass} theme-bg-brand theme-text-inverse-soft`}>
+                        <FontAwesomeIcon className="h-5 w-5" icon={faEraser} title="Erase" />
                       </div>
-                      <div className="text-center text-sm font-normal leading-tight theme-text-muted">
-                        <div>Tool</div>
-                        <div>eraser</div>
+                      <div className={assetListMetaClass}>
+                        <span className={assetListTitleClass}>Eraser</span>
+                        <span className={assetListSubtitleClass}>Clear painted cells</span>
+                      </div>
+                    </button>
+                    <button
+                      className={assetListRowClass(isBrushEyedropperActive)}
+                      onClick={() => {
+                        setBrushEyedropperActive(true);
+                        setMapStatus("Eyedropper ready. Click a map cell to sample its tile, sprite, and tile effects.");
+                      }}
+                      type="button"
+                    >
+                      <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
+                        <FontAwesomeIcon className="h-5 w-5" icon={faEyeDropper} title="Eyedropper" />
+                      </div>
+                      <div className={assetListMetaClass}>
+                        <span className={assetListTitleClass}>Eye Dropper</span>
+                        <span className={assetListSubtitleClass}>Sample the next clicked map cell</span>
                       </div>
                     </button>
 
+                    {!isAtBrushLayerRoot ? (
+                      <button
+                        className={`${assetListRowClass(false)} group theme-hover-border-accent theme-hover-bg-panel`}
+                        onClick={() => {
+                          setBrushLibraryPath(brushLibraryParentPath || selectedLayerFolder);
+                        }}
+                        type="button"
+                      >
+                        <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary transition group-hover:theme-text-accent`}>
+                          <FontAwesomeIcon className="h-4 w-4" icon={faFolderArrowUp} />
+                        </div>
+                        <div className={assetListMetaClass}>
+                          <span className={assetListTitleClass}>Back</span>
+                          <span className={assetListSubtitleClass}>
+                            {getTileLibrarySegmentLabel(brushLibraryParentPath || selectedLayerFolder)}
+                          </span>
+                        </div>
+                        <div className="ml-auto theme-text-muted transition group-hover:theme-text-accent">
+                          <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronRight} />
+                        </div>
+                      </button>
+                    ) : null}
+
+                    {visibleBrushFolders.length ? <div className={assetListEyebrowClass}>Folders</div> : null}
+                    {visibleBrushFolders.map((folderPath) => (
+                      <button
+                        className={assetListRowClass(false)}
+                        key={folderPath}
+                        onClick={() => {
+                          setBrushLibraryPath(folderPath);
+                        }}
+                        type="button"
+                      >
+                        <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
+                          <FontAwesomeIcon className="h-4 w-4" icon={faFolder} />
+                        </div>
+                        <div className={assetListMetaClass}>
+                          <span className={assetListTitleClass}>{getTileLibrarySegmentLabel(folderPath)}</span>
+                          <span className={assetListSubtitleClass}>Folder</span>
+                          <span className={assetListMonoClass}>{folderPath}</span>
+                        </div>
+                        <div className="ml-auto theme-text-muted">
+                          <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronRight} />
+                        </div>
+                      </button>
+                    ))}
+
+                    {visibleBrushTiles.length ? <div className={assetListEyebrowClass}>Tiles</div> : null}
                     {visibleBrushTiles.map((tileRecord) => {
                       const mainSlot = tileMainSlotsBySlug.get(tileRecord.slug) ?? null;
-                      const pathSegments = splitTileLibraryPath(tileRecord.path);
-                      const folderLabel =
-                        pathSegments.length > 1 ? pathSegments[pathSegments.length - 1] : selectedLayer.folder;
 
                       return (
-                        <div
-                          className={`${selectableCardClass(
-                            activeBrushTileSlug === tileRecord.slug,
-                            "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
-                          )} grid justify-items-center gap-2 p-3 text-center`}
-                          key={tileRecord.slug}
-                        >
+                        <div className="relative" key={tileRecord.slug}>
                           <button
-                            className="grid w-full justify-items-center gap-2 text-center"
+                            className={`${assetListRowClass(activeBrushTileSlug === tileRecord.slug)} pr-10`}
                             onClick={() => {
+                              setBrushEyedropperActive(false);
                               setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(tileRecord.slug, 0));
                             }}
                             type="button"
                           >
-                            <CheckerboardFrame className="h-32 max-h-32 w-full max-w-32 place-self-center" size="md">
+                            <CheckerboardFrame className={assetListCheckerThumbClass} size="md">
                               {mainSlot?.pixels ? (
                                 <img
                                   alt={tileRecord.name}
-                                  className="max-h-32 max-w-32 object-contain"
+                                  className="h-full w-full object-contain [image-rendering:pixelated]"
                                   src={mainSlot.pixels}
                                 />
-                              ) : (
-                                <span>No Main</span>
-                              )}
+                              ) : null}
                             </CheckerboardFrame>
+                            <div className={assetListMetaClass}>
+                              <span className={assetListTitleClass}>{tileRecord.name}</span>
+                              <span className={assetListMonoClass}>{tileRecord.slug}</span>
+                            </div>
                           </button>
-                          <div className="flex w-full items-start gap-2">
-                            <button
-                              className="grid h-7 w-7 shrink-0 place-items-center border theme-border-panel theme-text-muted transition theme-hover-border-accent theme-hover-text-accent"
-                              onClick={() => {
-                                setActiveTileSlug(tileRecord.slug);
-                                openPaintEditor(tileRecord, "main");
-                              }}
-                              title={`Edit ${tileRecord.name} main slot`}
-                              type="button"
-                            >
-                              <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
-                            </button>
-                            <button
-                              className="min-w-0 flex-1 text-left text-sm font-normal leading-tight theme-text-muted"
-                              onClick={() => {
-                                setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(tileRecord.slug, 0));
-                              }}
-                              type="button"
-                            >
-                              <div className="truncate">{folderLabel}</div>
-                              <div className="truncate">{tileRecord.slug}</div>
-                            </button>
-                          </div>
+                          <button
+                            className={`${assetListActionButtonClass} absolute right-1 top-1/2 -translate-y-1/2`}
+                            onClick={() => {
+                              setActiveTileSlug(tileRecord.slug);
+                              openPaintEditor(tileRecord, "main");
+                            }}
+                            title={`Edit ${tileRecord.name} main slot`}
+                            type="button"
+                          >
+                            <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
+                          </button>
                         </div>
                       );
                     })}
-                  </div>
-                  {!visibleBrushTiles.length ? (
-                    <div className="text-sm theme-text-muted">
-                      No tiles are available in {selectedLayer.folder}/ yet.
-                    </div>
-                  ) : null}
-                </div>
 
-                <div className="grid gap-3">
-                  <SectionEyebrow>Sprites</SectionEyebrow>
-                  <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+                    {visibleBrushSprites.length ? <div className={assetListEyebrowClass}>Sprites</div> : null}
                     {visibleBrushSprites.map((spriteRecord) => {
                       const spriteKey = getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename);
-                      const pathSegments = splitTileLibraryPath(spriteRecord.path);
-                      const folderLabel =
-                        pathSegments.length > 1 ? pathSegments[pathSegments.length - 1] : selectedLayer.folder;
 
                       return (
                         <button
-                          className={`${selectableCardClass(
-                            getSpriteBrushAssetKey(spriteKey) === mapBrushAssetKey,
-                            "border-[#c3d0cb]/85 bg-white/90 hover:border-[#d88753]/55 hover:bg-white"
-                          )} grid justify-items-center gap-2 p-3 text-center`}
+                          className={assetListRowClass(getSpriteBrushAssetKey(spriteKey) === mapBrushAssetKey)}
                           key={spriteKey}
                           onClick={() => {
+                            setBrushEyedropperActive(false);
                             setMapBrushAssetKey(getSpriteBrushAssetKey(spriteKey));
                           }}
                           type="button"
                         >
-                          <CheckerboardFrame className="h-32 max-h-32 w-full max-w-32 place-self-center" size="md">
+                          <CheckerboardFrame className={assetListCheckerThumbClass} size="md">
                             {spriteRecord.thumbnail ? (
                               <img
                                 alt={spriteRecord.name}
-                                className="max-h-32 max-w-32 object-contain"
+                                className="h-full w-full object-contain"
                                 src={spriteRecord.thumbnail}
                               />
-                            ) : (
-                              <span>No Image</span>
-                            )}
+                            ) : null}
                           </CheckerboardFrame>
-                          <div className="w-full text-left text-sm font-normal leading-tight theme-text-muted">
-                            <div className="truncate">{folderLabel}</div>
-                            <div className="truncate">{spriteRecord.name}</div>
-                            <div className="truncate font-mono text-[11px]">{spriteRecord.filename}</div>
+                          <div className={assetListMetaClass}>
+                            <span className={assetListTitleClass}>{spriteRecord.name}</span>
+                            <span className={assetListMonoClass}>{spriteRecord.filename}</span>
                           </div>
                         </button>
                       );
                     })}
                   </div>
-                  {!visibleBrushSprites.length ? (
+                  {!visibleBrushFolders.length && !visibleBrushTiles.length && !visibleBrushSprites.length ? (
                     <div className={emptyStateCardClass}>
-                      No sprites are available in {selectedLayer.folder}/ yet.
+                      No brush assets are available in {formatTileLibraryPath(currentBrushLibraryPath)} yet.
                     </div>
                   ) : null}
                 </div>
               </div>
-            </Panel>
-          </div>
+            ) : (
+              <div className="grid min-h-0 gap-3">
+                <div className="grid gap-2">
+                  {AI_TOOL_OPTIONS.map((toolOption) => {
+                    const isActive = activeAiTool === toolOption.id;
 
-          <Panel
-            actions={
-              <div className="grid justify-items-start gap-1">
+                    return (
+                      <button
+                        className={assetListRowClass(isActive)}
+                        key={toolOption.id}
+                        onClick={() => {
+                          setActiveAiTool(toolOption.id);
+                          setMapStatus(
+                            toolOption.id === "select"
+                              ? "Drag across the map canvas to create the AI image and edit mask."
+                              : toolOption.id === "mask"
+                                ? "Click or drag on the map canvas to add squares to the AI mask."
+                                : "Click or drag on the map canvas to erase squares from the AI mask."
+                          );
+                        }}
+                        type="button"
+                      >
+                        <div className={assetListMetaClass}>
+                          <span className={assetListTitleClass}>{toolOption.label}</span>
+                          <span className={assetListSubtitleClass}>{toolOption.description}</span>
+                        </div>
+                      </button>
+                      );
+                  })}
+                </div>
+
                 <button
                   className={actionButtonClass}
-                  disabled={!activeMap || !hasMapDraftChanges || busyLabel === "Saving map"}
-                  onClick={handleSaveMap}
+                  onClick={() => {
+                    setActiveAiTool("select");
+                    finalizeAiSelection(
+                      { tileX: 0, tileY: 0 },
+                      { tileX: Math.max(0, mapWidth - 1), tileY: Math.max(0, mapHeight - 1) }
+                    );
+                  }}
                   type="button"
                 >
-                  Save Map
+                  Select All
                 </button>
+
+                <div className={sectionCardClass}>
+                  <SectionEyebrow>Mask</SectionEyebrow>
+                  <div className="text-sm font-semibold theme-text-primary">
+                    {maskedCells.size} tiles masked
+                  </div>
+                  <div className="text-xs leading-5 theme-text-muted">
+                    Masked tiles are shown as 80% black over the map, independent of the painted layers beneath them.
+                  </div>
+                </div>
+
+                <div className={sectionCardClass}>
+                  <SectionEyebrow>Selection</SectionEyebrow>
+                  <div className="text-sm font-semibold theme-text-primary">{aiSelectionSizeLabel}</div>
+                  <div className="text-xs leading-5 theme-text-muted">
+                    The size label always uses the real tile size of {TILE_SIZE}px, not the current zoom level.
+                  </div>
+                </div>
+              </div>
+            )}
+          </Panel>
+        </div>
+
+        <Panel
+            actions={
+              <div className="grid gap-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    className={actionButtonClass}
+                    disabled={!activeMap || !hasMapDraftChanges || Boolean(busyLabel)}
+                    onClick={handleSaveMap}
+                    type="button"
+                  >
+                    Save Map
+                  </button>
+                  <button
+                    className={secondaryButtonClass}
+                    disabled={!activeMap || Boolean(busyLabel)}
+                    onClick={() => {
+                      setResizeMapWidth(String(mapWidth));
+                      setResizeMapHeight(String(mapHeight));
+                      setIsResizeDialogOpen(true);
+                    }}
+                    type="button"
+                  >
+                    Resize
+                  </button>
+                </div>
                 {saveConfirmationMessage ? (
                   <div className="text-xs font-medium theme-text-muted">
                     {saveConfirmationMessage}
@@ -1748,37 +3195,42 @@ export function MapDesigner() {
                 ) : null}
               </div>
             }
-            description={`Paint directly on the ${mapWidth}x${mapHeight} layered map canvas. The scale controls only change the viewing size.`}
+            description={canvasDescription}
             footer={
               <div className="flex flex-wrap items-center gap-3">
                 <div className={statusChipClass}>
-                  {busyLabel
-                    ? `${busyLabel}...`
-                    : activeBrushTile || activeBrushSprite
-                      ? `Brush: ${selectedBrushLabel}`
-                      : "Brush: eraser"}
+                  {busyLabel ? `${busyLabel}...` : activeModeLabel}
                 </div>
+                {activeSidebarTab === "ai" ? (
+                  <div className={statusChipClass}>Selection: {aiSelectionSizeLabel}</div>
+                ) : null}
               </div>
             }
             title="Map Canvas"
           >
             <MapWorkspace
               activeLayerIndex={activeLayerIndex}
+              activeModeLabel={activeModeLabel}
+              activeMapAboutPrompt={activeMapAboutPrompt}
+              activeSidebarTab={activeSidebarTab}
+              activeAiTool={activeAiTool}
               activeBrushSlotNum={activeBrushTileSlotNum}
               activeLayerTitle={activeLayerTitle}
               activeOpacityValue={activeOpacityValue}
               brushSlotOptions={availableBrushSlotOptions}
               canZoomIn={currentScale > MAP_MIN_SCALE_PERCENT}
               canZoomOut={currentScale < MAP_MAX_SCALE_PERCENT}
-              hoverLabel={hoverLabel}
               hoverCanvasRef={hoverCanvasRef}
+              isGridVisible={isGridVisible}
               layerPreviewCanvasRefs={layerPreviewCanvasRefs}
               layerVisibilities={layerVisibilities}
               mapCanvasHeight={mapCanvasHeight}
               mapCanvasRef={mapCanvasRef}
               mapCanvasWidth={mapCanvasWidth}
+              mapCursorClassName={mapCursorClassName}
               mapFrameRef={mapFrameRef}
-              onCanvasClick={(event) => {
+              onCanvasClick={() => {}}
+              onCanvasMouseDown={(event) => {
                 const nextCell = getMapCellFromPointerEvent(
                   event.currentTarget,
                   event.nativeEvent,
@@ -1786,20 +3238,66 @@ export function MapDesigner() {
                   mapHeight
                 );
 
-                if (nextCell) {
-                  paintCell(nextCell);
+                if (!nextCell) {
+                  return;
                 }
-              }}
-              onCanvasMouseDown={(event) => {
+
+                setHoverCell(nextCell);
+
+                if (activeSidebarTab === "ai") {
+                  beginPaint();
+
+                  if (activeAiTool === "select") {
+                    setAiSelectionDraft({
+                      anchorCell: nextCell,
+                      focusCell: nextCell
+                    });
+                    return;
+                  }
+
+                  applyAiMaskCell(nextCell, activeAiTool);
+                  return;
+                }
+
+                if (isBrushEyedropperActive) {
+                  sampleBrushFromCell(nextCell);
+                  return;
+                }
+
+                if (event.shiftKey && paintLineFromLastPlacement(nextCell)) {
+                  return;
+                }
+
                 beginPaint();
-                handlePointerUpdate(event);
+                paintCell(nextCell);
+                lastPaintedCellKeyRef.current = getMapCellKey(nextCell.tileX, nextCell.tileY);
               }}
               onCanvasMouseLeave={() => {
+                if (activeSidebarTab === "ai" && activeAiTool === "select" && drawingRef.current) {
+                  return;
+                }
+
                 finishPaint();
                 setHoverCell(null);
               }}
               onCanvasMouseMove={handlePointerUpdate}
-              onCanvasMouseUp={finishPaint}
+              onCanvasMouseUp={() => {
+                if (activeSidebarTab === "ai" && activeAiTool === "select") {
+                  return;
+                }
+
+                finishPaint();
+              }}
+              onChangeActiveMapAboutPrompt={(value) => {
+                if (!activeMap) {
+                  return;
+                }
+
+                setMapAboutPromptDrafts((currentDrafts) => ({
+                  ...currentDrafts,
+                  [activeMap.slug]: value
+                }));
+              }}
               onClearAllLayers={() => {
                 setMapDraftLayers(activeMapSlug, createEmptyMapLayers(mapWidth, mapHeight), mapWidth, mapHeight);
                 setMapStatus(`Cleared every layer from the current draft map (${mapWidth}x${mapHeight}).`);
@@ -1822,6 +3320,12 @@ export function MapDesigner() {
                   nextVisibilities[layerIndex] = visibility;
                   return nextVisibilities;
                 });
+              }}
+              onToggleGridVisibility={() => {
+                setGridVisible((currentValue) => !currentValue);
+              }}
+              onZoomActual={() => {
+                setMapScalePercent(100);
               }}
               onZoomIn={() => {
                 setMapScalePercent((value) =>
@@ -1854,8 +3358,388 @@ export function MapDesigner() {
               selectedBrushLabel={selectedBrushLabel}
             />
           </Panel>
-        </div>
       </div>
+
+      {isAiModalOpen && aiSelection ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 overflow-y-auto theme-bg-overlay px-4 py-4"
+          role="dialog"
+        >
+          <div
+            className="fixed inset-0"
+            onClick={() => {
+              setIsAiModalOpen(false);
+            }}
+          />
+          <div className="flex min-h-full items-center justify-center">
+            <div className={`${modalSurfaceClass} relative max-h-[96vh] max-w-[min(96vw,1580px)] overflow-hidden`}>
+              <div className="border-b theme-border-panel-faint px-6 py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="font-serif text-[1.4rem] leading-tight theme-text-primary">
+                      AI Edit Prep
+                    </h2>
+                    <p className="mt-1 text-sm leading-6 theme-text-muted">
+                      Selection {formatAiSelectionSize(aiSelection)} scaled into two 1024x1024 outputs.
+                    </p>
+                  </div>
+                  <button
+                    className={`${closeButtonClass} min-h-11 min-w-11 theme-bg-panel`}
+                    onClick={() => {
+                      setIsAiModalOpen(false);
+                    }}
+                    type="button"
+                  >
+                    X
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid max-h-[calc(96vh-9rem)] gap-5 overflow-y-auto px-6 py-6">
+                <div className="grid gap-5 xl:grid-cols-2">
+                  <div className="grid gap-2">
+                    <SectionEyebrow>Image</SectionEyebrow>
+                    <div className="aspect-square border theme-border-panel theme-bg-input">
+                      {aiPreviewImageUrl ? (
+                        <img
+                          alt="AI selection preview"
+                          className="h-full w-full object-contain"
+                          src={aiPreviewImageUrl}
+                        />
+                      ) : (
+                        <div className="grid h-full place-items-center px-4 text-sm theme-text-muted">
+                          {aiPreviewStatus || "Rendering image preview..."}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <SectionEyebrow>Edit Mask</SectionEyebrow>
+                    <div className="aspect-square border theme-border-panel theme-bg-input">
+                      {aiPreviewMaskUrl ? (
+                        <img
+                          alt="AI edit mask preview"
+                          className="h-full w-full object-contain"
+                          src={aiPreviewMaskUrl}
+                        />
+                      ) : (
+                        <div className="grid h-full place-items-center px-4 text-sm theme-text-muted">
+                          {aiPreviewStatus || "Rendering mask preview..."}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="grid gap-2">
+                    <label
+                      className="text-xs font-extrabold uppercase tracking-[0.12em] theme-text-muted"
+                      htmlFor="ai-prompt"
+                    >
+                      Description
+                    </label>
+                    <textarea
+                      className={`${textInputClass} min-h-28 w-full resize-y`}
+                      id="ai-prompt"
+                      onChange={(event) => {
+                        setAiPrompt(event.currentTarget.value);
+                      }}
+                      placeholder="Describe the AI edit you want to make..."
+                      value={aiPrompt}
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <label
+                      className="text-xs font-extrabold uppercase tracking-[0.12em] theme-text-muted"
+                      htmlFor="ai-negative-prompt"
+                    >
+                      Negative Prompt
+                    </label>
+                    <textarea
+                      className={`${textInputClass} min-h-28 w-full resize-y`}
+                      id="ai-negative-prompt"
+                      onChange={(event) => {
+                        setAiNegativePrompt(event.currentTarget.value);
+                      }}
+                      placeholder="Describe what the AI edit should avoid..."
+                      value={aiNegativePrompt}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-xs theme-text-muted">
+                      Run opens model selection. Start will only run the checked fal edit models and write each result to ../output/tile_map_ai/.
+                    </div>
+                    <button
+                      className={actionButtonClass}
+                      disabled={isAiSubmitting || !aiPrompt.trim() || !aiPreviewImageUrl || !aiPreviewMaskUrl}
+                      onClick={() => {
+                        void handleSubmitAiEdit();
+                      }}
+                      type="button"
+                    >
+                      {isAiSubmitting ? "Running..." : "Run"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isAiRunningModalOpen ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 overflow-y-auto theme-bg-overlay px-4 py-4"
+          role="dialog"
+        >
+          <div
+            className="fixed inset-0"
+            onClick={() => {
+              setIsAiRunningModalOpen(false);
+            }}
+          />
+          <div className="flex min-h-full items-center justify-center">
+            <div className={`${modalSurfaceClass} relative max-h-[96vh] max-w-[min(96vw,1100px)] overflow-hidden`}>
+              <div className="border-b theme-border-panel-faint px-6 py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="font-serif text-[1.4rem] leading-tight theme-text-primary">
+                      AI Running
+                    </h2>
+                    <p className="mt-1 text-sm leading-6 theme-text-muted">
+                      {aiPreviewStatus || "Choose the models you want to run, then press Start."}
+                    </p>
+                  </div>
+                  <button
+                    className={`${closeButtonClass} min-h-11 min-w-11 theme-bg-panel`}
+                    onClick={() => {
+                      setIsAiRunningModalOpen(false);
+                    }}
+                    type="button"
+                  >
+                    X
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid max-h-[calc(96vh-9rem)] gap-5 overflow-y-auto px-6 py-6">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-sm theme-text-muted">
+                    {isAiSubmitting
+                      ? `Running ${aiSelectedModelCount} selected model${aiSelectedModelCount === 1 ? "" : "s"}.`
+                      : `${aiSelectedModelCount} model${aiSelectedModelCount === 1 ? "" : "s"} selected.`}
+                  </div>
+                  <button
+                    className={actionButtonClass}
+                    disabled={isAiSubmitting || aiSelectedModelCount === 0}
+                    onClick={() => {
+                      void handleStartAiEdit();
+                    }}
+                    type="button"
+                  >
+                    {isAiSubmitting ? "Running..." : "Start"}
+                  </button>
+                </div>
+
+                {aiRunDirectoryName ? (
+                  <div className="text-sm theme-text-muted">
+                    Output folder: <span className="font-mono">../output/tile_map_ai/{aiRunDirectoryName}/</span>
+                  </div>
+                ) : null}
+
+                <div className="grid gap-2">
+                  {aiModelStatuses.map((modelStatus) => (
+                    <div
+                      className={assetListRowClass(modelStatus.status === "success")}
+                      key={modelStatus.modelId}
+                    >
+                      <label className="flex min-w-0 items-start gap-3">
+                        <input
+                          checked={aiSelectedModelIds.includes(modelStatus.modelId)}
+                          disabled={isAiSubmitting}
+                          onChange={(event) => {
+                            const isChecked = event.currentTarget.checked;
+
+                            setAiSelectedModelIds((currentModelIds) =>
+                              isChecked
+                                ? currentModelIds.includes(modelStatus.modelId)
+                                  ? currentModelIds
+                                  : [...currentModelIds, modelStatus.modelId]
+                                : currentModelIds.filter((modelId) => modelId !== modelStatus.modelId)
+                            );
+                            setAiModelStatuses(createInitialAiModelStatuses());
+                            setAiRunDirectoryName("");
+                            setAiPreviewStatus("Choose one or more models, then press Start.");
+                          }}
+                          type="checkbox"
+                        />
+                        <div className={assetListMetaClass}>
+                          <span className={assetListTitleClass}>{modelStatus.modelLabel}</span>
+                          <span className={assetListSubtitleClass}>
+                            {modelStatus.status === "running"
+                              ? "Running"
+                              : modelStatus.status === "success"
+                                ? "Completed"
+                                : modelStatus.status === "error"
+                                  ? "Failed"
+                                  : modelStatus.status === "skipped"
+                                    ? "Not selected"
+                                    : "Idle"}
+                            {modelStatus.requestId ? ` • ${modelStatus.requestId}` : ""}
+                          </span>
+                          <span className={assetListMonoClass}>{modelStatus.detail}</span>
+                        </div>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    className={secondaryButtonClass}
+                    onClick={() => {
+                      setIsAiRunningModalOpen(false);
+                    }}
+                    type="button"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isResizeDialogOpen ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 overflow-y-auto theme-bg-overlay px-4 py-8"
+          role="dialog"
+        >
+          <div
+            className="fixed inset-0"
+            onClick={() => {
+              setIsResizeDialogOpen(false);
+            }}
+          />
+          <div className="flex min-h-full items-center justify-center">
+            <div className={`${modalSurfaceClass} relative max-w-xl`}>
+              <div className="border-b theme-border-panel-faint px-6 py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="font-serif text-[1.4rem] leading-tight theme-text-primary">
+                      Resize Map
+                    </h2>
+                    <p className="mt-1 text-sm leading-6 theme-text-muted">
+                      Expand the active map and fill new space by repeating the current last column
+                      and last row. Shrinking is disabled for now.
+                    </p>
+                  </div>
+                  <button
+                    className={`${closeButtonClass} min-h-11 min-w-11 theme-bg-panel`}
+                    onClick={() => {
+                      setIsResizeDialogOpen(false);
+                    }}
+                    type="button"
+                  >
+                    X
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid gap-4 px-6 py-6">
+                <div className="text-xs theme-text-muted">
+                  Current size: {mapWidth}x{mapHeight}
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    className={`${compactTextInputClass} w-24 text-center`}
+                    inputMode="numeric"
+                    onChange={(event) => {
+                      setResizeMapWidth(event.currentTarget.value);
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" &&
+                        normalizedResizeMapWidth >= mapWidth &&
+                        normalizedResizeMapHeight >= mapHeight
+                      ) {
+                        event.preventDefault();
+                        handleResizeMap();
+                      }
+                    }}
+                    placeholder="W"
+                    ref={resizeWidthInputRef}
+                    value={resizeMapWidth}
+                  />
+                  <input
+                    className={`${compactTextInputClass} w-24 text-center`}
+                    inputMode="numeric"
+                    onChange={(event) => {
+                      setResizeMapHeight(event.currentTarget.value);
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" &&
+                        normalizedResizeMapWidth >= mapWidth &&
+                        normalizedResizeMapHeight >= mapHeight
+                      ) {
+                        event.preventDefault();
+                        handleResizeMap();
+                      }
+                    }}
+                    placeholder="H"
+                    value={resizeMapHeight}
+                  />
+                </div>
+
+                <div className="text-xs theme-text-muted">
+                  New map size: {normalizedResizeMapWidth}x{normalizedResizeMapHeight}
+                </div>
+                {normalizedResizeMapWidth < mapWidth || normalizedResizeMapHeight < mapHeight ? (
+                  <div className="text-xs theme-text-muted">
+                    Reducing the map size is not supported yet. Enter values at least as large as{" "}
+                    {mapWidth}x{mapHeight}.
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-3 border-t theme-border-panel-faint theme-bg-paper-soft px-6 py-4">
+                <button
+                  className={secondaryButtonClass}
+                  onClick={() => {
+                    setIsResizeDialogOpen(false);
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className={actionButtonClass}
+                  disabled={
+                    Boolean(busyLabel) ||
+                    normalizedResizeMapWidth < mapWidth ||
+                    normalizedResizeMapHeight < mapHeight
+                  }
+                  onClick={handleResizeMap}
+                  type="button"
+                >
+                  Resize
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {isCreateDialogOpen ? (
         <div

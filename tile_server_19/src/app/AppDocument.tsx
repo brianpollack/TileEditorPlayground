@@ -1,12 +1,15 @@
 import {
   getAssetDatabaseStatus,
   readClipboardSlots,
+  readItemRecords,
   readTileLibraryFolderAssetCounts,
   readMapRecords,
+  readPersonalityRecords,
   readSpriteRecords,
   readTileLibraryFolders,
   readTileRecords
 } from "../lib/serverStore";
+import { getVaxServer } from "../lib/env";
 import { getThemeCssText } from "../styles/theme";
 import { TileServerApp } from "./TileServerApp";
 import "../styles/app.css";
@@ -46,10 +49,15 @@ export default async function AppDocument({ requestUrl }: AppDocumentProps) {
   const initialBrushAssetKey = url.searchParams.get("brush")?.trim() ?? "";
   const initialEditTileSlug = url.searchParams.get("edit")?.trim() ?? "";
   const initialImagePath = url.searchParams.get("image")?.trim() ?? "";
+  const initialItemId = url.searchParams.get("item")?.trim() ?? "";
   const initialMapSlug = url.searchParams.get("map")?.trim() ?? "";
   const initialMode = url.searchParams.get("mode")?.trim() ?? "";
   const initialPaintEditors = url.searchParams.get("paint")?.trim() ?? "";
+  const initialPersonalitySlug = url.searchParams.get("personality")?.trim() ?? "";
   const initialSpriteKey = url.searchParams.get("sprite")?.trim() ?? "";
+  const items = await readItemRecords();
+  const personalities = await readPersonalityRecords();
+  const vaxServer = getVaxServer();
 
   return (
     <html lang="en">
@@ -70,15 +78,20 @@ export default async function AppDocument({ requestUrl }: AppDocumentProps) {
           initialBrushAssetKey={initialBrushAssetKey}
           initialEditTileSlug={initialEditTileSlug}
           initialImagePath={initialImagePath}
+          initialItemId={initialItemId}
           initialMapSlug={initialMapSlug}
           initialMode={initialMode}
           initialPaintEditors={initialPaintEditors}
+          initialPersonalitySlug={initialPersonalitySlug}
           initialSpriteKey={initialSpriteKey}
+          items={items}
           maps={maps}
+          personalities={personalities}
           sprites={sprites}
           tileLibraryFolderAssetCounts={tileLibraryFolderAssetCounts}
           tileLibraryFolders={tileLibraryFolders}
           tiles={tiles}
+          vaxServer={vaxServer}
         />
       </body>
     </html>

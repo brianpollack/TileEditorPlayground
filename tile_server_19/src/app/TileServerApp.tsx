@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { faClipboard } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 
 import { ClipboardManager } from "../components/ClipboardManager";
 import { FontAwesomeIcon } from "../components/FontAwesomeIcon";
+import { ItemManager } from "../components/ItemManager";
 import { MapDesigner } from "../components/MapDesigner";
 import { PaintMode } from "../components/PaintMode";
+import { PersonalityEventsManager } from "../components/PersonalityEventsManager";
+import { PersonalityManager } from "../components/PersonalityManager";
 import { TileWorkshop } from "../components/TileWorkshop";
 import { MAP_LAYER_COUNT, SLOT_LAYER_COUNT } from "../lib/constants";
 import { loadImageFromUrl, revokeObjectUrl } from "../lib/images";
@@ -20,19 +23,28 @@ import {
 import { StudioProvider } from "./StudioContext";
 import type {
   ClipboardSlotRecord,
+  ItemRecord,
+  LoadedImagePayload,
   MapLayerStack,
   MapDesignerUiState,
-  PaintLayerIndex,
   MapRecord,
+  PaintLayerIndex,
   PaintEditorSession,
   PaintEditorUiState,
   PaintToolId,
+  PersonalityRecord,
   SpriteRecord,
   SlotRecord,
   TileRecord
 } from "../types";
 
-type StudioView = "tile-workshop" | "sprite-editor" | "map-designer";
+type StudioView =
+  | "tile-workshop"
+  | "sprite-editor"
+  | "map-designer"
+  | "item-manager"
+  | "personality-events"
+  | "personality-manager";
 type StudioViewId = StudioView | PaintEditorSession["id"];
 const CLIPBOARD_SLOT_COUNT = 10;
 const CLIPBOARD_SAVE_PATH = "/__clipboard/save";
@@ -40,6 +52,7 @@ const DEFAULT_PAINT_COLOR = "#142127";
 const DEFAULT_PAINT_LAYER_INDEX = 1;
 const DEFAULT_PAINT_TOOL: PaintToolId = "pencil";
 const DEFAULT_PAINT_ZOOM_PERCENT = 100;
+const DEFAULT_SIDEBAR_EXPANDED = true;
 const STUDIO_STATE_STORAGE_KEY = "tile-server-19:studio-state";
 
 function isSlotKey(value: string): value is SlotKey {
@@ -120,6 +133,18 @@ function getInitialActiveView(
     return "map-designer";
   }
 
+  if (normalizedMode === "item_manager") {
+    return "item-manager";
+  }
+
+  if (normalizedMode === "personality_manager") {
+    return "personality-manager";
+  }
+
+  if (normalizedMode === "personality_events") {
+    return "personality-events";
+  }
+
   if (normalizedMode === "sprite" && hasInitialSpriteSelection) {
     return "sprite-editor";
   }
@@ -146,6 +171,18 @@ function getInitialActiveView(
 function getSerializedMode(activeView: StudioViewId, paintEditors: PaintEditorSession[]) {
   if (activeView === "map-designer") {
     return "map";
+  }
+
+  if (activeView === "item-manager") {
+    return "item_manager";
+  }
+
+  if (activeView === "personality-manager") {
+    return "personality_manager";
+  }
+
+  if (activeView === "personality-events") {
+    return "personality_events";
   }
 
   if (activeView === "sprite-editor") {
@@ -176,6 +213,18 @@ function getDocumentTitle(activeView: StudioViewId, paintEditors: PaintEditorSes
     return "Tile Editor";
   }
 
+  if (activeView === "item-manager") {
+    return "Item Manager";
+  }
+
+  if (activeView === "personality-manager") {
+    return "Personalities";
+  }
+
+  if (activeView === "personality-events") {
+    return "Personality Events";
+  }
+
   if (activeView === "sprite-editor") {
     return "Sprite Editor";
   }
@@ -187,8 +236,140 @@ function getDocumentTitle(activeView: StudioViewId, paintEditors: PaintEditorSes
   return paintEditors.find((editor) => editor.id === activeView)?.title ?? "Tile Editor";
 }
 
+function StudioNavIcon({ icon }: { icon: "editor" | "item" | "map" | "paint" | "personality" }) {
+  if (icon === "map") {
+    return (
+      <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24">
+        <path
+          d="M3.5 6.5 8.75 4l6.5 2.5L20.5 4v13.5L15.25 20l-6.5-2.5L3.5 20Z"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+        <path
+          d="M8.75 4v13.5M15.25 6.5V20"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+      </svg>
+    );
+  }
+
+  if (icon === "item") {
+    return (
+      <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24">
+        <path
+          d="M5 8.25 12 4l7 4.25v7.5L12 20l-7-4.25Z"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+        <path
+          d="M5 8.25 12 12.5l7-4.25M12 12.5V20"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+      </svg>
+    );
+  }
+
+  if (icon === "paint") {
+    return (
+      <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24">
+        <path
+          d="M6 16.5 16.5 6a2.12 2.12 0 1 1 3 3L9 19.5H6Z"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+        <path
+          d="M13.5 9 17 12.5M6 19.5h4.5"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+      </svg>
+    );
+  }
+
+  if (icon === "personality") {
+    return (
+      <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24">
+        <path
+          d="M12 12.25a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5Z"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+        <path
+          d="M5 19.25a7 7 0 0 1 14 0"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24">
+      <path
+        d="M5 5.5h14v13H5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="m9.25 14.75 6-6M13 8.75h2.25V11"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M7.5 18.5h9"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
 function getViewFromHash(hash: string): StudioView {
   const normalizedHash = hash.trim().toLowerCase();
+
+  if (
+    normalizedHash === "#/items" ||
+    normalizedHash === "#items" ||
+    normalizedHash === "#/item-manager" ||
+    normalizedHash === "#item-manager"
+  ) {
+    return "item-manager";
+  }
 
   if (
     normalizedHash === "#/map" ||
@@ -197,6 +378,22 @@ function getViewFromHash(hash: string): StudioView {
     normalizedHash === "#map-designer"
   ) {
     return "map-designer";
+  }
+
+  if (
+    normalizedHash === "#/personalities" ||
+    normalizedHash === "#personalities" ||
+    normalizedHash === "#/personality-manager" ||
+    normalizedHash === "#personality-manager"
+  ) {
+    return "personality-manager";
+  }
+
+  if (
+    normalizedHash === "#/personality-events" ||
+    normalizedHash === "#personality-events"
+  ) {
+    return "personality-events";
   }
 
   if (
@@ -212,8 +409,20 @@ function getViewFromHash(hash: string): StudioView {
 }
 
 function getHashForView(view: StudioView) {
+  if (view === "item-manager") {
+    return "#/items";
+  }
+
   if (view === "map-designer") {
     return "#/map";
+  }
+
+  if (view === "personality-manager") {
+    return "#/personalities";
+  }
+
+  if (view === "personality-events") {
+    return "#/personality-events";
   }
 
   if (view === "sprite-editor") {
@@ -305,6 +514,42 @@ function getInitialMapSlug(mapRecords: MapRecord[], preferredSlug: string) {
   }
 
   return mapRecords[0]?.slug ?? "";
+}
+
+function getInitialItemId(itemRecords: ItemRecord[], preferredItemParam: string) {
+  const normalizedPreferredItem = preferredItemParam.trim();
+
+  if (normalizedPreferredItem) {
+    const parsedId = Number.parseInt(normalizedPreferredItem, 10);
+
+    if (Number.isFinite(parsedId) && itemRecords.some((itemRecord) => itemRecord.id === parsedId)) {
+      return parsedId;
+    }
+
+    const matchedBySlug = itemRecords.find((itemRecord) => itemRecord.slug === normalizedPreferredItem);
+
+    if (matchedBySlug) {
+      return matchedBySlug.id;
+    }
+  }
+
+  return itemRecords[0]?.id ?? null;
+}
+
+function getInitialPersonalitySlug(
+  personalityRecords: PersonalityRecord[],
+  preferredPersonalityParam: string
+) {
+  const normalizedPreferredSlug = preferredPersonalityParam.trim();
+
+  if (
+    normalizedPreferredSlug &&
+    personalityRecords.some((personalityRecord) => personalityRecord.character_slug === normalizedPreferredSlug)
+  ) {
+    return normalizedPreferredSlug;
+  }
+
+  return personalityRecords[0]?.character_slug ?? "";
 }
 
 function getTileBrushAssetKey(tileSlug: string) {
@@ -524,6 +769,10 @@ function normalizeMapDesignerUiState(
       Number.isFinite(mapDesignerUiState.activeLayerIndex)
         ? Math.max(0, Math.min(MAP_LAYER_COUNT - 1, Math.round(mapDesignerUiState.activeLayerIndex)))
         : 0,
+    isGridVisible:
+      typeof mapDesignerUiState?.isGridVisible === "boolean"
+        ? mapDesignerUiState.isGridVisible
+        : true,
     layerVisibilities: layerVisibilities.map((value) =>
       typeof value === "number" && Number.isFinite(value) ? value : 1
     ),
@@ -546,36 +795,48 @@ interface TileServerAppProps {
   clipboardSlots: Array<ClipboardSlotRecord | null>;
   initialEditTileSlug: string;
   initialImagePath: string;
+  initialItemId: string;
   initialMapSlug: string;
   initialMode: string;
   initialPaintEditors: string;
+  initialPersonalitySlug: string;
   initialSpriteKey: string;
   initialBrushAssetKey: string;
+  items: ItemRecord[];
   maps: MapRecord[];
+  personalities: PersonalityRecord[];
   sprites: SpriteRecord[];
   tileLibraryFolderAssetCounts: Record<string, number>;
   tileLibraryFolders: string[];
   tiles: TileRecord[];
+  vaxServer: string;
 }
 
 export function TileServerApp({
   clipboardSlots,
   initialEditTileSlug,
   initialImagePath,
+  initialItemId,
   initialMapSlug,
   initialMode,
   initialPaintEditors,
+  initialPersonalitySlug,
   initialSpriteKey,
   initialBrushAssetKey,
+  items,
   maps,
+  personalities,
   sprites,
   tileLibraryFolderAssetCounts,
   tileLibraryFolders,
-  tiles
+  tiles,
+  vaxServer
 }: TileServerAppProps) {
   const initialPaintSessions = parsePaintEditorList(initialPaintEditors, tiles);
   const initialSelectedSpriteKey = getInitialSpriteKey(sprites, initialSpriteKey);
+  const [itemRecords, setItemRecords] = useState(items);
   const [mapRecords, setMapRecords] = useState(maps);
+  const [personalityRecords, setPersonalityRecords] = useState(personalities);
   const [spriteRecords, setSpriteRecords] = useState(sprites);
   const [tileRecords, setTileRecords] = useState(tiles);
   const [tileLibraryFolderCountsByPath, setTileLibraryFolderCountsByPath] = useState(tileLibraryFolderAssetCounts);
@@ -589,6 +850,12 @@ export function TileServerApp({
   const [activeMapSlug, setActiveMapSlug] = useState(() =>
     getInitialMapSlug(maps, initialMapSlug)
   );
+  const [activeItemId, setActiveItemId] = useState<number | null>(() =>
+    getInitialItemId(items, initialItemId)
+  );
+  const [activePersonalitySlug, setActivePersonalitySlug] = useState(() =>
+    getInitialPersonalitySlug(personalities, initialPersonalitySlug)
+  );
   const [mapBrushAssetKey, setMapBrushAssetKey] = useState(() =>
     getInitialBrushAssetKey(tiles, sprites, initialBrushAssetKey)
   );
@@ -600,7 +867,12 @@ export function TileServerApp({
   );
   const [selectedClipboardSlotIndex, setSelectedClipboardSlotIndex] = useState<number | null>(null);
   const [isClipboardManagerOpen, setClipboardManagerOpen] = useState(false);
+  const [isSidebarExpanded, setSidebarExpanded] = useState(DEFAULT_SIDEBAR_EXPANDED);
   const [isStudioStateRestored, setIsStudioStateRestored] = useState(false);
+  const [pendingTileSourceImage, setPendingTileSourceImage] = useState<{
+    payload: LoadedImagePayload;
+    tileSlug: string;
+  } | null>(null);
   const hasRestoredStudioStateRef = useRef(false);
   const hasInitializedClipboardPersistenceRef = useRef(false);
   const isCheckingClipboardRef = useRef(false);
@@ -627,6 +899,8 @@ export function TileServerApp({
     spriteKey: string,
     currentView: StudioViewId,
     currentPaintEditors: PaintEditorSession[],
+    itemId: number | null,
+    personalitySlug: string,
     mapSlug: string,
     brushAssetKey: string
   ) {
@@ -661,6 +935,18 @@ export function TileServerApp({
       url.searchParams.delete("map");
     }
 
+    if (typeof itemId === "number" && Number.isFinite(itemId)) {
+      url.searchParams.set("item", String(itemId));
+    } else {
+      url.searchParams.delete("item");
+    }
+
+    if (personalitySlug) {
+      url.searchParams.set("personality", personalitySlug);
+    } else {
+      url.searchParams.delete("personality");
+    }
+
     if (brushAssetKey) {
       url.searchParams.set("brush", brushAssetKey);
     } else {
@@ -682,8 +968,14 @@ export function TileServerApp({
       url.searchParams.delete("paint");
     }
 
-    url.hash = getHashForView(
-      currentView === "map-designer"
+      url.hash = getHashForView(
+      currentView === "item-manager"
+        ? "item-manager"
+        : currentView === "personality-events"
+        ? "personality-events"
+        : currentView === "personality-manager"
+        ? "personality-manager"
+        : currentView === "map-designer"
         ? "map-designer"
         : currentView === "sprite-editor"
           ? "sprite-editor"
@@ -691,6 +983,19 @@ export function TileServerApp({
     );
 
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function activateStudioView(view: StudioView) {
+    if (typeof window !== "undefined") {
+      const nextHash = getHashForView(view);
+
+      if (window.location.hash !== nextHash) {
+        window.location.hash = nextHash;
+        return;
+      }
+    }
+
+    setActiveView(view);
   }
 
   function getMapDraftLayers(
@@ -732,7 +1037,7 @@ export function TileServerApp({
     }));
   }
 
-  function setMapDesignerUiState(mapSlug: string, nextState: Partial<MapDesignerUiState>) {
+  const setMapDesignerUiState = useCallback((mapSlug: string, nextState: Partial<MapDesignerUiState>) => {
     if (!mapSlug) {
       return;
     }
@@ -744,7 +1049,7 @@ export function TileServerApp({
         ...nextState
       })
     }));
-  }
+  }, []);
 
   function setMapDraftLayers(mapSlug: string, layers: MapLayerStack, width?: number, height?: number) {
     if (!mapSlug) {
@@ -999,8 +1304,16 @@ export function TileServerApp({
   }
 
   useEffect(() => {
+    setItemRecords(items);
+  }, [items]);
+
+  useEffect(() => {
     setMapRecords(maps);
   }, [maps]);
+
+  useEffect(() => {
+    setPersonalityRecords(personalities);
+  }, [personalities]);
 
   useEffect(() => {
     setTileRecords(tiles);
@@ -1034,11 +1347,14 @@ export function TileServerApp({
       }
 
       const parsedState = JSON.parse(storedState) as Partial<{
+        activeItemId: number | null;
         activeMapSlug: string;
+        activePersonalitySlug: string;
         clipboardSlots: Array<ClipboardSlotRecord | null>;
         draftLayersByMapSlug: Record<string, MapLayerStack>;
         draftCellsByMapSlug: Record<string, string[][]>;
         isClipboardManagerOpen: boolean;
+        isSidebarExpanded: boolean;
         mapDesignerUiStateByMapSlug: Record<string, Partial<MapDesignerUiState>>;
         mapBrushAssetKey: string;
         mapBrushTileSlug: string;
@@ -1047,10 +1363,26 @@ export function TileServerApp({
       }>;
 
       if (
+        typeof parsedState.activeItemId === "number" &&
+        itemRecords.some((itemRecord) => itemRecord.id === parsedState.activeItemId)
+      ) {
+        setActiveItemId(parsedState.activeItemId);
+      }
+
+      if (
         typeof parsedState.activeMapSlug === "string" &&
         mapRecords.some((mapRecord) => mapRecord.slug === parsedState.activeMapSlug)
       ) {
         setActiveMapSlug(parsedState.activeMapSlug);
+      }
+
+      if (
+        typeof parsedState.activePersonalitySlug === "string" &&
+        personalityRecords.some(
+          (personalityRecord) => personalityRecord.character_slug === parsedState.activePersonalitySlug
+        )
+      ) {
+        setActivePersonalitySlug(parsedState.activePersonalitySlug);
       }
 
       if (
@@ -1065,6 +1397,10 @@ export function TileServerApp({
 
       if (typeof parsedState.isClipboardManagerOpen === "boolean") {
         setClipboardManagerOpen(parsedState.isClipboardManagerOpen);
+      }
+
+      if (typeof parsedState.isSidebarExpanded === "boolean") {
+        setSidebarExpanded(parsedState.isSidebarExpanded);
       }
 
       if (Array.isArray(parsedState.clipboardSlots)) {
@@ -1133,7 +1469,7 @@ export function TileServerApp({
     } finally {
       setIsStudioStateRestored(true);
     }
-  }, [mapRecords, spriteRecords, tileRecords]);
+  }, [itemRecords, mapRecords, personalityRecords, spriteRecords, tileRecords]);
 
   useEffect(() => {
     setDraftSlotsByTileSlug((currentDrafts) => {
@@ -1201,6 +1537,36 @@ export function TileServerApp({
   }, [spriteRecords]);
 
   useEffect(() => {
+    setActiveItemId((currentId) => {
+      if (currentId === null) {
+        return currentId;
+      }
+
+      if (typeof currentId === "number" && itemRecords.some((itemRecord) => itemRecord.id === currentId)) {
+        return currentId;
+      }
+
+      return itemRecords[0]?.id ?? null;
+    });
+  }, [itemRecords]);
+
+  useEffect(() => {
+    setActivePersonalitySlug((currentSlug) => {
+      if (!currentSlug) {
+        return personalityRecords[0]?.character_slug ?? "";
+      }
+
+      if (
+        personalityRecords.some((personalityRecord) => personalityRecord.character_slug === currentSlug)
+      ) {
+        return currentSlug;
+      }
+
+      return personalityRecords[0]?.character_slug ?? "";
+    });
+  }, [personalityRecords]);
+
+  useEffect(() => {
     setDraftLayersByMapSlug((currentDrafts) => {
       const nextDrafts: Record<string, MapLayerStack> = {};
 
@@ -1229,6 +1595,9 @@ export function TileServerApp({
       activeView !== "tile-workshop" &&
       activeView !== "sprite-editor" &&
       activeView !== "map-designer" &&
+      activeView !== "item-manager" &&
+      activeView !== "personality-events" &&
+      activeView !== "personality-manager" &&
       !paintEditors.some((editor) => editor.id === activeView)
     ) {
       setActiveView("tile-workshop");
@@ -1240,6 +1609,12 @@ export function TileServerApp({
       setActiveView("tile-workshop");
     }
   }, [activeSpriteKey, activeView]);
+
+  useEffect(() => {
+    if (isClipboardManagerOpen) {
+      setSidebarExpanded(true);
+    }
+  }, [isClipboardManagerOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1274,10 +1649,12 @@ export function TileServerApp({
       activeSpriteKey,
       activeView,
       paintEditors,
+      activeItemId,
+      activePersonalitySlug,
       activeMapSlug,
       mapBrushAssetKey
     );
-  }, [activeMapSlug, activeSpriteKey, activeTileSlug, activeView, mapBrushAssetKey, paintEditors, spriteRecords, tileRecords]);
+  }, [activeItemId, activeMapSlug, activePersonalitySlug, activeSpriteKey, activeTileSlug, activeView, mapBrushAssetKey, paintEditors, spriteRecords, tileRecords]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -1293,10 +1670,13 @@ export function TileServerApp({
     }
 
     const nextState = {
+      activeItemId,
       activeMapSlug,
+      activePersonalitySlug,
       clipboardSlots: clipboardSlotsState,
       draftLayersByMapSlug,
       isClipboardManagerOpen,
+      isSidebarExpanded,
       mapDesignerUiStateByMapSlug,
       mapBrushAssetKey,
       paintEditorUiStateById,
@@ -1305,10 +1685,13 @@ export function TileServerApp({
 
     window.sessionStorage.setItem(STUDIO_STATE_STORAGE_KEY, JSON.stringify(nextState));
   }, [
+    activeItemId,
     activeMapSlug,
+    activePersonalitySlug,
     clipboardSlotsState,
     draftLayersByMapSlug,
     isClipboardManagerOpen,
+    isSidebarExpanded,
     isStudioStateRestored,
     mapDesignerUiStateByMapSlug,
     mapBrushAssetKey,
@@ -1417,8 +1800,17 @@ export function TileServerApp({
     spriteRecords.find(
       (spriteRecord) => getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === activeSpriteKey
     ) ?? null;
+  const activeItem = itemRecords.find((itemRecord) => itemRecord.id === activeItemId) ?? null;
   const activeMap = mapRecords.find((mapRecord) => mapRecord.slug === activeMapSlug) ?? null;
+  const activePersonality =
+    personalityRecords.find(
+      (personalityRecord) => personalityRecord.character_slug === activePersonalitySlug
+    ) ?? null;
   const filledClipboardSlots = clipboardSlotsState.filter(Boolean).length;
+  const isEditorNavActive =
+    activeView === "tile-workshop" ||
+    activeView === "sprite-editor" ||
+    paintEditors.some((editor) => editor.id === activeView);
 
   return (
     <StudioProvider
@@ -1428,8 +1820,12 @@ export function TileServerApp({
       // the minimum props it needs so global app-shell updates do not force redraws everywhere.
       value={{
         addClipboardSlot,
+        activeItem,
+        activeItemId,
         activeMap,
         activeMapSlug,
+        activePersonality,
+        activePersonalitySlug,
         activeSprite,
         activeSpriteKey,
         activeTile,
@@ -1443,6 +1839,9 @@ export function TileServerApp({
           );
         },
         clearClipboardSlot,
+        clearPendingTileSourceImage: () => {
+          setPendingTileSourceImage(null);
+        },
         clipboardStatus,
         clipboardSlots: clipboardSlotsState,
         getMapDesignerUiState,
@@ -1451,14 +1850,39 @@ export function TileServerApp({
         getTileDraftSlots,
         initialImagePath,
         isClipboardManagerOpen,
+        items: itemRecords,
         mapBrushAssetKey,
         maps: mapRecords,
         openPaintEditor,
+        pendingTileSourceImage,
+        personalities: personalityRecords,
         putClipboardSlot,
+        queueTileSourceImage: (tileSlug, payload) => {
+          if (!tileSlug) {
+            revokeObjectUrl(payload.dataUrl);
+            return;
+          }
+
+          setPendingTileSourceImage((currentPayload) => {
+            if (currentPayload?.payload.dataUrl !== payload.dataUrl) {
+              revokeObjectUrl(currentPayload?.payload.dataUrl ?? null);
+            }
+
+            return {
+              payload,
+              tileSlug
+            };
+          });
+        },
+        removeItem: (itemId) => {
+          setItemRecords((currentItems) => currentItems.filter((itemRecord) => itemRecord.id !== itemId));
+        },
         removeSprite: removeSpriteRecord,
         removeTile: removeTileRecord,
         selectedClipboardSlotIndex,
+        setActiveItemId,
         setActiveMapSlug,
+        setActivePersonalitySlug,
         setClipboardManagerOpen,
         setMapDesignerUiState,
         setPaintEditorUiState,
@@ -1472,6 +1896,44 @@ export function TileServerApp({
         tileLibraryFolderAssetCounts: tileLibraryFolderCountsByPath,
         tileLibraryFolders: tileLibraryFolderPaths,
         tiles: tileRecords,
+        upsertItem: (itemRecord) => {
+          setItemRecords((currentItems) => {
+            const existingIndex = currentItems.findIndex((candidate) => candidate.id === itemRecord.id);
+
+            if (existingIndex === -1) {
+              return [...currentItems, itemRecord].sort(
+                (left, right) => left.item_type.localeCompare(right.item_type) || left.name.localeCompare(right.name)
+              );
+            }
+
+            const nextItems = currentItems.slice();
+            nextItems[existingIndex] = itemRecord;
+            return nextItems;
+          });
+        },
+        upsertPersonality: (personalityRecord) => {
+          setPersonalityRecords((currentPersonalities) => {
+            const existingIndex = currentPersonalities.findIndex(
+              (candidate) => candidate.character_slug === personalityRecord.character_slug
+            );
+
+            if (existingIndex === -1) {
+              return [...currentPersonalities, personalityRecord].sort(
+                (left, right) =>
+                  left.name.localeCompare(right.name) ||
+                  left.character_slug.localeCompare(right.character_slug)
+              );
+            }
+
+            const nextPersonalities = currentPersonalities.slice();
+            nextPersonalities[existingIndex] = personalityRecord;
+            return nextPersonalities.sort(
+              (left, right) =>
+                left.name.localeCompare(right.name) ||
+                left.character_slug.localeCompare(right.character_slug)
+            );
+          });
+        },
         upsertSprite: (spriteRecord) => {
           let isNewSprite = false;
 
@@ -1541,120 +2003,197 @@ export function TileServerApp({
               applyFolderAssetCountDelta(currentCounts, tileRecord.path, 1)
             );
           }
-        }
+        },
+        vaxServer
       }}
     >
-      <div className="min-h-screen p-5">
-        <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] max-w-[1600px] flex-col gap-4">
-          <div className="relative flex items-start justify-between gap-4">
-            <div className="flex w-fit flex-wrap items-center gap-1 border theme-border-panel theme-bg-input p-1 theme-shadow-soft backdrop-blur">
+      <div className="min-h-screen">
+        <div className="flex min-h-screen">
+          <aside
+            className={`navbar ${isSidebarExpanded ? "navbar--expanded" : "navbar--collapsed"}`}
+          >
+            <div className={`navbar__header ${isSidebarExpanded ? "" : "navbar__header--collapsed"}`}>
+              {isSidebarExpanded ? (
+                <div className="navbar__brand">
+                  <span className="truncate">Tile Server 19</span>
+                </div>
+              ) : null}
+              <button
+                className="navbar__toggle"
+                onClick={() => {
+                  setSidebarExpanded(!isSidebarExpanded);
+                }}
+                title={isSidebarExpanded ? "Collapse navigation" : "Expand navigation"}
+                type="button"
+              >
+                {isSidebarExpanded ? "<" : ">"}
+              </button>
+            </div>
+
+            <div className="navbar__section">
               {[
-                { id: "tile-workshop" as const, label: "Tile Editor" },
-                { id: "map-designer" as const, label: "Map Designer" }
-              ].map((tab) => {
-                const isActive = activeView === tab.id;
+                {
+                  description: activeSprite
+                    ? `Editing ${activeSprite.name}`
+                    : activeTile
+                      ? `Editing ${activeTile.slug}`
+                      : "Tile and sprite workflow",
+                  icon: "editor" as const,
+                  id: "tile-workshop" as const,
+                  label: "Editor"
+                },
+                {
+                  description: activeMap ? `Editing ${activeMap.slug}` : "Lay out maps",
+                  icon: "map" as const,
+                  id: "map-designer" as const,
+                  label: "Map"
+                },
+                {
+                  description: "Manage Vax Items",
+                  icon: "item" as const,
+                  id: "item-manager" as const,
+                  label: "Item Manager"
+                },
+                {
+                  description: activePersonality
+                    ? `Editing ${activePersonality.name}`
+                    : "NPC personality records",
+                  icon: "personality" as const,
+                  id: "personality-manager" as const,
+                  label: "Personalities"
+                }
+              ].map((item) => {
+                const isActive = item.id === "tile-workshop" ? isEditorNavActive : activeView === item.id;
 
                 return (
                   <button
-                    className={`px-4 py-2 text-sm font-semibold transition ${
-                      isActive
-                        ? "border theme-border-panel theme-bg-panel theme-text-primary theme-shadow-soft"
-                        : "border theme-border-transparent bg-transparent theme-text-muted theme-hover-bg-panel theme-hover-text-primary"
-                    }`}
-                    key={tab.id}
+                    className={`navbar__item ${isActive ? "navbar__item--active" : ""}`}
+                    key={item.id}
                     onClick={() => {
-                      if (typeof window !== "undefined") {
-                        const nextHash = getHashForView(tab.id);
-
-                        if (window.location.hash !== nextHash) {
-                          window.location.hash = nextHash;
-                        } else {
-                          setActiveView(tab.id);
-                        }
-                      } else {
-                        setActiveView(tab.id);
-                      }
+                      activateStudioView(item.id);
                     }}
+                    title={item.label}
                     type="button"
                   >
-                    {tab.label}
+                    <span className="navbar__item-badge navbar__item-badge--icon">
+                      <StudioNavIcon icon={item.icon} />
+                    </span>
+                    {isSidebarExpanded ? (
+                      <span className="min-w-0 flex-1">
+                        <span className="navbar__item-title">{item.label}</span>
+                        <span className="navbar__item-description">{item.description}</span>
+                      </span>
+                    ) : null}
                   </button>
                 );
               })}
-
-              {paintEditors.map((editor) => {
-                const isActive = activeView === editor.id;
-
-                return (
-                  <div
-                    className={`flex min-w-0 items-center border transition ${
-                      isActive
-                        ? "theme-border-panel theme-bg-panel theme-text-primary theme-shadow-soft"
-                        : "theme-border-transparent bg-transparent theme-text-muted theme-hover-bg-panel theme-hover-text-primary"
-                    }`}
-                    key={editor.id}
-                  >
-                    <button
-                      className="max-w-[16rem] truncate px-4 py-2 text-sm font-semibold"
-                      onClick={() => {
-                        setActiveView(editor.id);
-                      }}
-                      type="button"
-                    >
-                      {editor.title}
-                    </button>
-                    <button
-                      className="px-2 py-2 text-xs theme-text-muted transition theme-hover-text-primary"
-                      onClick={() => {
-                        closePaintEditor(editor.id);
-                      }}
-                      type="button"
-                    >
-                      X
-                    </button>
-                  </div>
-                );
-              })}
             </div>
 
-            <button
-              className={`relative inline-flex min-h-11 min-w-11 items-center justify-center border px-3 py-2 text-sm font-semibold transition ${
-                isClipboardManagerOpen
-                  ? "theme-border-accent theme-bg-panel theme-text-primary theme-shadow-soft"
-                  : "theme-border-panel theme-bg-input theme-text-muted theme-hover-bg-panel theme-hover-text-primary"
-              }`}
-              onClick={() => {
-                setClipboardManagerOpen(!isClipboardManagerOpen);
-              }}
-              title="Toggle clipboard manager"
-              type="button"
-            >
-              <FontAwesomeIcon className="h-4 w-4" icon={faClipboard} />
-              {filledClipboardSlots > 0 ? (
-                <span className="ml-2 rounded-full theme-bg-brand px-2 py-0.5 text-[10px] font-bold theme-text-inverse">
-                  {filledClipboardSlots}
+            {paintEditors.length > 0 ? (
+              <div className="navbar__section">
+                {isSidebarExpanded ? <div className="navbar__section-label">Open Paint Sessions</div> : null}
+                {paintEditors.map((editor) => {
+                  const isActive = activeView === editor.id;
+
+                  return (
+                    <div className="navbar__item-row" key={editor.id}>
+                      <button
+                        className={`navbar__item ${isActive ? "navbar__item--active" : ""}`}
+                        onClick={() => {
+                          setActiveView(editor.id);
+                        }}
+                        title={editor.title}
+                        type="button"
+                      >
+                        <span className="navbar__item-badge navbar__item-badge--icon">
+                          <StudioNavIcon icon="paint" />
+                        </span>
+                        {isSidebarExpanded ? (
+                          <span className="min-w-0 flex-1">
+                            <span className="navbar__item-title">{editor.title}</span>
+                            <span className="navbar__item-description">Direct slot painting</span>
+                          </span>
+                        ) : null}
+                      </button>
+                      {isSidebarExpanded ? (
+                        <button
+                          className="navbar__item-close"
+                          onClick={() => {
+                            closePaintEditor(editor.id);
+                          }}
+                          title={`Close ${editor.title}`}
+                          type="button"
+                        >
+                          X
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            <div className="mt-auto flex flex-col gap-1">
+              <button
+                className={`navbar__item ${isClipboardManagerOpen ? "navbar__item--active" : ""}`}
+                onClick={() => {
+                  if (!isSidebarExpanded) {
+                    setSidebarExpanded(true);
+                  }
+
+                  setClipboardManagerOpen(!isClipboardManagerOpen);
+                }}
+                title="Toggle clipboard manager"
+                type="button"
+              >
+                <span className="navbar__item-badge navbar__item-badge--icon">
+                  <FontAwesomeIcon className="h-4 w-4" icon={faClipboard} />
                 </span>
-              ) : null}
-            </button>
+                {isSidebarExpanded ? (
+                  <span className="min-w-0 flex-1">
+                    <span className="navbar__item-title">Clipboard Manager</span>
+                    <span className="navbar__item-description">
+                      {filledClipboardSlots > 0
+                        ? `${filledClipboardSlots} clipboard ${filledClipboardSlots === 1 ? "slot" : "slots"} ready.`
+                        : "Clipboard slots"}
+                    </span>
+                  </span>
+                ) : null}
+                {filledClipboardSlots > 0 ? (
+                  <span className="navbar__count">{filledClipboardSlots}</span>
+                ) : null}
+              </button>
 
-            <ClipboardManager />
-          </div>
+              {isSidebarExpanded ? <ClipboardManager /> : null}
+            </div>
+          </aside>
 
-          <div className="min-h-0 flex-1">
-            <div className={activeView === "tile-workshop" || activeView === "sprite-editor" ? "block h-full" : "hidden h-full"}>
-              <TileWorkshop />
+          <main className="min-w-0 flex-1 p-3 md:p-4">
+              <div className="min-h-full">
+              <div className={activeView === "tile-workshop" || activeView === "sprite-editor" ? "block h-full" : "hidden h-full"}>
+                <TileWorkshop />
+              </div>
+              <div className={activeView === "map-designer" ? "block h-full" : "hidden h-full"}>
+                <MapDesigner />
+              </div>
+              <div className={activeView === "item-manager" ? "block h-full" : "hidden h-full"}>
+                <ItemManager />
+              </div>
+              <div className={activeView === "personality-manager" ? "block h-full" : "hidden h-full"}>
+                <PersonalityManager />
+              </div>
+              <div className={activeView === "personality-events" ? "block h-full" : "hidden h-full"}>
+                <PersonalityEventsManager />
+              </div>
+              {paintEditors
+                .filter((editor) => activeView === editor.id)
+                .map((editor) => (
+                  <div className="block h-full" key={editor.id}>
+                    <PaintMode session={editor} />
+                  </div>
+                ))}
             </div>
-            <div className={activeView === "map-designer" ? "block h-full" : "hidden h-full"}>
-              <MapDesigner />
-            </div>
-            {paintEditors
-              .filter((editor) => activeView === editor.id)
-              .map((editor) => (
-                <div className="block h-full" key={editor.id}>
-                  <PaintMode session={editor} />
-                </div>
-              ))}
-          </div>
+          </main>
         </div>
       </div>
     </StudioProvider>

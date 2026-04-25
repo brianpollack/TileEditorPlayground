@@ -1,6 +1,7 @@
 import tailwindcss from "@tailwindcss/vite";
 import rsc from "@vitejs/plugin-rsc";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 
 import { normalizeClipboardSlots, writeClipboardSlots } from "./src/lib/serverStore";
@@ -88,5 +89,12 @@ export default defineConfig({
         ssr: "./src/framework/entry.ssr.tsx"
       }
     })
-  ]
+  ],
+  resolve: {
+    alias: {
+      "prop-types": fileURLToPath(
+        new URL("./src/lib/propTypesCompat.ts", import.meta.url)
+      )
+    }
+  }
 });

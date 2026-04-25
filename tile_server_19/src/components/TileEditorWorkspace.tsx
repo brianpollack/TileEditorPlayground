@@ -27,7 +27,7 @@ interface TileEditorWorkspaceProps {
   activeTile: TileRecord | null;
   draftSlots: Array<SlotRecord | null>;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
-  hasUnsavedSlotChanges: boolean;
+  hasUnsavedTileChanges: boolean;
   onBrowseImage(): void;
   onCancelClearSlot(): void;
   onClearDraftSlots(): void;
@@ -41,6 +41,8 @@ interface TileEditorWorkspaceProps {
   onSelectorSizeChange(size: number): void;
   onSourceCanvasClick(event: React.MouseEvent<HTMLCanvasElement>): void;
   onSourceCanvasMouseMove(event: React.MouseEvent<HTMLCanvasElement>): void;
+  tileImpassible: boolean;
+  onTileBooleanChange(field: "impassible", value: boolean): void;
   previewCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   selectedSlotKey: SlotKey;
   slotPendingClear: SlotKey | null;
@@ -53,7 +55,7 @@ function TileEditorWorkspaceImpl({
   activeTile,
   draftSlots,
   fileInputRef,
-  hasUnsavedSlotChanges,
+  hasUnsavedTileChanges,
   onBrowseImage,
   onCancelClearSlot,
   onClearDraftSlots,
@@ -67,6 +69,8 @@ function TileEditorWorkspaceImpl({
   onSelectorSizeChange,
   onSourceCanvasClick,
   onSourceCanvasMouseMove,
+  tileImpassible,
+  onTileBooleanChange,
   previewCanvasRef,
   selectedSlotKey,
   slotPendingClear,
@@ -130,6 +134,20 @@ function TileEditorWorkspaceImpl({
           })}
         </div>
 
+        <div className="grid gap-2">
+          <SectionEyebrow>TILE OPTIONS</SectionEyebrow>
+          <label className="flex items-center gap-2 text-sm theme-text-muted">
+            <input
+              checked={tileImpassible}
+              onChange={(event) => {
+                onTileBooleanChange("impassible", event.currentTarget.checked);
+              }}
+              type="checkbox"
+            />
+            Impassible
+          </label>
+        </div>
+
         <div className={`relative flex min-h-[24rem] items-center justify-center ${canvasViewportClass}`}>
           <canvas
             className={`${sourceImage ? "block" : "hidden"} ${darkCanvasClass} max-w-full`}
@@ -154,7 +172,7 @@ function TileEditorWorkspaceImpl({
           <div className="flex flex-wrap items-center gap-3">
             <button
               className={actionButtonClass}
-              disabled={!hasUnsavedSlotChanges}
+              disabled={!hasUnsavedTileChanges}
               onClick={onSaveTile}
               type="button"
             >
@@ -306,8 +324,9 @@ export const TileEditorWorkspace = memo(
     prev.activeSelectorSize === next.activeSelectorSize &&
     prev.activeTile === next.activeTile &&
     prev.draftSlots === next.draftSlots &&
-    prev.hasUnsavedSlotChanges === next.hasUnsavedSlotChanges &&
+    prev.hasUnsavedTileChanges === next.hasUnsavedTileChanges &&
     prev.selectedSlotKey === next.selectedSlotKey &&
     prev.slotPendingClear === next.slotPendingClear &&
-    prev.sourceImage === next.sourceImage
+    prev.sourceImage === next.sourceImage &&
+    prev.tileImpassible === next.tileImpassible
 );

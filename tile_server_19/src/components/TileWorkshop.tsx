@@ -20,7 +20,13 @@ import {
   revokeObjectUrl,
   triggerDownload
 } from "../lib/images";
-import { getDefaultSpriteMount, spriteUsesDefaultMount } from "../lib/sprites";
+import {
+  getDefaultSpriteMount,
+  getSpriteBoundingBox,
+  snapSpriteBoundingBoxToTileGrid,
+  getSpriteTileFootprint,
+  spriteUsesDefaultMount
+} from "../lib/sprites";
 import {
   buildPreviewPlacements,
   clampSelection,
@@ -41,15 +47,92 @@ const SAVE_SPRITE_PATH = "/__tiles/save-sprite";
 const SPRITE_GRID_MARGIN_TILES = 1;
 type SpriteCanvasLayout = ReturnType<typeof getSpriteCanvasLayout>;
 
+function truncateMountValue(value: number) {
+  return Number.isFinite(value) ? Math.trunc(value) : 0;
+}
+
+function applySpriteFootprint(spriteRecord: SpriteRecord) {
+  return {
+    ...spriteRecord,
+    ...getSpriteTileFootprint(spriteRecord)
+  };
+}
+
+function createSpriteImageMetricsFromImage(spriteRecord: SpriteRecord, spriteImage: HTMLImageElement): SpriteRecord {
+  const metricsCanvas = document.createElement("canvas");
+  metricsCanvas.width = spriteImage.width;
+  metricsCanvas.height = spriteImage.height;
+  const metricsContext = metricsCanvas.getContext("2d", { willReadFrequently: true });
+
+  if (!metricsContext) {
+    return applySpriteFootprint({
+      ...spriteRecord,
+      image_h: spriteImage.height,
+      image_w: spriteImage.width
+    });
+  }
+
+  metricsContext.clearRect(0, 0, metricsCanvas.width, metricsCanvas.height);
+  metricsContext.drawImage(spriteImage, 0, 0);
+  const imageData = metricsContext.getImageData(0, 0, metricsCanvas.width, metricsCanvas.height);
+  const spriteWithImageSize = {
+    ...spriteRecord,
+    image_h: spriteImage.height,
+    image_w: spriteImage.width
+  };
+
+  return applySpriteFootprint({
+    ...spriteWithImageSize,
+    ...getSpriteBoundingBox(spriteWithImageSize, (x, y) => imageData.data[(y * imageData.width + x) * 4 + 3] ?? 0)
+  });
+}
+
+function createSpriteMountUpdate(
+  spriteRecord: SpriteRecord,
+  mount: { mount_x: number; mount_y: number }
+): SpriteRecord {
+  const nextMountX = truncateMountValue(mount.mount_x);
+  const nextMountY = truncateMountValue(mount.mount_y);
+  const imageSpaceBoundingLeft = spriteRecord.mount_x + spriteRecord.bounding_x;
+  const imageSpaceBoundingTop = spriteRecord.mount_y + spriteRecord.bounding_y;
+
+  return applySpriteFootprint({
+    ...spriteRecord,
+    ...snapSpriteBoundingBoxToTileGrid({
+      bounding_h: spriteRecord.bounding_h,
+      bounding_w: spriteRecord.bounding_w,
+      bounding_x: imageSpaceBoundingLeft - nextMountX,
+      bounding_y: imageSpaceBoundingTop - nextMountY,
+      mount_x: nextMountX,
+      mount_y: nextMountY
+    }),
+    mount_x: nextMountX,
+    mount_y: nextMountY
+  });
+}
+
+function normalizeSpriteMount(spriteRecord: SpriteRecord): SpriteRecord {
+  return createSpriteMountUpdate(spriteRecord, {
+    mount_x: spriteRecord.mount_x,
+    mount_y: spriteRecord.mount_y
+  });
+}
+
 function getSpriteCanvasLayout(spriteRecord: SpriteRecord, imageWidth: number, imageHeight: number) {
   const imageLeftFromOrigin = TILE_SIZE / 2 - spriteRecord.mount_x;
   const imageTopFromOrigin = TILE_SIZE / 2 - spriteRecord.mount_y;
   const imageRightFromOrigin = imageLeftFromOrigin + imageWidth;
   const imageBottomFromOrigin = imageTopFromOrigin + imageHeight;
+  const footprint = getSpriteTileFootprint({
+    image_h: imageHeight,
+    image_w: imageWidth,
+    mount_x: spriteRecord.mount_x,
+    mount_y: spriteRecord.mount_y
+  });
   const coveredTilesLeft = Math.ceil(Math.max(0, -imageLeftFromOrigin) / TILE_SIZE);
-  const coveredTilesRight = Math.ceil(Math.max(0, imageRightFromOrigin - TILE_SIZE) / TILE_SIZE);
   const coveredTilesUp = Math.ceil(Math.max(0, -imageTopFromOrigin) / TILE_SIZE);
-  const coveredTilesDown = Math.ceil(Math.max(0, imageBottomFromOrigin - TILE_SIZE) / TILE_SIZE);
+  const coveredTilesRight = Math.max(0, footprint.tile_w - coveredTilesLeft - 1);
+  const coveredTilesDown = Math.max(0, footprint.tile_h - coveredTilesUp - 1);
   const tilesLeft = coveredTilesLeft + SPRITE_GRID_MARGIN_TILES;
   const tilesRight = coveredTilesRight + SPRITE_GRID_MARGIN_TILES;
   const tilesUp = coveredTilesUp + SPRITE_GRID_MARGIN_TILES;
@@ -85,9 +168,11 @@ export function TileWorkshop() {
     activeSprite,
     activeTile,
     activeTileSlug,
+    clearPendingTileSourceImage,
     getTileDraftSlots,
     initialImagePath,
     openPaintEditor,
+    pendingTileSourceImage,
     setTileDraftSlots,
     updateTileDraftSlot,
     upsertSprite,
@@ -99,7 +184,9 @@ export function TileWorkshop() {
   const [sourceImageName, setSourceImageName] = useState("");
   const [sourceImageUrl, setSourceImageUrl] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectedRegion | null>(null);
+  const [tileImpassible, setTileImpassible] = useState(true);
   const [spriteDraft, setSpriteDraft] = useState<SpriteRecord | null>(null);
+  const [spriteOnActivateDraft, setSpriteOnActivateDraft] = useState("");
   const [spriteImage, setSpriteImage] = useState<HTMLImageElement | null>(null);
   const [spriteImageUrl, setSpriteImageUrl] = useState<string | null>(null);
   const [spriteMoveDraftMount, setSpriteMoveDraftMount] = useState<{ mount_x: number; mount_y: number } | null>(null);
@@ -119,7 +206,9 @@ export function TileWorkshop() {
   const spriteFrozenLayoutRef = useRef<SpriteCanvasLayout | null>(null);
   const spriteMoveMountRef = useRef<{ mount_x: number; mount_y: number } | null>(null);
   const spriteDraftRef = useRef<SpriteRecord | null>(null);
+  const spriteOnActivateDraftRef = useRef("");
   const spriteReplacementFileRef = useRef<File | null>(null);
+  const skipNextImpassibleAutosaveRef = useRef(false);
   const isSpriteSavingRef = useRef(false);
   const pendingSpriteSaveRef = useRef(false);
   const lastSavedSpriteSnapshotRef = useRef("");
@@ -129,7 +218,9 @@ export function TileWorkshop() {
 
   const loadedSlotsSnapshot = JSON.stringify(normalizeSlotRecords(activeTile?.slots));
   const draftSlotsSnapshot = JSON.stringify(normalizeSlotRecords(draftSlots));
-  const hasUnsavedSlotChanges = Boolean(activeTileSlug) && loadedSlotsSnapshot !== draftSlotsSnapshot;
+  const hasUnsavedTileChanges =
+    Boolean(activeTileSlug) &&
+    (loadedSlotsSnapshot !== draftSlotsSnapshot || tileImpassible !== (activeTile?.impassible ?? true));
   const activeSelectorSize = selectedSlotKey === "main" ? TILE_SIZE : selectorSize;
   const previewPlacements = buildPreviewPlacements(
     `${activeTile?.slug ?? "empty"}:${draftSlots.map((slotRecord) => slotRecord?.pixels.length ?? 0).join("-")}`
@@ -152,8 +243,54 @@ export function TileWorkshop() {
   }, [spriteDraft]);
 
   useEffect(() => {
+    spriteOnActivateDraftRef.current = spriteOnActivateDraft;
+  }, [spriteOnActivateDraft]);
+
+  useEffect(() => {
     spriteReplacementFileRef.current = spriteReplacementFile;
   }, [spriteReplacementFile]);
+
+  useEffect(() => {
+    skipNextImpassibleAutosaveRef.current = true;
+    setTileImpassible(activeTile?.impassible ?? true);
+  }, [activeTile?.impassible, activeTileSlug]);
+
+  const saveTileDraft = useEffectEvent((nextImpassible = tileImpassible) => {
+    if (!activeTileSlug) {
+      return;
+    }
+
+    startTransition(() => {
+      void saveTileAction({
+        impassible: nextImpassible,
+        slots: draftSlots,
+        slug: activeTileSlug,
+        source: sourceImageName || activeTile?.source || ""
+      })
+        .then((savedTile) => {
+          upsertTile(savedTile);
+          setTileDraftSlots(savedTile.slug, normalizeSlotRecords(savedTile.slots));
+        })
+        .catch(() => {});
+    });
+  });
+
+  useEffect(() => {
+    if (skipNextImpassibleAutosaveRef.current) {
+      skipNextImpassibleAutosaveRef.current = false;
+      return;
+    }
+
+    if (!activeTileSlug || !activeTile) {
+      return;
+    }
+
+    if (tileImpassible === (activeTile.impassible ?? false)) {
+      return;
+    }
+
+    saveTileDraft(tileImpassible);
+  }, [activeTile, activeTileSlug, saveTileDraft, tileImpassible]);
 
   useEffect(() => {
     if (!selection) {
@@ -288,6 +425,7 @@ export function TileWorkshop() {
   useEffect(() => {
     if (!activeSprite) {
       setSpriteDraft(null);
+      setSpriteOnActivateDraft("");
       setSpriteImage(null);
       setSpriteImageUrl(null);
       setSpriteMoveDraftMount(null);
@@ -307,13 +445,14 @@ export function TileWorkshop() {
 
     let isCancelled = false;
 
-    setSpriteDraft(activeSprite);
+    setSpriteDraft(normalizeSpriteMount(activeSprite));
+    setSpriteOnActivateDraft(activeSprite.on_activate);
     setSpriteMoveDraftMount(null);
     setSpriteMoveDragging(false);
     spriteDragPositionRef.current = null;
     spriteFrozenLayoutRef.current = null;
     spriteMoveMountRef.current = null;
-    lastSavedSpriteSnapshotRef.current = getSpriteSaveSnapshot(activeSprite);
+    lastSavedSpriteSnapshotRef.current = getSpriteSaveSnapshot(normalizeSpriteMount(activeSprite));
     pendingSpriteSaveRef.current = false;
     isSpriteSavingRef.current = false;
     setSpriteSaving(false);
@@ -388,6 +527,12 @@ export function TileWorkshop() {
       layout.originCenterX - activeMount.mount_x,
       layout.originCenterY - activeMount.mount_y
     );
+
+    const imageSpaceBoundingLeft = spriteDraft.mount_x + spriteDraft.bounding_x;
+    const imageSpaceBoundingTop = spriteDraft.mount_y + spriteDraft.bounding_y;
+    const activeBoundingX = imageSpaceBoundingLeft - activeMount.mount_x;
+    const activeBoundingY = imageSpaceBoundingTop - activeMount.mount_y;
+
     context.save();
     context.strokeStyle = "rgba(0, 0, 0, 0.4)";
     context.lineWidth = 1;
@@ -404,6 +549,17 @@ export function TileWorkshop() {
       context.moveTo(0, y + 0.5);
       context.lineTo(spriteCanvas.width, y + 0.5);
       context.stroke();
+    }
+
+    if (spriteDraft.bounding_w > 0 && spriteDraft.bounding_h > 0) {
+      context.strokeStyle = "rgba(0, 60, 160, 0.3)";
+      context.lineWidth = 2;
+      context.strokeRect(
+        layout.originCenterX + activeBoundingX + 0.5,
+        layout.originCenterY + activeBoundingY + 0.5,
+        Math.max(0, spriteDraft.bounding_w - 1),
+        Math.max(0, spriteDraft.bounding_h - 1)
+      );
     }
 
     context.strokeStyle = "rgba(216, 135, 83, 0.75)";
@@ -469,6 +625,15 @@ export function TileWorkshop() {
     });
   }, [applyLoadedImage, initialImagePath, startTransition]);
 
+  useEffect(() => {
+    if (!pendingTileSourceImage || pendingTileSourceImage.tileSlug !== activeTileSlug) {
+      return;
+    }
+
+    applyLoadedImage(pendingTileSourceImage.payload);
+    clearPendingTileSourceImage();
+  }, [activeTileSlug, applyLoadedImage, clearPendingTileSourceImage, pendingTileSourceImage]);
+
   async function loadSelectedFile(file: File) {
     if (!file.type.startsWith("image/")) {
       return;
@@ -518,14 +683,15 @@ export function TileWorkshop() {
       setSpriteStatus(`Ready to replace ${activeSprite?.filename ?? "sprite image"} with ${file.name}.`);
       setSpriteDraft((currentSprite) =>
         currentSprite
-          ? {
-              ...currentSprite,
-              image_h: nextImage.height,
-              image_w: nextImage.width,
-              ...(spriteUsesDefaultMount(currentSprite)
-                ? getDefaultSpriteMount(nextImage.width, nextImage.height)
-                : {})
-            }
+          ? createSpriteImageMetricsFromImage(
+              spriteUsesDefaultMount(currentSprite)
+                ? {
+                    ...currentSprite,
+                    ...getDefaultSpriteMount(nextImage.width, nextImage.height)
+                  }
+                : currentSprite,
+              nextImage
+            )
           : currentSprite
       );
     } catch {
@@ -597,18 +763,7 @@ export function TileWorkshop() {
       return;
     }
 
-    startTransition(() => {
-      void saveTileAction({
-        slots: draftSlots,
-        slug: activeTileSlug,
-        source: sourceImageName
-      })
-        .then((savedTile) => {
-          upsertTile(savedTile);
-          setTileDraftSlots(savedTile.slug, normalizeSlotRecords(savedTile.slots));
-        })
-        .catch(() => {});
-    });
+    saveTileDraft(tileImpassible);
   }
 
   function handleExport() {
@@ -633,12 +788,18 @@ export function TileWorkshop() {
     value: string
   ) {
     const nextValue = Number(value);
+    const normalizedValue =
+      field === "mount_x" || field === "mount_y"
+        ? truncateMountValue(nextValue)
+        : Number.isFinite(nextValue)
+          ? nextValue
+          : 0;
 
     setSpriteDraft((currentSprite) =>
       currentSprite
         ? {
             ...currentSprite,
-            [field]: Number.isFinite(nextValue) ? nextValue : 0
+            [field]: normalizedValue
           }
         : currentSprite
     );
@@ -713,8 +874,8 @@ export function TileWorkshop() {
 
     spriteDragPositionRef.current = pointerPosition;
     spriteMoveMountRef.current = {
-      mount_x: Math.round(currentMount.mount_x - deltaX),
-      mount_y: Math.round(currentMount.mount_y - deltaY)
+      mount_x: truncateMountValue(currentMount.mount_x - deltaX),
+      mount_y: truncateMountValue(currentMount.mount_y - deltaY)
     };
     setSpriteMoveDraftMount(spriteMoveMountRef.current);
     renderSpriteCanvas();
@@ -724,16 +885,12 @@ export function TileWorkshop() {
     if (isSpriteMoveDragging) {
       const nextMount = spriteMoveMountRef.current;
 
-      if (nextMount) {
-        setSpriteDraft((currentSprite) =>
-          currentSprite
-            ? {
-                ...currentSprite,
-                mount_x: nextMount.mount_x,
-                mount_y: nextMount.mount_y
-              }
-            : currentSprite
-        );
+      if (nextMount && spriteDraftRef.current) {
+        const nextSprite = createSpriteMountUpdate(spriteDraftRef.current, nextMount);
+
+        spriteDraftRef.current = nextSprite;
+        setSpriteDraft(nextSprite);
+        void persistSprite(true);
       }
 
       setSpriteMoveDragging(false);
@@ -744,12 +901,19 @@ export function TileWorkshop() {
     }
   }
 
-  const persistSprite = useEffectEvent(async (announceSaving: boolean) => {
+  const persistSprite = useEffectEvent(async (announceSaving: boolean, includeOnActivateDraft = false) => {
     const currentSpriteDraft = spriteDraftRef.current;
 
     if (!currentSpriteDraft) {
       return;
     }
+
+    const spriteToSave = includeOnActivateDraft
+      ? {
+          ...currentSpriteDraft,
+          on_activate: spriteOnActivateDraftRef.current
+        }
+      : currentSpriteDraft;
 
     if (isSpriteSavingRef.current) {
       pendingSpriteSaveRef.current = true;
@@ -765,7 +929,7 @@ export function TileWorkshop() {
 
     try {
       const formData = new FormData();
-      formData.append("sprite", JSON.stringify(currentSpriteDraft));
+      formData.append("sprite", JSON.stringify(spriteToSave));
 
       if (spriteReplacementFileRef.current) {
         formData.append("file", spriteReplacementFileRef.current);
@@ -785,6 +949,7 @@ export function TileWorkshop() {
       const savedSprite = responseBody as SpriteRecord;
       upsertSprite(savedSprite);
       setSpriteDraft(savedSprite);
+      setSpriteOnActivateDraft(savedSprite.on_activate);
       setSpriteReplacementFile(null);
       lastSavedSpriteSnapshotRef.current = getSpriteSaveSnapshot(savedSprite);
       setSpriteStatus(`Saved ${savedSprite.filename}.`);
@@ -824,116 +989,144 @@ export function TileWorkshop() {
   }, [isSpriteMoveDragging, persistSprite, spriteDraft, spriteReplacementFile]);
 
   function handleSaveSprite() {
-    void persistSprite(true);
+    void persistSprite(true, true);
+  }
+
+  function handleAutoLayout() {
+    const currentSprite = spriteDraftRef.current;
+
+    if (!currentSprite) {
+      return;
+    }
+
+    const nextSprite = createSpriteMountUpdate(currentSprite, {
+      mount_x: currentSprite.image_w / 2,
+      mount_y: currentSprite.image_h - 64
+    });
+
+    spriteDraftRef.current = nextSprite;
+    setSpriteDraft(nextSprite);
+    void persistSprite(true, false);
   }
 
   return (
     <div className="min-h-0">
-      <div className="grid min-h-0 gap-4">
-        <TileLibraryPanel />
-        {activeSprite ? (
-          <SpriteEditorWorkspace
-            fileInputRef={spriteFileInputRef}
-            isMoveToolActive={isSpriteMoveToolActive}
-            isMoveToolDragging={isSpriteMoveDragging}
-            isSaving={isSpriteSaving}
-            onBrowseImage={() => {
-              spriteFileInputRef.current?.click();
-            }}
-            onFileSelected={(file) => {
-              void loadSelectedSpriteFile(file);
-            }}
-            onSaveSprite={handleSaveSprite}
-            onSourceCanvasMouseDown={handleSpriteCanvasMouseDown}
-            onSourceCanvasMouseLeave={stopSpriteCanvasDrag}
-            onSourceCanvasMouseMove={handleSpriteCanvasMouseMove}
-            onSourceCanvasMouseUp={stopSpriteCanvasDrag}
-            onSpriteBooleanChange={(field, value) => {
-              setSpriteDraft((currentSprite) =>
-                currentSprite
-                  ? {
-                      ...currentSprite,
-                      [field]: value
-                    }
-                  : currentSprite
-              );
-            }}
-            onSpriteNumberChange={updateSpriteNumberField}
-            onSpriteTextChange={(field, value) => {
-              setSpriteDraft((currentSprite) =>
-                currentSprite
-                  ? {
-                      ...currentSprite,
-                      [field]: value
-                    }
-                  : currentSprite
-              );
-            }}
-            onToggleMoveTool={() => {
-              setSpriteMoveToolActive((currentValue) => {
-                const nextValue = !currentValue;
+      <div className="grid min-h-0 gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
+        <div className="min-h-0 xl:h-[calc(100vh-7rem)]">
+          <TileLibraryPanel variant="sidebar" />
+        </div>
+        <div className="min-h-0">
+          {activeSprite ? (
+            <SpriteEditorWorkspace
+              fileInputRef={spriteFileInputRef}
+              isMoveToolActive={isSpriteMoveToolActive}
+              isMoveToolDragging={isSpriteMoveDragging}
+              isSaving={isSpriteSaving}
+              onActivateValue={spriteOnActivateDraft}
+              onAutoLayout={handleAutoLayout}
+              onBrowseImage={() => {
+                spriteFileInputRef.current?.click();
+              }}
+              onFileSelected={(file) => {
+                void loadSelectedSpriteFile(file);
+              }}
+              onOnActivateChange={setSpriteOnActivateDraft}
+              onSaveSprite={handleSaveSprite}
+              onSourceCanvasMouseDown={handleSpriteCanvasMouseDown}
+              onSourceCanvasMouseLeave={stopSpriteCanvasDrag}
+              onSourceCanvasMouseMove={handleSpriteCanvasMouseMove}
+              onSourceCanvasMouseUp={stopSpriteCanvasDrag}
+              onSpriteBooleanChange={(field, value) => {
+                setSpriteDraft((currentSprite) =>
+                  currentSprite
+                    ? {
+                        ...currentSprite,
+                        [field]: value
+                      }
+                    : currentSprite
+                );
+              }}
+              onSpriteNumberChange={updateSpriteNumberField}
+              onSpriteTextChange={(field, value) => {
+                setSpriteDraft((currentSprite) =>
+                  currentSprite
+                    ? {
+                        ...currentSprite,
+                        [field]: value
+                      }
+                    : currentSprite
+                );
+              }}
+              onToggleMoveTool={() => {
+                setSpriteMoveToolActive((currentValue) => {
+                  const nextValue = !currentValue;
 
-                if (!nextValue) {
-                  setSpriteMoveDragging(false);
-                  spriteDragPositionRef.current = null;
-                  spriteFrozenLayoutRef.current = null;
-                  spriteMoveMountRef.current = null;
-                  setSpriteMoveDraftMount(null);
-                  setSpriteStatus("");
-                } else {
-                  setSpriteStatus("Sprite Move enabled. Drag the image to adjust mount point.");
+                  if (!nextValue) {
+                    setSpriteMoveDragging(false);
+                    spriteDragPositionRef.current = null;
+                    spriteFrozenLayoutRef.current = null;
+                    spriteMoveMountRef.current = null;
+                    setSpriteMoveDraftMount(null);
+                    setSpriteStatus("");
+                  } else {
+                    setSpriteStatus("Sprite Move enabled. Drag the image to adjust mount point.");
+                  }
+
+                  return nextValue;
+                });
+              }}
+              sourceCanvasRef={spriteCanvasRef}
+              sourceImage={spriteImage}
+              spriteRecord={spriteDraft}
+              statusMessage={spriteStatus}
+            />
+          ) : (
+            <TileEditorWorkspace
+              activeSelectorSize={activeSelectorSize}
+              activeTile={activeTile}
+              draftSlots={draftSlots}
+              fileInputRef={fileInputRef}
+              hasUnsavedTileChanges={hasUnsavedTileChanges}
+              onBrowseImage={() => {
+                fileInputRef.current?.click();
+              }}
+              onCancelClearSlot={() => {
+                setSlotPendingClear(null);
+              }}
+              onClearDraftSlots={clearDraftSlots}
+              onConfirmClearSlot={confirmClearSlot}
+              onExport={handleExport}
+              onFileSelected={(file) => {
+                void loadSelectedFile(file);
+              }}
+              onOpenPaintEditor={(slotKey) => {
+                if (activeTile) {
+                  openPaintEditor(activeTile, slotKey);
                 }
-
-                return nextValue;
-              });
-            }}
-            sourceCanvasRef={spriteCanvasRef}
-            sourceImage={spriteImage}
-            spriteRecord={spriteDraft}
-            statusMessage={spriteStatus}
-          />
-        ) : (
-          <TileEditorWorkspace
-            activeSelectorSize={activeSelectorSize}
-            activeTile={activeTile}
-            draftSlots={draftSlots}
-            fileInputRef={fileInputRef}
-            hasUnsavedSlotChanges={hasUnsavedSlotChanges}
-            onBrowseImage={() => {
-              fileInputRef.current?.click();
-            }}
-            onCancelClearSlot={() => {
-              setSlotPendingClear(null);
-            }}
-            onClearDraftSlots={clearDraftSlots}
-            onConfirmClearSlot={confirmClearSlot}
-            onExport={handleExport}
-            onFileSelected={(file) => {
-              void loadSelectedFile(file);
-            }}
-            onOpenPaintEditor={(slotKey) => {
-              if (activeTile) {
-                openPaintEditor(activeTile, slotKey);
-              }
-            }}
-            onRequestClearSlot={(slotKey) => {
-              setSlotPendingClear(slotKey);
-            }}
-            onSaveTile={handleSaveTile}
-            onSelectSlot={setSelectedSlotKey}
-            onSelectorSizeChange={setSelectorSize}
-            onSourceCanvasClick={(event) => {
-              updateSelectionFromPointer(event);
-              captureSelection();
-            }}
-            onSourceCanvasMouseMove={updateSelectionFromPointer}
-            previewCanvasRef={previewCanvasRef}
-            selectedSlotKey={selectedSlotKey}
-            slotPendingClear={slotPendingClear}
-            sourceCanvasRef={sourceCanvasRef}
-            sourceImage={sourceImage}
-          />
-        )}
+              }}
+              onRequestClearSlot={(slotKey) => {
+                setSlotPendingClear(slotKey);
+              }}
+              onSaveTile={handleSaveTile}
+              onSelectSlot={setSelectedSlotKey}
+              onSelectorSizeChange={setSelectorSize}
+              onSourceCanvasClick={(event) => {
+                updateSelectionFromPointer(event);
+                captureSelection();
+              }}
+              onSourceCanvasMouseMove={updateSelectionFromPointer}
+              tileImpassible={tileImpassible}
+              onTileBooleanChange={(_field, value) => {
+                setTileImpassible(value);
+              }}
+              previewCanvasRef={previewCanvasRef}
+              selectedSlotKey={selectedSlotKey}
+              slotPendingClear={slotPendingClear}
+              sourceCanvasRef={sourceCanvasRef}
+              sourceImage={sourceImage}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

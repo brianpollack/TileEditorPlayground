@@ -1,13 +1,23 @@
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { existsSync, type Dirent } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { PNG } from "pngjs";
+import sharp from "sharp";
 
 import { MAP_DEFAULT_GRID_SIZE, SLOT_COUNT, TILE_SIZE } from "./constants";
 import { ensureDatabaseSchema, getDatabase, getDatabaseConnectionErrorMessage } from "./database";
+import {
+  getOpenRouterApiKey,
+  getR2Bucket,
+  getR2Token,
+  getR2UserAccessKey,
+  getR2UserSecret,
+  getVaxAdminKey,
+  getVaxServer
+} from "./env";
 import {
   createEmptyMapCells,
   createEmptyMapLayers,
@@ -32,15 +42,22 @@ import {
   TILE_LIBRARY_LAYERS,
   tileLibraryPathSupportsSprites
 } from "./tileLibrary";
-import { getDefaultSpriteMount } from "./sprites";
+import {
+  getDefaultSpriteMount,
+  getSpriteBoundingBox,
+  getSpriteTileFootprint
+} from "./sprites";
 import type {
   ClipboardSlotRecord,
   ExportArtifact,
+  ItemRecord,
   LoadedImagePayload,
   MapLayerCell,
   MapLayerStack,
   MapRecord,
   MapTileOptions,
+  PersonalityEventRecord,
+  PersonalityRecord,
   SpriteRecord,
   SlotRecord,
   TileRecord
@@ -49,6 +66,11 @@ import type {
 const APP_ROOT = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const WORKSPACE_ROOT = path.resolve(APP_ROOT, "..");
 const DATA_DIR = path.join(APP_ROOT, "data");
+const PERSONALITY_BASE_PROMPT_PATH = path.join(DATA_DIR, "prompts", "personlity_base.md");
+const PERSONALITY_MODEL_OPTIONS_PATH = path.join(DATA_DIR, "prompts", "model_options.json");
+const RANDOM_PERSONALITY_PROMPT_PATH = path.join(DATA_DIR, "prompts", "random_personality.md");
+const PERSONALITY_SCHEMA_PROMPT_PATH = path.join(DATA_DIR, "prompts", "personality_schema.md");
+const PERSONALITY_PROFILE_IMAGE_ROUTE_PREFIX = "/__personalities/profile";
 const TEMP_DIR = path.join(DATA_DIR, "temp");
 const MAPS_DIR = path.join(DATA_DIR, "maps");
 const CLIPBOARD_DB_PATH = path.join(TEMP_DIR, "clipboard-slots.json");
@@ -71,6 +93,7 @@ type StoredMapTileReference =
 
 interface StoredMapRecord {
   $schema?: string;
+  aboutPrompt?: string;
   cells?: string[][];
   height?: number;
   layers?: StoredMapCell[][][];
@@ -95,6 +118,7 @@ interface StoredAssetRow {
   file_name: string | null;
   id: string;
   image_data: Buffer | null;
+  impassible: boolean | null;
   source_path: string | null;
   sprite_metadata: unknown;
   sub_folder: string;
@@ -103,10 +127,13 @@ interface StoredAssetRow {
 }
 
 interface StoredMapRow {
+  about_prompt: string | null;
   created_at: Date | string;
   deleted: boolean;
   height: number;
   id: string;
+  is_instance: boolean;
+  mini_map: Buffer | null;
   name: string;
   slug: string;
   updated_at: Date | string;
@@ -152,6 +179,206 @@ interface StoredMapPlacementInsertRow {
   tile_y: number;
   updated_at: string;
 }
+
+interface StoredItemRow {
+  base_value: number | null;
+  character: string | null;
+  deleted?: boolean | null;
+  description: string | null;
+  durability: number | null;
+  etag: string | null;
+  gives_light: number | null;
+  height: number | null;
+  id: number;
+  inserted_at: Date | string;
+  is_consumable: boolean | null;
+  is_container: boolean | null;
+  item_type: string;
+  layer: number | null;
+  level: number | null;
+  long_description: string | null;
+  model: string | null;
+  mount_point: string | null;
+  name: string;
+  on_acquire: string | null;
+  on_activate: string | null;
+  on_consume: string | null;
+  on_drop: string | null;
+  on_use: string | null;
+  quality: string | null;
+  rarity: string | null;
+  slug: string;
+  source: string | null;
+  source_kind: string | null;
+  storage_capacity: number | null;
+  textures: string[] | null;
+  thumbnail: string | null;
+  thumbnail2x: string | null;
+  type: string | null;
+  updated_at: Date | string;
+  weapon_grip: string | null;
+  width: number | null;
+}
+
+interface StoredPersonalityRow {
+  accent: string | null;
+  age: number | null;
+  aggression: number | null;
+  altruism: number | null;
+  areas_of_expertise: string | null;
+  backstory: string | null;
+  base_hp: number | null;
+  character_slug: string;
+  chat_model: string | null;
+  chat_provider: string | null;
+  clothing_style: string | null;
+  courage: number | null;
+  custom_profile_pic: string | null;
+  distinguishing_feature: string | null;
+  emotional_range: string | null;
+  family_description: string | null;
+  fears: string | null;
+  gender: string | null;
+  goals: string | null;
+  gold: number | null;
+  goodness: number | null;
+  hidden_desires: string | null;
+  honesty: number | null;
+  impulsiveness: number | null;
+  inserted_at: Date | string;
+  llm_prompt_base: string | null;
+  loyalty: number | null;
+  mannerisms: string | null;
+  name: string;
+  other_world_knowledge: string | null;
+  optimism: number | null;
+  physical_description: string | null;
+  reputation: number | null;
+  role: string | null;
+  secrets_you_know: string | null;
+  smalltalk_topics_enjoyed: string | null;
+  sociability: number | null;
+  specialties: string | null;
+  speech_pattern: string | null;
+  speech_style: string | null;
+  summary: string | null;
+  temperament: string | null;
+  things_you_can_share: string | null;
+  titles: string | null;
+  updated_at: Date | string;
+  voice_id: string | null;
+}
+
+interface StoredPersonalityEventRow {
+  enabled: boolean | null;
+  event_details: unknown;
+  event_type: string;
+  id: number | string;
+  inserted_at: Date | string;
+  lua_script: string | null;
+  name: string;
+  personality_id: string;
+  response_context: string | null;
+  updated_at: Date | string;
+}
+
+interface ItemFieldLookups {
+  mountPoints: string[];
+  rarities: string[];
+  weaponGrips: string[];
+}
+
+const PERSONALITY_EDITABLE_FIELDS = [
+  "accent",
+  "age",
+  "aggression",
+  "altruism",
+  "areas_of_expertise",
+  "backstory",
+  "base_hp",
+  "chat_model",
+  "chat_provider",
+  "clothing_style",
+  "courage",
+  "custom_profile_pic",
+  "distinguishing_feature",
+  "emotional_range",
+  "family_description",
+  "fears",
+  "gender",
+  "goals",
+  "gold",
+  "goodness",
+  "hidden_desires",
+  "honesty",
+  "impulsiveness",
+  "loyalty",
+  "mannerisms",
+  "name",
+  "other_world_knowledge",
+  "optimism",
+  "physical_description",
+  "reputation",
+  "role",
+  "secrets_you_know",
+  "smalltalk_topics_enjoyed",
+  "sociability",
+  "specialties",
+  "speech_pattern",
+  "speech_style",
+  "summary",
+  "temperament",
+  "things_you_can_share",
+  "titles",
+  "voice_id"
+] as const;
+
+type EditablePersonalityField = (typeof PERSONALITY_EDITABLE_FIELDS)[number];
+
+const PERSONALITY_LLM_GENERATED_FIELDS = [
+  "accent",
+  "age",
+  "aggression",
+  "altruism",
+  "areas_of_expertise",
+  "backstory",
+  "base_hp",
+  "clothing_style",
+  "courage",
+  "custom_profile_pic",
+  "distinguishing_feature",
+  "emotional_range",
+  "family_description",
+  "fears",
+  "gender",
+  "goals",
+  "gold",
+  "goodness",
+  "hidden_desires",
+  "honesty",
+  "impulsiveness",
+  "loyalty",
+  "mannerisms",
+  "name",
+  "other_world_knowledge",
+  "optimism",
+  "physical_description",
+  "reputation",
+  "role",
+  "secrets_you_know",
+  "smalltalk_topics_enjoyed",
+  "sociability",
+  "specialties",
+  "speech_pattern",
+  "speech_style",
+  "summary",
+  "temperament",
+  "things_you_can_share",
+  "titles",
+  "voice_id"
+] as const satisfies ReadonlyArray<EditablePersonalityField>;
+
+type GeneratedPersonalityField = (typeof PERSONALITY_LLM_GENERATED_FIELDS)[number];
 
 export interface AssetDatabaseStatus {
   available: boolean;
@@ -200,6 +427,139 @@ function serializeStoredTimestamp(value: Date | string | undefined) {
 
   return new Date().toISOString();
 }
+
+function hasPromptBaseValue(value: PersonalityRecord[keyof PersonalityRecord]) {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+
+  return value != null;
+}
+
+function formatPromptBaseValue(
+  label: string,
+  value: PersonalityRecord[keyof PersonalityRecord],
+  type: "number" | "range" | "text"
+) {
+  if (type === "text") {
+    return `Your ${label}: ${String(value).trim()}`;
+  }
+
+  if (type === "range") {
+    return `Your ${label}: ${Number(value)} out of 100`;
+  }
+
+  return `Your ${label}: ${Number(value)}`;
+}
+
+function normalizeGeneratedTextValue(
+  value: unknown,
+  fallbackValue: string | null
+) {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== "string") {
+    return fallbackValue;
+  }
+
+  const normalizedValue = value.trim();
+  return normalizedValue ? normalizedValue : null;
+}
+
+const PERSONALITY_PROMPT_SYSTEM_FIELDS = new Set<keyof PersonalityRecord>([
+  "character_slug",
+  "custom_profile_pic",
+  "chat_model",
+  "chat_provider",
+  "inserted_at",
+  "llm_prompt_base",
+  "updated_at",
+  "voice_id"
+]);
+
+const PERSONALITY_PROMPT_SECTION_FIELDS = [
+  {
+    fields: [
+      { field: "name", label: "name", type: "text" },
+      { field: "titles", label: "titles", type: "text" },
+      { field: "role", label: "role", type: "text" },
+      { field: "gender", label: "gender", type: "text" },
+      { field: "age", label: "age", type: "number" }
+    ],
+    title: "Identity"
+  },
+  {
+    fields: [
+      { field: "base_hp", label: "base HP", type: "number" },
+      { field: "gold", label: "gold", type: "number" }
+    ],
+    title: "Core Stats"
+  },
+  {
+    fields: [
+      { field: "temperament", label: "temperament", type: "text" },
+      { field: "emotional_range", label: "emotional range", type: "text" },
+      { field: "speech_pattern", label: "speech pattern", type: "text" },
+      { field: "accent", label: "accent", type: "text" },
+      { field: "reputation", label: "reputation", type: "range" },
+      { field: "aggression", label: "aggression level", type: "range" },
+      { field: "altruism", label: "altruism level", type: "range" },
+      { field: "honesty", label: "honesty level", type: "range" },
+      { field: "courage", label: "courage level", type: "range" },
+      { field: "impulsiveness", label: "impulsiveness level", type: "range" },
+      { field: "optimism", label: "optimism level", type: "range" },
+      { field: "sociability", label: "sociability level", type: "range" },
+      { field: "loyalty", label: "loyalty level", type: "range" },
+      { field: "goodness", label: "goodness level", type: "range" }
+    ],
+    title: "Behavior"
+  },
+  {
+    fields: [
+      { field: "summary", label: "summary", type: "text" },
+      { field: "goals", label: "goals", type: "text" },
+      { field: "backstory", label: "backstory", type: "text" },
+      { field: "hidden_desires", label: "hidden desires", type: "text" },
+      { field: "fears", label: "fears", type: "text" },
+      { field: "family_description", label: "family description", type: "text" },
+      { field: "areas_of_expertise", label: "areas of expertise", type: "text" },
+      { field: "specialties", label: "specialties", type: "text" }
+    ],
+    title: "Motivation"
+  },
+  {
+    fields: [
+      { field: "secrets_you_know", label: "secrets you know", type: "text" },
+      { field: "things_you_can_share", label: "things you can share", type: "text" },
+      { field: "smalltalk_topics_enjoyed", label: "smalltalk topics enjoyed", type: "text" },
+      { field: "other_world_knowledge", label: "other world knowledge", type: "text" }
+    ],
+    title: "Personal Information"
+  },
+  {
+    fields: [
+      { field: "physical_description", label: "physical description", type: "text" },
+      { field: "distinguishing_feature", label: "distinguishing feature", type: "text" },
+      { field: "speech_style", label: "speech style", type: "text" },
+      { field: "mannerisms", label: "mannerisms", type: "text" },
+      { field: "clothing_style", label: "clothing style", type: "text" }
+    ],
+    title: "Presentation"
+  }
+] as const satisfies ReadonlyArray<{
+  fields: ReadonlyArray<{
+    field: Exclude<keyof PersonalityRecord, "character_slug" | "inserted_at" | "llm_prompt_base" | "updated_at" | "voice_id">;
+    label: string;
+    type: "number" | "range" | "text";
+  }>;
+  title: string;
+}>;
 
 function getFolderAssetKey(folderPath: string) {
   return `folder:${normalizeTileRecordPath(folderPath)}`;
@@ -308,8 +668,7 @@ async function collectLegacySpriteAssets(
       }
 
       if (!spriteRecord) {
-        const { height, width } = getSpriteSizeFromBuffer(spriteBuffer);
-        spriteRecord = createInitialSpriteRecord(relativePath, entry.name, width, height);
+        spriteRecord = createInitialSpriteRecord(relativePath, entry.name, spriteBuffer);
       }
 
       collectedSprites.set(getSpriteRecordKey(spriteRecord), {
@@ -370,6 +729,7 @@ async function upsertFolderAsset(
       file_name: null,
       id: randomUUID(),
       image_data: null,
+      impassible: true,
       source_path: null,
       sprite_metadata: null,
       sub_folder: normalizedPath,
@@ -380,6 +740,7 @@ async function upsertFolderAsset(
     .merge({
       asset_name: path.posix.basename(normalizedPath),
       deleted: false,
+      impassible: true,
       sub_folder: normalizedPath,
       updated_at: now
     });
@@ -408,6 +769,7 @@ async function upsertTileAsset(
       file_name: null,
       id: randomUUID(),
       image_data: getTileThumbnailBuffer(normalizedTile),
+      impassible: normalizedTile.impassible,
       source_path: normalizedTile.source,
       sprite_metadata: null,
       sub_folder: normalizedTile.path,
@@ -420,6 +782,7 @@ async function upsertTileAsset(
       asset_slug: normalizedTile.slug,
       deleted: false,
       image_data: getTileThumbnailBuffer(normalizedTile),
+      impassible: normalizedTile.impassible,
       source_path: normalizedTile.source,
       sub_folder: normalizedTile.path,
       tile_slots: serializedSlots,
@@ -449,6 +812,7 @@ async function upsertSpriteAsset(
       file_name: normalizedSprite.filename,
       id: randomUUID(),
       image_data: imageBuffer,
+      impassible: normalizedSprite.impassible,
       source_path: null,
       sprite_metadata: serializedSpriteMetadata,
       sub_folder: normalizedSprite.path,
@@ -461,6 +825,7 @@ async function upsertSpriteAsset(
       deleted: false,
       file_name: normalizedSprite.filename,
       image_data: imageBuffer,
+      impassible: normalizedSprite.impassible,
       sprite_metadata: serializedSpriteMetadata,
       sub_folder: normalizedSprite.path,
       updated_at: now
@@ -476,11 +841,15 @@ function mapRowToTileRecord(row: StoredAssetRow): TileRecord {
     row.asset_slug ?? "",
     row.source_path ?? "",
     slots,
-    bufferToPngDataUrl(row.image_data) || createTileThumbnail(slots)
+    bufferToPngDataUrl(row.image_data) || createTileThumbnail(slots),
+    row.impassible ?? true
   );
 }
 
-function mapRowToSpriteRecord(row: StoredAssetRow) {
+async function mapRowToSpriteRecord(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  row: StoredAssetRow
+) {
   if (!row.file_name) {
     return null;
   }
@@ -491,9 +860,227 @@ function mapRowToSpriteRecord(row: StoredAssetRow) {
     return null;
   }
 
+  if (!row.image_data) {
+    return {
+      ...spriteRecord,
+      thumbnail: ""
+    };
+  }
+
+  const nextSpriteRecord = applySpriteImageMetrics(spriteRecord, row.image_data);
+  const currentSerialized = JSON.stringify(serializeStoredSpriteRecord(spriteRecord));
+  const nextSerialized = JSON.stringify(serializeStoredSpriteRecord(nextSpriteRecord));
+
+  if (currentSerialized !== nextSerialized) {
+    await db("map_tiles")
+      .where({ id: row.id })
+      .update({
+        asset_name: nextSpriteRecord.name,
+        impassible: nextSpriteRecord.impassible,
+        sprite_metadata: nextSerialized,
+        updated_at: new Date().toISOString()
+      });
+  }
+
   return {
-    ...spriteRecord,
+    ...nextSpriteRecord,
     thumbnail: bufferToPngDataUrl(row.image_data)
+  };
+}
+
+function normalizeOptionalText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeOptionalNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeOptionalBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : null;
+}
+
+function normalizeInteger(value: unknown, fallbackValue: number, minimum?: number, maximum?: number) {
+  const normalizedValue = normalizeOptionalNumber(value);
+
+  if (normalizedValue == null) {
+    return fallbackValue;
+  }
+
+  const roundedValue = Math.round(normalizedValue);
+
+  if (typeof minimum === "number" && roundedValue < minimum) {
+    return minimum;
+  }
+
+  if (typeof maximum === "number" && roundedValue > maximum) {
+    return maximum;
+  }
+
+  return roundedValue;
+}
+
+function normalizeOptionalInteger(value: unknown, minimum?: number, maximum?: number) {
+  const normalizedValue = normalizeOptionalNumber(value);
+
+  if (normalizedValue == null) {
+    return null;
+  }
+
+  const roundedValue = Math.round(normalizedValue);
+
+  if (typeof minimum === "number" && roundedValue < minimum) {
+    return minimum;
+  }
+
+  if (typeof maximum === "number" && roundedValue > maximum) {
+    return maximum;
+  }
+
+  return roundedValue;
+}
+
+function normalizePersonalityGender(value: unknown): PersonalityRecord["gender"] {
+  if (value === "M" || value === "F" || value === "NB") {
+    return value;
+  }
+
+  return "NB";
+}
+
+function normalizeStringArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => entry.trim());
+}
+
+function mapRowToItemRecord(row: StoredItemRow): ItemRecord {
+  return {
+    base_value: normalizeOptionalNumber(row.base_value),
+    character: normalizeOptionalText(row.character),
+    description: normalizeOptionalText(row.description),
+    durability: normalizeOptionalNumber(row.durability),
+    etag: normalizeOptionalText(row.etag),
+    gives_light: normalizeOptionalNumber(row.gives_light),
+    height: normalizeOptionalNumber(row.height),
+    id: Math.max(0, Math.round(normalizeOptionalNumber(row.id) ?? 0)),
+    inserted_at: serializeStoredTimestamp(row.inserted_at),
+    is_consumable: normalizeOptionalBoolean(row.is_consumable),
+    is_container: normalizeOptionalBoolean(row.is_container),
+    item_type: typeof row.item_type === "string" && row.item_type.trim() ? row.item_type.trim() : "unknown",
+    layer: normalizeOptionalNumber(row.layer),
+    level: normalizeOptionalNumber(row.level),
+    long_description: normalizeOptionalText(row.long_description),
+    model: normalizeOptionalText(row.model),
+    mount_point: normalizeOptionalText(row.mount_point),
+    name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : `Item ${row.id}`,
+    on_acquire: normalizeOptionalText(row.on_acquire),
+    on_activate: normalizeOptionalText(row.on_activate),
+    on_consume: normalizeOptionalText(row.on_consume),
+    on_drop: normalizeOptionalText(row.on_drop),
+    on_use: normalizeOptionalText(row.on_use),
+    quality: normalizeOptionalText(row.quality),
+    rarity: normalizeOptionalText(row.rarity),
+    slug: typeof row.slug === "string" && row.slug.trim() ? row.slug.trim() : String(row.id),
+    source: normalizeOptionalText(row.source),
+    source_kind: normalizeOptionalText(row.source_kind),
+    storage_capacity: normalizeOptionalNumber(row.storage_capacity),
+    textures: normalizeStringArray(row.textures),
+    thumbnail: normalizeOptionalText(row.thumbnail),
+    thumbnail2x: normalizeOptionalText(row.thumbnail2x),
+    type: normalizeOptionalText(row.type),
+    updated_at: serializeStoredTimestamp(row.updated_at),
+    weapon_grip: normalizeOptionalText(row.weapon_grip),
+    width: normalizeOptionalNumber(row.width)
+  };
+}
+
+function mapRowToPersonalityRecord(row: StoredPersonalityRow): PersonalityRecord {
+  const storedCustomProfilePic = normalizeOptionalText(row.custom_profile_pic);
+
+  return {
+    accent: normalizeOptionalText(row.accent),
+    age: normalizeOptionalInteger(row.age, 0),
+    aggression: normalizeInteger(row.aggression, 50, 1, 100),
+    altruism: normalizeInteger(row.altruism, 50, 1, 100),
+    areas_of_expertise: normalizeOptionalText(row.areas_of_expertise),
+    backstory: normalizeOptionalText(row.backstory),
+    base_hp: normalizeInteger(row.base_hp, 100, 1),
+    character_slug:
+      typeof row.character_slug === "string" && row.character_slug.trim()
+        ? row.character_slug.trim()
+        : "unknown_personality",
+    chat_model: normalizeOptionalText(row.chat_model),
+    chat_provider: normalizeOptionalText(row.chat_provider),
+    clothing_style: normalizeOptionalText(row.clothing_style),
+    courage: normalizeInteger(row.courage, 50, 1, 100),
+    custom_profile_pic:
+      storedCustomProfilePic && isManagedPersonalityProfileImageUrl(row.character_slug, storedCustomProfilePic)
+        ? getPersonalityProfileImageProxyUrl(row.character_slug, row.updated_at)
+        : storedCustomProfilePic,
+    distinguishing_feature: normalizeOptionalText(row.distinguishing_feature),
+    emotional_range: normalizeOptionalText(row.emotional_range),
+    family_description: normalizeOptionalText(row.family_description),
+    fears: normalizeOptionalText(row.fears),
+    gender: normalizePersonalityGender(row.gender),
+    goals: normalizeOptionalText(row.goals),
+    gold: normalizeInteger(row.gold, 0, 0),
+    goodness: normalizeInteger(row.goodness, 50, 1, 100),
+    hidden_desires: normalizeOptionalText(row.hidden_desires),
+    honesty: normalizeInteger(row.honesty, 50, 1, 100),
+    impulsiveness: normalizeInteger(row.impulsiveness, 50, 1, 100),
+    inserted_at: serializeStoredTimestamp(row.inserted_at),
+    llm_prompt_base: normalizeOptionalText(row.llm_prompt_base),
+    loyalty: normalizeInteger(row.loyalty, 50, 1, 100),
+    mannerisms: normalizeOptionalText(row.mannerisms),
+    name:
+      typeof row.name === "string" && row.name.trim()
+        ? row.name.trim()
+        : row.character_slug.trim() || "Unnamed Personality",
+    other_world_knowledge: normalizeOptionalText(row.other_world_knowledge),
+    optimism: normalizeInteger(row.optimism, 50, 1, 100),
+    physical_description: normalizeOptionalText(row.physical_description),
+    reputation: normalizeInteger(row.reputation, 50, 1, 100),
+    role: normalizeOptionalText(row.role),
+    secrets_you_know: normalizeOptionalText(row.secrets_you_know),
+    smalltalk_topics_enjoyed: normalizeOptionalText(row.smalltalk_topics_enjoyed),
+    sociability: normalizeInteger(row.sociability, 50, 1, 100),
+    specialties: normalizeOptionalText(row.specialties),
+    speech_pattern: normalizeOptionalText(row.speech_pattern),
+    speech_style: normalizeOptionalText(row.speech_style),
+    summary: normalizeOptionalText(row.summary),
+    temperament: normalizeOptionalText(row.temperament),
+    things_you_can_share: normalizeOptionalText(row.things_you_can_share),
+    titles: normalizeOptionalText(row.titles),
+    updated_at: serializeStoredTimestamp(row.updated_at),
+    voice_id: normalizeOptionalText(row.voice_id)
+  };
+}
+
+function normalizePersonalityEventDetails(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function mapRowToPersonalityEventRecord(row: StoredPersonalityEventRow): PersonalityEventRecord {
+  return {
+    enabled: row.enabled !== false,
+    event_details: normalizePersonalityEventDetails(row.event_details),
+    event_type: "tool",
+    id: String(row.id),
+    inserted_at: serializeStoredTimestamp(row.inserted_at),
+    lua_script: typeof row.lua_script === "string" ? row.lua_script : "",
+    name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : `event_${row.id}`,
+    personality_id: row.personality_id,
+    response_context: typeof row.response_context === "string" ? row.response_context : "",
+    updated_at: serializeStoredTimestamp(row.updated_at)
   };
 }
 
@@ -554,6 +1141,25 @@ async function ensureAssetDatabaseReady() {
   }
 
   return assetDatabaseReadyPromise;
+}
+
+async function ensureItemsDeletedColumn() {
+  const db = await getDatabase();
+  const hasItemsTable = await db.schema.hasTable("items");
+
+  if (!hasItemsTable) {
+    return false;
+  }
+
+  const hasDeletedColumn = await db.schema.hasColumn("items", "deleted");
+
+  if (!hasDeletedColumn) {
+    await db.schema.alterTable("items", (table) => {
+      table.boolean("deleted").notNullable().defaultTo(false);
+    });
+  }
+
+  return true;
 }
 
 export async function getAssetDatabaseStatus(): Promise<AssetDatabaseStatus> {
@@ -635,26 +1241,37 @@ function sanitizeSpriteFilename(fileName: string) {
   return `${normalizedStem}${extension}`;
 }
 
-function createInitialSpriteRecord(relativePath: string, fileName: string, imageWidth: number, imageHeight: number) {
-  const defaultMount = getDefaultSpriteMount(imageWidth, imageHeight);
+function createInitialSpriteRecord(relativePath: string, fileName: string, imageBuffer: Buffer) {
+  const { height, width } = getSpriteSizeFromBuffer(imageBuffer);
+  const defaultMount = getDefaultSpriteMount(width, height);
 
-  return normalizeSpriteRecord({
-    filename: fileName,
-    image_h: imageHeight,
-    image_w: imageWidth,
-    impassible: false,
-    is_flat: false,
-    item_id: 0,
-    mount_x: defaultMount.mount_x,
-    mount_y: defaultMount.mount_y,
-    name: path.parse(fileName).name,
-    offset_x: 0,
-    offset_y: 0,
-    path: relativePath,
-    thumbnail: "",
-    tile_h: imageHeight / TILE_SIZE,
-    tile_w: imageWidth / TILE_SIZE
-  });
+  return applySpriteImageMetrics(
+    {
+      bounding_h: height,
+      bounding_w: width,
+      bounding_x: -defaultMount.mount_x,
+      bounding_y: -defaultMount.mount_y,
+      casts_shadow: true,
+      filename: fileName,
+      image_h: height,
+      image_w: width,
+      impassible: false,
+      is_flat: false,
+      is_locked: false,
+      item_id: 0,
+      mount_x: defaultMount.mount_x,
+      mount_y: defaultMount.mount_y,
+      name: path.parse(fileName).name,
+      on_activate: "",
+      offset_x: 0,
+      offset_y: 0,
+      path: relativePath,
+      thumbnail: "",
+      tile_h: height / TILE_SIZE,
+      tile_w: width / TILE_SIZE
+    },
+    imageBuffer
+  );
 }
 
 function normalizeFiniteNumber(value: unknown, fallbackValue: number) {
@@ -667,17 +1284,26 @@ function normalizeSpriteRecord(record: SpriteRecord): SpriteRecord {
   const imageWidth = Math.max(1, normalizeFiniteNumber(record.image_w, TILE_SIZE));
   const imageHeight = Math.max(1, normalizeFiniteNumber(record.image_h, TILE_SIZE));
   const defaultMount = getDefaultSpriteMount(imageWidth, imageHeight);
+  const mountX = normalizeFiniteNumber(record.mount_x, defaultMount.mount_x);
+  const mountY = normalizeFiniteNumber(record.mount_y, defaultMount.mount_y);
 
   return {
+    bounding_h: Math.max(0, normalizeFiniteNumber(record.bounding_h, imageHeight)),
+    bounding_w: Math.max(0, normalizeFiniteNumber(record.bounding_w, imageWidth)),
+    bounding_x: normalizeFiniteNumber(record.bounding_x, -mountX),
+    bounding_y: normalizeFiniteNumber(record.bounding_y, -mountY),
+    casts_shadow: typeof record.casts_shadow === "boolean" ? record.casts_shadow : true,
     filename: normalizedFilename,
     image_h: imageHeight,
     image_w: imageWidth,
     impassible: Boolean(record.impassible),
     is_flat: Boolean(record.is_flat),
+    is_locked: typeof record.is_locked === "boolean" ? record.is_locked : false,
     item_id: Math.max(0, Math.round(normalizeFiniteNumber(record.item_id, 0))),
-    mount_x: normalizeFiniteNumber(record.mount_x, defaultMount.mount_x),
-    mount_y: normalizeFiniteNumber(record.mount_y, defaultMount.mount_y),
+    mount_x: mountX,
+    mount_y: mountY,
     name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : path.parse(normalizedFilename).name,
+    on_activate: typeof record.on_activate === "string" ? record.on_activate : "",
     offset_x: normalizeFiniteNumber(record.offset_x, 0),
     offset_y: normalizeFiniteNumber(record.offset_y, 0),
     path: normalizedPath,
@@ -702,15 +1328,22 @@ function parseSpriteRecord(relativePath: string, jsonFileName: string, candidate
 
   try {
     return normalizeSpriteRecord({
+      bounding_h: normalizeFiniteNumber(record.bounding_h, fallbackImageHeight),
+      bounding_w: normalizeFiniteNumber(record.bounding_w, fallbackImageWidth),
+      bounding_x: normalizeFiniteNumber(record.bounding_x, -defaultMount.mount_x),
+      bounding_y: normalizeFiniteNumber(record.bounding_y, -defaultMount.mount_y),
+      casts_shadow: typeof record.casts_shadow === "boolean" ? record.casts_shadow : true,
       filename,
       image_h: fallbackImageHeight,
       image_w: fallbackImageWidth,
       impassible: Boolean(record.impassible),
       is_flat: Boolean(record.is_flat),
+      is_locked: typeof record.is_locked === "boolean" ? record.is_locked : false,
       item_id: normalizeFiniteNumber(record.item_id, 0),
       mount_x: normalizeFiniteNumber(record.mount_x, defaultMount.mount_x),
       mount_y: normalizeFiniteNumber(record.mount_y, defaultMount.mount_y),
       name: typeof record.name === "string" ? record.name : path.parse(filename).name,
+      on_activate: typeof record.on_activate === "string" ? record.on_activate : "",
       offset_x: normalizeFiniteNumber(record.offset_x, 0),
       offset_y: normalizeFiniteNumber(record.offset_y, 0),
       path: relativePath,
@@ -727,15 +1360,22 @@ function serializeStoredSpriteRecord(spriteRecord: SpriteRecord): StoredSpriteRe
   const normalized = normalizeSpriteRecord(spriteRecord);
 
   return {
+    bounding_h: normalized.bounding_h,
+    bounding_w: normalized.bounding_w,
+    bounding_x: normalized.bounding_x,
+    bounding_y: normalized.bounding_y,
+    casts_shadow: normalized.casts_shadow,
     filename: normalized.filename,
     image_h: normalized.image_h,
     image_w: normalized.image_w,
     impassible: normalized.impassible,
     is_flat: normalized.is_flat,
+    is_locked: normalized.is_locked,
     item_id: normalized.item_id,
     mount_x: normalized.mount_x,
     mount_y: normalized.mount_y,
     name: normalized.name,
+    on_activate: normalized.on_activate,
     offset_x: normalized.offset_x,
     offset_y: normalized.offset_y,
     tile_h: normalized.tile_h,
@@ -758,6 +1398,26 @@ async function writeSpriteRecord(spriteRecord: SpriteRecord) {
 function getSpriteSizeFromBuffer(buffer: Buffer) {
   const png = PNG.sync.read(buffer);
   return { height: png.height, width: png.width };
+}
+
+function applySpriteImageMetrics(spriteRecord: SpriteRecord, imageBuffer: Buffer) {
+  const png = PNG.sync.read(imageBuffer);
+  const spriteWithImageSize = normalizeSpriteRecord({
+    ...spriteRecord,
+    image_h: png.height,
+    image_w: png.width
+  });
+  const tileFootprint = getSpriteTileFootprint(spriteWithImageSize);
+  const boundingBox = getSpriteBoundingBox(spriteWithImageSize, (x, y) => {
+    const pixelIndex = (png.width * y + x) * 4;
+    return png.data[pixelIndex + 3] ?? 0;
+  });
+
+  return normalizeSpriteRecord({
+    ...spriteWithImageSize,
+    ...boundingBox,
+    ...tileFootprint
+  });
 }
 
 function createSpriteThumbnailDataUrl(buffer: Buffer, fileName: string) {
@@ -789,8 +1449,7 @@ async function ensureSpriteMetadataForDirectory(relativePath: string, entries: D
 
     const spritePath = path.posix.join(relativePath, entry.name);
     const spriteBuffer = await readFile(getSafeProjectPath(spritePath));
-    const { height, width } = getSpriteSizeFromBuffer(spriteBuffer);
-    await writeSpriteRecord(createInitialSpriteRecord(relativePath, entry.name, width, height));
+    await writeSpriteRecord(createInitialSpriteRecord(relativePath, entry.name, spriteBuffer));
   }
 }
 
@@ -824,9 +1483,10 @@ async function collectSpriteRecordsForDirectory(
       }
 
       const spriteBuffer = await readFile(spriteImagePath);
+      const nextSpriteRecord = applySpriteImageMetrics(spriteRecord, spriteBuffer);
       collectedSprites.set(getSpriteRecordKey(spriteRecord), {
-        ...spriteRecord,
-        thumbnail: createSpriteThumbnailDataUrl(spriteBuffer, spriteRecord.filename)
+        ...nextSpriteRecord,
+        thumbnail: createSpriteThumbnailDataUrl(spriteBuffer, nextSpriteRecord.filename)
       });
     } catch {
       continue;
@@ -842,6 +1502,7 @@ function isTileRecord(candidate: unknown): candidate is TileRecord {
   const record = candidate as Partial<TileRecord>;
 
   return (
+    (typeof record.impassible === "boolean" || typeof record.impassible === "undefined") &&
     typeof record.name === "string" &&
     typeof record.slug === "string" &&
     typeof record.source === "string" &&
@@ -851,6 +1512,7 @@ function isTileRecord(candidate: unknown): candidate is TileRecord {
 
 function normalizeTileRecord(record: TileRecord): TileRecord {
   return {
+    impassible: typeof record.impassible === "boolean" ? record.impassible : true,
     name: record.name.trim(),
     path: normalizeTileRecordPath(record.path),
     slug: record.slug.trim(),
@@ -867,9 +1529,12 @@ function normalizeMapRecord(record: MapRecord): MapRecord {
   const layers = normalizeMapLayers(record.layers, width, height, record.cells);
 
   return {
+    aboutPrompt: typeof record.aboutPrompt === "string" ? record.aboutPrompt.trim() : "",
     cells: flattenMapLayers(layers, width, height),
     height,
+    isInstance: record.isInstance ?? false,
     layers,
+    miniMap: typeof record.miniMap === "string" ? record.miniMap.trim() : "",
     name: record.name.trim(),
     slug: record.slug.trim(),
     updatedAt: record.updatedAt || new Date().toISOString(),
@@ -1056,9 +1721,12 @@ function parseStoredMapRecord(record: StoredMapRecord): MapRecord {
   const tileMap = record.tileMap && typeof record.tileMap === "object" ? record.tileMap : {};
 
   return normalizeMapRecord({
+    aboutPrompt: typeof record.aboutPrompt === "string" ? record.aboutPrompt : "",
     cells: Array.isArray(record.cells) ? record.cells : undefined,
     height: record.height ?? MAP_DEFAULT_GRID_SIZE,
+    isInstance: false,
     layers: decodeStoredMapLayers(record.layers, tileMap),
+    miniMap: "",
     name: typeof record.name === "string" ? record.name : "",
     slug: typeof record.slug === "string" ? record.slug : "",
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
@@ -1117,6 +1785,7 @@ function buildStoredMapRecord(
 
   return {
     $schema: MAP_SCHEMA_REF,
+    aboutPrompt: normalized.aboutPrompt,
     height: normalized.height,
     layers: storedLayers,
     name: normalized.name,
@@ -1166,9 +1835,12 @@ async function ensureStarterMap() {
   }
 
   const starterMap: MapRecord = {
+    aboutPrompt: "",
     cells: flattenMapLayers(createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE)),
     height: MAP_DEFAULT_GRID_SIZE,
+    isInstance: false,
     layers: createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE),
+    miniMap: "",
     name: "Starter Camp",
     slug: "starter-camp",
     updatedAt: new Date().toISOString(),
@@ -1203,6 +1875,7 @@ async function upsertMapRecordToDatabase(mapRecord: MapRecord) {
   const db = await getDatabase();
   const normalizedMap = normalizeMapRecord(mapRecord);
   const now = new Date().toISOString();
+  const miniMapBuffer = normalizedMap.miniMap ? extractPngBuffer(normalizedMap.miniMap) : null;
   const tileSlugs = new Set<string>();
   const spriteKeys = new Set<string>();
 
@@ -1249,9 +1922,12 @@ async function upsertMapRecordToDatabase(mapRecord: MapRecord) {
   await db.transaction(async (transaction) => {
     const [storedMap] = await transaction<StoredMapRow>("map_maps")
       .insert({
+        about_prompt: normalizedMap.aboutPrompt,
         deleted: false,
         height: normalizedMap.height,
         id: randomUUID(),
+        is_instance: normalizedMap.isInstance,
+        mini_map: miniMapBuffer,
         name: normalizedMap.name,
         slug: normalizedMap.slug,
         updated_at: normalizedMap.updatedAt || now,
@@ -1259,8 +1935,11 @@ async function upsertMapRecordToDatabase(mapRecord: MapRecord) {
       } satisfies Partial<StoredMapRow>)
       .onConflict("slug")
       .merge({
+        about_prompt: normalizedMap.aboutPrompt,
         deleted: false,
         height: normalizedMap.height,
+        is_instance: normalizedMap.isInstance,
+        mini_map: miniMapBuffer,
         name: normalizedMap.name,
         updated_at: normalizedMap.updatedAt || now,
         width: normalizedMap.width
@@ -1359,9 +2038,12 @@ async function importLegacyMapLibrary() {
   }
 
   await upsertMapRecordToDatabase({
+    aboutPrompt: "",
     cells: flattenMapLayers(createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE)),
     height: MAP_DEFAULT_GRID_SIZE,
+    isInstance: false,
     layers: createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE),
+    miniMap: "",
     name: "Starter Camp",
     slug: "starter-camp",
     updatedAt: new Date().toISOString(),
@@ -1537,9 +2219,1844 @@ export async function readSpriteRecords() {
       { column: "file_name", order: "asc" }
     ]);
 
-  return rows
-    .map(mapRowToSpriteRecord)
+  const spriteRecords = await Promise.all(rows.map((row) => mapRowToSpriteRecord(db, row)));
+
+  return spriteRecords
     .filter((spriteRecord): spriteRecord is SpriteRecord => spriteRecord !== null);
+}
+
+export async function readPersonalityRecords() {
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const rows = await db<StoredPersonalityRow>("personalities")
+    .select("*")
+    .orderBy([
+      { column: "name", order: "asc" },
+      { column: "character_slug", order: "asc" }
+    ]);
+
+  return rows.map(mapRowToPersonalityRecord);
+}
+
+const DEFAULT_PERSONALITY_TOOL_EVENT_DETAILS = {
+  description: "",
+  name: "new_tool",
+  parameters: {
+    additionalProperties: false,
+    properties: {},
+    type: "object"
+  },
+  strict: true,
+  type: "function"
+} satisfies Record<string, unknown>;
+
+function normalizePersonalityEventId(value: unknown) {
+  const numericId = typeof value === "number" ? value : Number(String(value ?? "").trim());
+
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    throw new Error("Valid event id is required.");
+  }
+
+  return numericId;
+}
+
+function normalizePersonalityEventName(value: unknown) {
+  const normalizedName = normalizeOptionalText(value);
+
+  if (!normalizedName) {
+    throw new Error("Event name is required.");
+  }
+
+  return normalizedName;
+}
+
+function normalizePersonalityToolEventDetails(value: unknown, eventName: string) {
+  const details = normalizePersonalityEventDetails(value);
+
+  return {
+    ...details,
+    name: typeof details.name === "string" && details.name.trim() ? details.name.trim() : eventName,
+    type: "function"
+  };
+}
+
+function createUniquePersonalityEventName(existingRows: Array<Pick<StoredPersonalityEventRow, "name">>) {
+  const takenNames = new Set(existingRows.map((row) => row.name.trim()).filter(Boolean));
+  let nextName = "new_tool";
+  let suffix = 2;
+
+  while (takenNames.has(nextName)) {
+    nextName = `new_tool_${suffix}`;
+    suffix += 1;
+  }
+
+  return nextName;
+}
+
+async function assertPersonalityRecordExists(db: Awaited<ReturnType<typeof getDatabase>>, characterSlug: string) {
+  const existingPersonality = await db<StoredPersonalityRow>("personalities")
+    .select("character_slug")
+    .first()
+    .where({ character_slug: characterSlug });
+
+  if (!existingPersonality) {
+    throw new Error("Personality not found.");
+  }
+}
+
+export async function readPersonalityEventRecords(characterSlug: string): Promise<PersonalityEventRecord[]> {
+  await ensureAssetDatabaseReady();
+  const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
+  const db = await getDatabase();
+
+  await assertPersonalityRecordExists(db, normalizedCharacterSlug);
+
+  const rows = await db<StoredPersonalityEventRow>("personality_events")
+    .select("*")
+    .where({ personality_id: normalizedCharacterSlug })
+    .orderBy([
+      { column: "enabled", order: "desc" },
+      { column: "name", order: "asc" },
+      { column: "id", order: "asc" }
+    ]);
+
+  return rows.map(mapRowToPersonalityEventRecord);
+}
+
+export async function createPersonalityEventRecord(characterSlug: string) {
+  await ensureAssetDatabaseReady();
+  const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
+  const db = await getDatabase();
+
+  await assertPersonalityRecordExists(db, normalizedCharacterSlug);
+
+  const existingRows = await db<StoredPersonalityEventRow>("personality_events")
+    .select("name")
+    .where({ personality_id: normalizedCharacterSlug });
+  const eventName = createUniquePersonalityEventName(existingRows);
+  const eventDetails = {
+    ...DEFAULT_PERSONALITY_TOOL_EVENT_DETAILS,
+    name: eventName
+  };
+
+  const [createdEvent] = await db<StoredPersonalityEventRow>("personality_events")
+    .insert({
+      enabled: true,
+      event_details: eventDetails,
+      event_type: "tool",
+      inserted_at: db.fn.now() as unknown as Date | string,
+      lua_script: "return \"\"",
+      name: eventName,
+      personality_id: normalizedCharacterSlug,
+      response_context: "",
+      updated_at: db.fn.now() as unknown as Date | string
+    })
+    .returning("*");
+
+  if (!createdEvent) {
+    throw new Error("Could not create personality event.");
+  }
+
+  return mapRowToPersonalityEventRecord(createdEvent);
+}
+
+export async function updatePersonalityEventRecord(
+  characterSlug: string,
+  fields: Partial<PersonalityEventRecord> & { id?: string | number }
+) {
+  await ensureAssetDatabaseReady();
+  const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
+  const eventId = normalizePersonalityEventId(fields.id);
+  const eventType = fields.event_type ?? "tool";
+
+  if (eventType !== "tool") {
+    throw new Error('Event type must be "tool".');
+  }
+
+  const eventName = normalizePersonalityEventName(fields.name);
+  const eventDetails = normalizePersonalityToolEventDetails(fields.event_details, eventName);
+  const luaScript = typeof fields.lua_script === "string" ? fields.lua_script : "";
+  const responseContext = typeof fields.response_context === "string" ? fields.response_context.trim() : "";
+  const enabled = fields.enabled !== false;
+  const db = await getDatabase();
+
+  await assertPersonalityRecordExists(db, normalizedCharacterSlug);
+
+  const [updatedEvent] = await db<StoredPersonalityEventRow>("personality_events")
+    .where({ id: eventId, personality_id: normalizedCharacterSlug })
+    .update({
+      enabled,
+      event_details: eventDetails,
+      event_type: "tool",
+      lua_script: luaScript,
+      name: eventName,
+      response_context: responseContext,
+      updated_at: db.fn.now() as unknown as Date | string
+    })
+    .returning("*");
+
+  if (!updatedEvent) {
+    throw new Error("Personality event not found.");
+  }
+
+  return mapRowToPersonalityEventRecord(updatedEvent);
+}
+
+function createPersonalitySlugStem(name: string) {
+  const normalizedStem = normalizeUnderscoreName(name).toLowerCase();
+
+  if (!normalizedStem) {
+    throw new Error("Personality name must contain at least one letter or number.");
+  }
+
+  return /^[a-z]/u.test(normalizedStem) ? normalizedStem : `personality_${normalizedStem}`;
+}
+
+function createUniquePersonalitySlug(existingSlugs: Iterable<string>, name: string) {
+  const takenSlugs = new Set(
+    Array.from(existingSlugs, (slug) => slug.trim().toLowerCase()).filter(Boolean)
+  );
+  const baseSlug = createPersonalitySlugStem(name);
+  let nextSlug = baseSlug;
+  let suffix = 2;
+
+  while (takenSlugs.has(nextSlug)) {
+    nextSlug = `${baseSlug}_${suffix}`;
+    suffix += 1;
+  }
+
+  return nextSlug;
+}
+
+function assertPersonalitySlug(value: string) {
+  const normalizedValue = value.trim();
+
+  if (!/^[a-z][a-z0-9_]*$/u.test(normalizedValue)) {
+    throw new Error("character_slug must be lowercase snake_case.");
+  }
+
+  return normalizedValue;
+}
+
+function normalizePersonalityTextInput(
+  value: unknown,
+  fieldName: string,
+  required = false
+) {
+  const normalizedValue = normalizeOptionalText(value);
+
+  if (required && !normalizedValue) {
+    throw new Error(`${fieldName} is required.`);
+  }
+
+  return normalizedValue;
+}
+
+function normalizePersonalityIntegerInput(
+  value: unknown,
+  fieldName: string,
+  options: { allowNull?: boolean; max?: number; min?: number } = {}
+) {
+  if (value == null) {
+    if (options.allowNull) {
+      return null;
+    }
+
+    throw new Error(`${fieldName} is required.`);
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(`${fieldName} must be an integer.`);
+  }
+
+  if (typeof options.min === "number" && value < options.min) {
+    throw new Error(`${fieldName} must be at least ${options.min}.`);
+  }
+
+  if (typeof options.max === "number" && value > options.max) {
+    throw new Error(`${fieldName} must be at most ${options.max}.`);
+  }
+
+  return value;
+}
+
+async function ComputePromptBase(personality: PersonalityRecord) {
+  const template = (await readFile(PERSONALITY_BASE_PROMPT_PATH, "utf8")).trim();
+  const sections = PERSONALITY_PROMPT_SECTION_FIELDS
+    .map((section) => {
+      const lines = section.fields
+        .filter((fieldConfig) => !PERSONALITY_PROMPT_SYSTEM_FIELDS.has(fieldConfig.field))
+        .map((fieldConfig) => {
+          const value = personality[fieldConfig.field];
+
+          if (!hasPromptBaseValue(value)) {
+            return "";
+          }
+
+          return formatPromptBaseValue(fieldConfig.label, value, fieldConfig.type);
+        })
+        .filter(Boolean);
+
+      if (!lines.length) {
+        return "";
+      }
+
+      return [section.title, ...lines].join("\n");
+    })
+    .filter(Boolean);
+
+  return [template, ...sections].filter(Boolean).join("\n\n");
+}
+
+async function saveComputedPromptBase(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  personality: PersonalityRecord
+) {
+  const computedPromptBase = await ComputePromptBase(personality);
+
+  if (computedPromptBase === (personality.llm_prompt_base ?? "")) {
+    return personality;
+  }
+
+  const [updatedRow] = await db<StoredPersonalityRow>("personalities")
+    .where({ character_slug: personality.character_slug })
+    .update({
+      llm_prompt_base: computedPromptBase,
+      updated_at: db.fn.now() as unknown as Date | string
+    })
+    .returning("*");
+
+  if (!updatedRow) {
+    throw new Error("Could not save personality prompt base.");
+  }
+
+  return mapRowToPersonalityRecord(updatedRow);
+}
+
+function formatPersonalityPromptValue(value: PersonalityRecord[keyof PersonalityRecord]) {
+  if (typeof value === "string") {
+    const normalizedValue = value.trim();
+    return normalizedValue || "unknown";
+  }
+
+  if (typeof value === "number") {
+    return value;
+  }
+
+  if (value == null) {
+    return "unknown";
+  }
+
+  return String(value);
+}
+
+function buildRandomPersonalityPrompt(personality: PersonalityRecord, template: string, schemaPrompt: string) {
+  const detailFields = {
+    character_slug: personality.character_slug,
+    name: personality.name,
+    ...Object.fromEntries(
+      PERSONALITY_LLM_GENERATED_FIELDS
+        .filter((field) => field !== "name")
+        .map((field) => [field, formatPersonalityPromptValue(personality[field])])
+    )
+  };
+
+  return [
+    template.trim(),
+    "",
+    `Character name: ${personality.name}`,
+    `Character slug: ${personality.character_slug}`,
+    "",
+    "Currently known details, with unknown values called out explicitly:",
+    JSON.stringify(detailFields, null, 2),
+    "",
+    "Return only a JSON object that matches this schema exactly. Do not wrap the JSON in markdown fences.",
+    schemaPrompt.trim(),
+    "",
+    "Use the provided name exactly as the character's name. Fill in every field in the schema. Use null only when a text or age field is truly unknown."
+  ].join("\n");
+}
+
+function coerceGeneratedInteger(
+  value: unknown,
+  fallbackValue: number,
+  options: { max?: number; min?: number } = {}
+) {
+  const rawValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : Number.NaN;
+
+  if (!Number.isFinite(rawValue)) {
+    return fallbackValue;
+  }
+
+  let nextValue = Math.round(rawValue);
+
+  if (typeof options.min === "number" && nextValue < options.min) {
+    nextValue = options.min;
+  }
+
+  if (typeof options.max === "number" && nextValue > options.max) {
+    nextValue = options.max;
+  }
+
+  return nextValue;
+}
+
+function normalizeGeneratedGender(
+  value: unknown,
+  fallbackValue: PersonalityRecord["gender"]
+): PersonalityRecord["gender"] {
+  if (typeof value !== "string") {
+    return fallbackValue;
+  }
+
+  const normalizedValue = value.trim().toUpperCase();
+
+  return normalizedValue === "M" || normalizedValue === "F" || normalizedValue === "NB"
+    ? normalizedValue
+    : fallbackValue;
+}
+
+function extractOpenRouterResponseText(content: unknown) {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .map((part) => {
+      if (typeof part === "string") {
+        return part;
+      }
+
+      if (part && typeof part === "object" && "text" in part && typeof part.text === "string") {
+        return part.text;
+      }
+
+      return "";
+    })
+    .join("\n")
+    .trim();
+}
+
+function extractJsonObjectFromText(responseText: string) {
+  const normalizedText = responseText.trim();
+
+  if (!normalizedText) {
+    throw new Error("OpenRouter returned an empty response.");
+  }
+
+  try {
+    return JSON.parse(normalizedText) as unknown;
+  } catch {
+    // Fall through to fenced and substring extraction.
+  }
+
+  const fencedMatch = normalizedText.match(/```(?:json)?\s*([\s\S]*?)```/iu);
+
+  if (fencedMatch?.[1]) {
+    try {
+      return JSON.parse(fencedMatch[1]) as unknown;
+    } catch {
+      // Fall through to substring extraction.
+    }
+  }
+
+  const objectStartIndex = normalizedText.indexOf("{");
+  const objectEndIndex = normalizedText.lastIndexOf("}");
+
+  if (objectStartIndex !== -1 && objectEndIndex !== -1 && objectEndIndex > objectStartIndex) {
+    return JSON.parse(normalizedText.slice(objectStartIndex, objectEndIndex + 1)) as unknown;
+  }
+
+  throw new Error("OpenRouter did not return parseable JSON.");
+}
+
+function extractOpenRouterErrorDetails(value: unknown): string[] {
+  if (typeof value === "string") {
+    const normalizedValue = value.trim();
+    return normalizedValue ? [normalizedValue] : [];
+  }
+
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const detailKeys = [
+    "message",
+    "code",
+    "raw",
+    "provider_name",
+    "metadata",
+    "provider_error",
+    "details"
+  ] as const;
+
+  return detailKeys.flatMap((key) => extractOpenRouterErrorDetails(record[key]));
+}
+
+function buildOpenRouterErrorMessage(responseBody: Record<string, unknown>, responseText: string, status: number) {
+  const details = Array.from(
+    new Set([
+      ...extractOpenRouterErrorDetails(responseBody.error),
+      ...extractOpenRouterErrorDetails(responseBody),
+      responseText.trim()
+    ].filter(Boolean))
+  );
+
+  if (!details.length) {
+    return `OpenRouter request failed (${status}).`;
+  }
+
+  const [primaryDetail, ...extraDetails] = details;
+  const extraDetailText = extraDetails.filter((detail) => detail !== primaryDetail).join(" | ");
+
+  return extraDetailText
+    ? `OpenRouter request failed (${status}): ${primaryDetail} | ${extraDetailText}`
+    : `OpenRouter request failed (${status}): ${primaryDetail}`;
+}
+
+function getPersonalityProfileImageUrl(characterSlug: string) {
+  const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
+  const bucketRoot = getR2Bucket();
+
+  if (!bucketRoot) {
+    throw new Error("R2_BUCKET is not configured.");
+  }
+
+  return new URL(`personalities/profile/${normalizedCharacterSlug}.jpg`, `${bucketRoot}/`).toString();
+}
+
+function getPersonalityProfileImageProxyUrl(characterSlug: string, updatedAt?: Date | string | null) {
+  const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
+  const basePath = `${PERSONALITY_PROFILE_IMAGE_ROUTE_PREFIX}/${normalizedCharacterSlug}.jpg`;
+
+  if (!updatedAt) {
+    return basePath;
+  }
+
+  const serializedUpdatedAt = serializeStoredTimestamp(updatedAt);
+  return `${basePath}?v=${encodeURIComponent(serializedUpdatedAt)}`;
+}
+
+function getStoredPersonalityProfileImageUrl(characterSlug: string) {
+  return getPersonalityProfileImageProxyUrl(characterSlug);
+}
+
+function isManagedPersonalityProfileImageUrl(characterSlug: string, imageUrl: string) {
+  const normalizedImageUrl = imageUrl.trim();
+
+  if (!normalizedImageUrl) {
+    return false;
+  }
+
+  const directStorageUrl = getPersonalityProfileImageUrl(characterSlug);
+  const proxyUrl = getPersonalityProfileImageProxyUrl(characterSlug);
+
+  return normalizedImageUrl === directStorageUrl || normalizedImageUrl.startsWith(proxyUrl);
+}
+
+function createHexSha256(value: Buffer | Uint8Array | string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function createHmacBuffer(key: Buffer | string, value: string) {
+  return createHmac("sha256", key).update(value).digest();
+}
+
+function buildR2SignedHeaders(
+  objectUrl: URL,
+  method: "GET" | "PUT",
+  body: Buffer,
+  contentType?: string | null
+) {
+  const accessKeyId = getR2UserAccessKey();
+  const secretAccessKey = getR2UserSecret();
+
+  if (!accessKeyId) {
+    throw new Error("R2_USER_ACCESSKEY is not configured.");
+  }
+
+  if (!secretAccessKey) {
+    throw new Error("R2_USER_SECRET is not configured.");
+  }
+
+  const now = new Date();
+  const isoTimestamp = now.toISOString().replace(/[-:]/gu, "").replace(/\.\d{3}Z$/u, "Z");
+  const dateStamp = isoTimestamp.slice(0, 8);
+  const payloadHash = createHexSha256(body);
+  const credentialScope = `${dateStamp}/auto/s3/aws4_request`;
+  const canonicalHeaders = new Map<string, string>([
+    ["host", objectUrl.host],
+    ["x-amz-content-sha256", payloadHash],
+    ["x-amz-date", isoTimestamp]
+  ]);
+
+  if (method === "PUT" && contentType) {
+    canonicalHeaders.set("content-type", contentType);
+  }
+
+  const signedHeaderNames = [...canonicalHeaders.keys()].sort();
+  const canonicalHeaderText = signedHeaderNames
+    .map((headerName) => `${headerName}:${canonicalHeaders.get(headerName) ?? ""}`.trim())
+    .join("\n");
+  const canonicalRequest = [
+    method,
+    objectUrl.pathname,
+    objectUrl.searchParams.toString(),
+    `${canonicalHeaderText}\n`,
+    signedHeaderNames.join(";"),
+    payloadHash
+  ].join("\n");
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    isoTimestamp,
+    credentialScope,
+    createHexSha256(canonicalRequest)
+  ].join("\n");
+  const signingKey = createHmacBuffer(
+    createHmacBuffer(
+      createHmacBuffer(createHmacBuffer(`AWS4${secretAccessKey}`, dateStamp), "auto"),
+      "s3"
+    ),
+    "aws4_request"
+  );
+  const signature = createHmac("sha256", signingKey).update(stringToSign).digest("hex");
+  const headers = new Headers({
+    Authorization: `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaderNames.join(";")}, Signature=${signature}`,
+    Host: objectUrl.host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": isoTimestamp
+  });
+
+  if (method === "PUT" && contentType) {
+    headers.set("Content-Type", contentType);
+  }
+
+  return headers;
+}
+
+async function fetchR2Object(
+  objectUrl: string,
+  options: {
+    body?: Buffer;
+    contentType?: string | null;
+    method: "GET" | "PUT";
+  }
+) {
+  const normalizedUrl = new URL(objectUrl);
+  const requestBody = options.body ?? Buffer.alloc(0);
+  const headers = buildR2SignedHeaders(normalizedUrl, options.method, requestBody, options.contentType);
+
+  try {
+    return await fetch(normalizedUrl, {
+      body: options.method === "PUT" ? new Uint8Array(requestBody) : undefined,
+      headers,
+      method: options.method
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    throw new Error(`Request to R2 failed: ${message}`);
+  }
+}
+
+async function uploadPersonalityProfileImageToR2(characterSlug: string, imageBuffer: Buffer) {
+  const bucketRoot = getR2Bucket();
+
+  if (!bucketRoot) {
+    throw new Error("R2_BUCKET is not configured.");
+  }
+
+  const token = getR2Token();
+
+  if (!token && !getR2UserAccessKey()) {
+    throw new Error("R2 credentials are not configured.");
+  }
+
+  const targetUrl = getPersonalityProfileImageUrl(characterSlug);
+  const response = await fetchR2Object(targetUrl, {
+    body: imageBuffer,
+    contentType: "image/jpeg",
+    method: "PUT"
+  });
+
+  if (!response.ok) {
+    const responseText = await response.text().catch(() => "");
+    throw new Error(responseText.trim() || `Could not upload profile image to R2 (${response.status}).`);
+  }
+
+  return targetUrl;
+}
+
+export async function downloadPersonalityProfileImage(characterSlug: string) {
+  const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
+  const targetUrl = getPersonalityProfileImageUrl(normalizedCharacterSlug);
+  const response = await fetchR2Object(targetUrl, { method: "GET" });
+
+  if (response.status === 404) {
+    throw new Error("Profile image not found.");
+  }
+
+  if (!response.ok) {
+    const responseText = await response.text().catch(() => "");
+    throw new Error(responseText.trim() || `Could not download profile image from R2 (${response.status}).`);
+  }
+
+  return {
+    body: Buffer.from(await response.arrayBuffer()),
+    contentType: response.headers.get("content-type")?.trim() || "image/jpeg",
+    etag: response.headers.get("etag")?.trim() || null,
+    lastModified: response.headers.get("last-modified")?.trim() || null
+  };
+}
+
+async function loadPersonalityRandomizeModelOptions() {
+  const fileContents = await readFile(PERSONALITY_MODEL_OPTIONS_PATH, "utf8");
+  const parsedContents = JSON.parse(fileContents) as unknown;
+
+  if (!Array.isArray(parsedContents)) {
+    throw new Error("Personality model options must be a JSON array.");
+  }
+
+  const modelOptions = parsedContents.filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0
+  );
+
+  if (!modelOptions.length) {
+    throw new Error("No personality model options were configured.");
+  }
+
+  return modelOptions;
+}
+
+function buildGeneratedPersonalityUpdates(
+  parsedResponse: unknown,
+  personality: PersonalityRecord
+): Partial<Pick<PersonalityRecord, GeneratedPersonalityField>> {
+  if (!parsedResponse || typeof parsedResponse !== "object" || Array.isArray(parsedResponse)) {
+    throw new Error("OpenRouter returned JSON, but it was not a personality object.");
+  }
+
+  const responseObject = parsedResponse as Record<string, unknown>;
+
+  return {
+    accent: normalizeGeneratedTextValue(responseObject.accent, personality.accent),
+    age:
+      responseObject.age === null
+        ? null
+        : responseObject.age === undefined
+          ? personality.age
+          : coerceGeneratedInteger(responseObject.age, personality.age ?? 0, { min: 0 }),
+    aggression: coerceGeneratedInteger(responseObject.aggression, personality.aggression, { max: 100, min: 1 }),
+    altruism: coerceGeneratedInteger(responseObject.altruism, personality.altruism, { max: 100, min: 1 }),
+    areas_of_expertise: normalizeGeneratedTextValue(
+      responseObject.areas_of_expertise,
+      personality.areas_of_expertise
+    ),
+    backstory: normalizeGeneratedTextValue(responseObject.backstory, personality.backstory),
+    base_hp: coerceGeneratedInteger(responseObject.base_hp, personality.base_hp, { min: 1 }),
+    clothing_style: normalizeGeneratedTextValue(responseObject.clothing_style, personality.clothing_style),
+    courage: coerceGeneratedInteger(responseObject.courage, personality.courage, { max: 100, min: 1 }),
+    distinguishing_feature: normalizeGeneratedTextValue(
+      responseObject.distinguishing_feature,
+      personality.distinguishing_feature
+    ),
+    emotional_range: normalizeGeneratedTextValue(responseObject.emotional_range, personality.emotional_range),
+    family_description: normalizeGeneratedTextValue(
+      responseObject.family_description,
+      personality.family_description
+    ),
+    fears: normalizeGeneratedTextValue(responseObject.fears, personality.fears),
+    gender: normalizeGeneratedGender(responseObject.gender, personality.gender),
+    goals: normalizeGeneratedTextValue(responseObject.goals, personality.goals),
+    gold: coerceGeneratedInteger(responseObject.gold, personality.gold, { min: 0 }),
+    goodness: coerceGeneratedInteger(responseObject.goodness, personality.goodness, { max: 100, min: 1 }),
+    hidden_desires: normalizeGeneratedTextValue(responseObject.hidden_desires, personality.hidden_desires),
+    honesty: coerceGeneratedInteger(responseObject.honesty, personality.honesty, { max: 100, min: 1 }),
+    impulsiveness: coerceGeneratedInteger(responseObject.impulsiveness, personality.impulsiveness, {
+      max: 100,
+      min: 1
+    }),
+    loyalty: coerceGeneratedInteger(responseObject.loyalty, personality.loyalty, { max: 100, min: 1 }),
+    mannerisms: normalizeGeneratedTextValue(responseObject.mannerisms, personality.mannerisms),
+    name: normalizeGeneratedTextValue(responseObject.name, personality.name) ?? personality.name,
+    other_world_knowledge: normalizeGeneratedTextValue(
+      responseObject.other_world_knowledge,
+      personality.other_world_knowledge
+    ),
+    optimism: coerceGeneratedInteger(responseObject.optimism, personality.optimism, { max: 100, min: 1 }),
+    physical_description: normalizeGeneratedTextValue(
+      responseObject.physical_description,
+      personality.physical_description
+    ),
+    reputation: coerceGeneratedInteger(responseObject.reputation, personality.reputation, { max: 100, min: 1 }),
+    role: normalizeGeneratedTextValue(responseObject.role, personality.role),
+    secrets_you_know: normalizeGeneratedTextValue(responseObject.secrets_you_know, personality.secrets_you_know),
+    smalltalk_topics_enjoyed: normalizeGeneratedTextValue(
+      responseObject.smalltalk_topics_enjoyed,
+      personality.smalltalk_topics_enjoyed
+    ),
+    sociability: coerceGeneratedInteger(responseObject.sociability, personality.sociability, { max: 100, min: 1 }),
+    specialties: normalizeGeneratedTextValue(responseObject.specialties, personality.specialties),
+    speech_pattern: normalizeGeneratedTextValue(responseObject.speech_pattern, personality.speech_pattern),
+    speech_style: normalizeGeneratedTextValue(responseObject.speech_style, personality.speech_style),
+    summary: normalizeGeneratedTextValue(responseObject.summary, personality.summary),
+    temperament: normalizeGeneratedTextValue(responseObject.temperament, personality.temperament),
+    things_you_can_share: normalizeGeneratedTextValue(
+      responseObject.things_you_can_share,
+      personality.things_you_can_share
+    ),
+    titles: normalizeGeneratedTextValue(responseObject.titles, personality.titles),
+    voice_id: normalizeGeneratedTextValue(responseObject.voice_id, personality.voice_id)
+  };
+}
+
+async function readStoredPersonalityRowBySlug(characterSlug: string) {
+  await ensureAssetDatabaseReady();
+  const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
+  const db = await getDatabase();
+  const row = await db<StoredPersonalityRow>("personalities")
+    .select("*")
+    .first()
+    .where({ character_slug: normalizedCharacterSlug });
+
+  if (!row) {
+    throw new Error("Personality not found.");
+  }
+
+  return row;
+}
+
+export async function prepareRandomPersonalityPrompt(characterSlug: string) {
+  const [personalityRow, promptTemplateBuffer, schemaPromptBuffer, modelOptions] = await Promise.all([
+    readStoredPersonalityRowBySlug(characterSlug),
+    readFile(RANDOM_PERSONALITY_PROMPT_PATH, "utf8"),
+    readFile(PERSONALITY_SCHEMA_PROMPT_PATH, "utf8"),
+    loadPersonalityRandomizeModelOptions()
+  ]);
+
+  const personality = mapRowToPersonalityRecord(personalityRow);
+  const prompt = buildRandomPersonalityPrompt(personality, promptTemplateBuffer, schemaPromptBuffer);
+
+  return {
+    character_slug: personality.character_slug,
+    defaultModel: modelOptions[0],
+    modelOptions,
+    prompt
+  };
+}
+
+export async function randomizePersonalityThroughOpenRouter(characterSlug: string, prompt: string, model: string) {
+  const normalizedPrompt = prompt.trim();
+  const normalizedModel = model.trim();
+
+  if (!normalizedPrompt) {
+    throw new Error("Prompt is required.");
+  }
+
+  if (!normalizedModel) {
+    throw new Error("Model is required.");
+  }
+
+  const apiKey = getOpenRouterApiKey();
+
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY is not configured.");
+  }
+
+  const allowedModels = await loadPersonalityRandomizeModelOptions();
+
+  if (!allowedModels.includes(normalizedModel)) {
+    throw new Error("Selected model is not in the configured personality model options.");
+  }
+
+  const personality = mapRowToPersonalityRecord(await readStoredPersonalityRowBySlug(characterSlug));
+  let response: Response;
+
+  try {
+    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      body: JSON.stringify({
+        messages: [{ content: normalizedPrompt, role: "user" }],
+        model: normalizedModel,
+        response_format: { type: "json_object" }
+      }),
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    throw new Error(`Request to OpenRouter failed: ${message}`);
+  }
+
+  const responseText = await response.text().catch(() => "");
+  let responseBody: Record<string, unknown> = {};
+
+  if (responseText.trim()) {
+    try {
+      responseBody = JSON.parse(responseText) as Record<string, unknown>;
+    } catch {
+      responseBody = {};
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(buildOpenRouterErrorMessage(responseBody, responseText, response.status));
+  }
+
+  const choices = Array.isArray(responseBody.choices) ? responseBody.choices : [];
+  const firstChoice = choices[0];
+  const messageContent =
+    firstChoice && typeof firstChoice === "object" && "message" in firstChoice && firstChoice.message
+      ? (firstChoice.message as Record<string, unknown>).content
+      : "";
+  const generatedText = extractOpenRouterResponseText(messageContent);
+  const parsedResponse = extractJsonObjectFromText(generatedText);
+  const generatedUpdates = buildGeneratedPersonalityUpdates(parsedResponse, personality);
+
+  return updatePersonalityRecord(personality.character_slug, generatedUpdates);
+}
+
+export async function uploadPersonalityProfileImage(characterSlug: string, file: File) {
+  const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
+  const normalizedFileName = file.name.trim().toLowerCase();
+  const fileExtension = path.extname(normalizedFileName);
+
+  if (!file.type.startsWith("image/") && !IMAGE_EXTENSIONS.has(fileExtension)) {
+    throw new Error("Profile image uploads require a PNG, JPG, WEBP, or GIF file.");
+  }
+
+  let jpegBuffer: Buffer;
+
+  try {
+    jpegBuffer = await sharp(Buffer.from(await file.arrayBuffer()), { failOn: "warning" })
+      .rotate()
+      .resize(256, 256, {
+        fit: "cover",
+        kernel: sharp.kernel.mks2021,
+        position: "centre"
+      })
+      .jpeg({
+        force: true,
+        mozjpeg: true,
+        quality: 88
+      })
+      .toBuffer();
+  } catch {
+    throw new Error("Could not decode the uploaded profile image.");
+  }
+
+  const imageUrl = await uploadPersonalityProfileImageToR2(normalizedCharacterSlug, jpegBuffer);
+  return updatePersonalityRecord(normalizedCharacterSlug, {
+    custom_profile_pic: getStoredPersonalityProfileImageUrl(normalizedCharacterSlug)
+  });
+}
+
+export async function createPersonalityRecord(name: string) {
+  await ensureAssetDatabaseReady();
+  const normalizedName = name.trim();
+
+  if (!normalizedName) {
+    throw new Error("Personality name is required.");
+  }
+
+  const db = await getDatabase();
+  const existingRows = await db<StoredPersonalityRow>("personalities").select("character_slug");
+  const characterSlug = createUniquePersonalitySlug(
+    existingRows.map((row) => row.character_slug),
+    normalizedName
+  );
+
+  const [createdPersonality] = await db<StoredPersonalityRow>("personalities")
+    .insert({
+      aggression: 50,
+      altruism: 50,
+      base_hp: 100,
+      character_slug: characterSlug,
+      courage: 50,
+      gender: "NB",
+      gold: 0,
+      goodness: 50,
+      honesty: 50,
+      impulsiveness: 50,
+      inserted_at: db.fn.now() as unknown as Date | string,
+      loyalty: 50,
+      name: normalizedName,
+      optimism: 50,
+      reputation: 50,
+      sociability: 50,
+      updated_at: db.fn.now() as unknown as Date | string
+    })
+    .returning("*");
+
+  if (!createdPersonality) {
+    throw new Error("Could not create personality.");
+  }
+
+  return saveComputedPromptBase(db, mapRowToPersonalityRecord(createdPersonality));
+}
+
+export async function updatePersonalityRecord(
+  characterSlug: string,
+  fields: Partial<PersonalityRecord>
+) {
+  await ensureAssetDatabaseReady();
+  const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
+  const db = await getDatabase();
+  const existingPersonality = await db<StoredPersonalityRow>("personalities")
+    .select("*")
+    .first()
+    .where({ character_slug: normalizedCharacterSlug });
+
+  if (!existingPersonality) {
+    throw new Error("Personality not found.");
+  }
+
+  const updates: Partial<StoredPersonalityRow> = {};
+
+  if ("name" in fields) {
+    updates.name = normalizePersonalityTextInput(fields.name, "Name", true) ?? "";
+  }
+
+  if ("voice_id" in fields) {
+    updates.voice_id = normalizePersonalityTextInput(fields.voice_id, "Voice ID");
+  }
+
+  if ("chat_provider" in fields) {
+    updates.chat_provider = normalizePersonalityTextInput(fields.chat_provider, "Chat Provider");
+  }
+
+  if ("chat_model" in fields) {
+    updates.chat_model = normalizePersonalityTextInput(fields.chat_model, "Chat Model");
+  }
+
+  if ("role" in fields) {
+    updates.role = normalizePersonalityTextInput(fields.role, "Role");
+  }
+
+  if ("titles" in fields) {
+    updates.titles = normalizePersonalityTextInput(fields.titles, "Titles");
+  }
+
+  if ("gender" in fields) {
+    if (fields.gender !== "M" && fields.gender !== "F" && fields.gender !== "NB") {
+      throw new Error('Gender must be one of "M", "F", or "NB".');
+    }
+
+    updates.gender = fields.gender;
+  }
+
+  if ("age" in fields) {
+    updates.age = normalizePersonalityIntegerInput(fields.age, "Age", { allowNull: true, min: 0 });
+  }
+
+  if ("base_hp" in fields) {
+    updates.base_hp = normalizePersonalityIntegerInput(fields.base_hp, "Base HP", { min: 1 });
+  }
+
+  if ("gold" in fields) {
+    updates.gold = normalizePersonalityIntegerInput(fields.gold, "Gold", { min: 0 });
+  }
+
+  if ("reputation" in fields) {
+    updates.reputation = normalizePersonalityIntegerInput(fields.reputation, "Reputation", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("aggression" in fields) {
+    updates.aggression = normalizePersonalityIntegerInput(fields.aggression, "Aggression", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("altruism" in fields) {
+    updates.altruism = normalizePersonalityIntegerInput(fields.altruism, "Altruism", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("honesty" in fields) {
+    updates.honesty = normalizePersonalityIntegerInput(fields.honesty, "Honesty", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("courage" in fields) {
+    updates.courage = normalizePersonalityIntegerInput(fields.courage, "Courage", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("impulsiveness" in fields) {
+    updates.impulsiveness = normalizePersonalityIntegerInput(fields.impulsiveness, "Impulsiveness", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("optimism" in fields) {
+    updates.optimism = normalizePersonalityIntegerInput(fields.optimism, "Optimism", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("sociability" in fields) {
+    updates.sociability = normalizePersonalityIntegerInput(fields.sociability, "Sociability", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("loyalty" in fields) {
+    updates.loyalty = normalizePersonalityIntegerInput(fields.loyalty, "Loyalty", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("goodness" in fields) {
+    updates.goodness = normalizePersonalityIntegerInput(fields.goodness, "Goodness", {
+      max: 100,
+      min: 1
+    });
+  }
+
+  if ("temperament" in fields) {
+    updates.temperament = normalizePersonalityTextInput(fields.temperament, "Temperament");
+  }
+
+  if ("emotional_range" in fields) {
+    updates.emotional_range = normalizePersonalityTextInput(fields.emotional_range, "Emotional range");
+  }
+
+  if ("speech_pattern" in fields) {
+    updates.speech_pattern = normalizePersonalityTextInput(fields.speech_pattern, "Speech pattern");
+  }
+
+  if ("goals" in fields) {
+    updates.goals = normalizePersonalityTextInput(fields.goals, "Goals");
+  }
+
+  if ("backstory" in fields) {
+    updates.backstory = normalizePersonalityTextInput(fields.backstory, "Backstory");
+  }
+
+  if ("hidden_desires" in fields) {
+    updates.hidden_desires = normalizePersonalityTextInput(fields.hidden_desires, "Hidden desires");
+  }
+
+  if ("fears" in fields) {
+    updates.fears = normalizePersonalityTextInput(fields.fears, "Fears");
+  }
+
+  if ("family_description" in fields) {
+    updates.family_description = normalizePersonalityTextInput(fields.family_description, "Family description");
+  }
+
+  if ("areas_of_expertise" in fields) {
+    updates.areas_of_expertise = normalizePersonalityTextInput(fields.areas_of_expertise, "Areas of expertise");
+  }
+
+  if ("specialties" in fields) {
+    updates.specialties = normalizePersonalityTextInput(fields.specialties, "Specialties");
+  }
+
+  if ("secrets_you_know" in fields) {
+    updates.secrets_you_know = normalizePersonalityTextInput(fields.secrets_you_know, "Secrets you know");
+  }
+
+  if ("things_you_can_share" in fields) {
+    updates.things_you_can_share = normalizePersonalityTextInput(
+      fields.things_you_can_share,
+      "Things you can share"
+    );
+  }
+
+  if ("smalltalk_topics_enjoyed" in fields) {
+    updates.smalltalk_topics_enjoyed = normalizePersonalityTextInput(
+      fields.smalltalk_topics_enjoyed,
+      "Smalltalk topics enjoyed"
+    );
+  }
+
+  if ("other_world_knowledge" in fields) {
+    updates.other_world_knowledge = normalizePersonalityTextInput(
+      fields.other_world_knowledge,
+      "Other world knowledge"
+    );
+  }
+
+  if ("physical_description" in fields) {
+    updates.physical_description = normalizePersonalityTextInput(fields.physical_description, "Physical description");
+  }
+
+  if ("distinguishing_feature" in fields) {
+    updates.distinguishing_feature = normalizePersonalityTextInput(
+      fields.distinguishing_feature,
+      "Distinguishing feature"
+    );
+  }
+
+  if ("speech_style" in fields) {
+    updates.speech_style = normalizePersonalityTextInput(fields.speech_style, "Speech style");
+  }
+
+  if ("accent" in fields) {
+    updates.accent = normalizePersonalityTextInput(fields.accent, "Accent");
+  }
+
+  if ("mannerisms" in fields) {
+    updates.mannerisms = normalizePersonalityTextInput(fields.mannerisms, "Mannerisms");
+  }
+
+  if ("clothing_style" in fields) {
+    updates.clothing_style = normalizePersonalityTextInput(fields.clothing_style, "Clothing style");
+  }
+
+  if ("custom_profile_pic" in fields) {
+    updates.custom_profile_pic = normalizePersonalityTextInput(fields.custom_profile_pic, "Custom profile pic");
+  }
+
+  if ("summary" in fields) {
+    updates.summary = normalizePersonalityTextInput(fields.summary, "Summary");
+  }
+
+  if (!Object.keys(updates).length) {
+    throw new Error("At least one personality field is required.");
+  }
+
+  updates.updated_at = db.fn.now() as unknown as Date | string;
+
+  const [updatedPersonality] = await db<StoredPersonalityRow>("personalities")
+    .where({ character_slug: normalizedCharacterSlug })
+    .update(updates)
+    .returning("*");
+
+  if (!updatedPersonality) {
+    throw new Error("Could not update personality.");
+  }
+
+  return saveComputedPromptBase(db, mapRowToPersonalityRecord(updatedPersonality));
+}
+
+export async function readItemRecords() {
+  await ensureAssetDatabaseReady();
+  const hasItemsTable = await ensureItemsDeletedColumn();
+
+  if (!hasItemsTable) {
+    return [] as ItemRecord[];
+  }
+
+  const db = await getDatabase();
+
+  const rows = await db<StoredItemRow>("items")
+    .select("*")
+    .where({ deleted: false })
+    .orderBy([
+      { column: "name", order: "asc" },
+      { column: "id", order: "asc" }
+    ]);
+
+  return rows.map(mapRowToItemRecord);
+}
+
+export async function deleteItemRecord(itemId: number) {
+  await ensureAssetDatabaseReady();
+  const hasItemsTable = await ensureItemsDeletedColumn();
+
+  if (!hasItemsTable) {
+    throw new Error("Items table not found.");
+  }
+
+  const normalizedItemId = Math.round(itemId);
+
+  if (!Number.isFinite(normalizedItemId) || normalizedItemId <= 0) {
+    throw new Error("Valid item id is required.");
+  }
+
+  const db = await getDatabase();
+  const existingItem = await db<StoredItemRow>("items")
+    .select("id")
+    .first()
+    .where({ id: normalizedItemId, deleted: false });
+
+  if (!existingItem) {
+    throw new Error("Item not found.");
+  }
+
+  await db("items").where({ id: normalizedItemId }).update({
+    deleted: true,
+    updated_at: db.fn.now()
+  });
+
+  return { id: normalizedItemId };
+}
+
+export async function moveItemRecordCategory(itemId: number, nextItemType: string) {
+  await ensureAssetDatabaseReady();
+  const hasItemsTable = await ensureItemsDeletedColumn();
+
+  if (!hasItemsTable) {
+    throw new Error("Items table not found.");
+  }
+
+  const normalizedItemId = Math.round(itemId);
+  const normalizedItemType = nextItemType.trim();
+
+  if (!Number.isFinite(normalizedItemId) || normalizedItemId <= 0) {
+    throw new Error("Valid item id is required.");
+  }
+
+  if (!normalizedItemType) {
+    throw new Error("Item category is required.");
+  }
+
+  const db = await getDatabase();
+  const existingItem = await db<StoredItemRow>("items")
+    .select("*")
+    .first()
+    .where({ id: normalizedItemId, deleted: false });
+
+  if (!existingItem) {
+    throw new Error("Item not found.");
+  }
+
+  const [updatedItem] = await db<StoredItemRow>("items")
+    .where({ id: normalizedItemId })
+    .update({
+      item_type: normalizedItemType,
+      updated_at: db.fn.now()
+    })
+    .returning("*");
+
+  if (!updatedItem) {
+    throw new Error("Could not update item category.");
+  }
+
+  return mapRowToItemRecord(updatedItem);
+}
+
+function mapApiItemToItemRecord(item: Partial<StoredItemRow>) {
+  const normalizedId = Math.round(normalizeOptionalNumber(item.id) ?? 0);
+  const normalizedName = typeof item.name === "string" && item.name.trim() ? item.name.trim() : "New Item";
+  const normalizedItemType =
+    typeof item.item_type === "string" && item.item_type.trim() ? item.item_type.trim() : "unknown";
+  const normalizedSlug =
+    typeof item.slug === "string" && item.slug.trim()
+      ? item.slug.trim()
+      : slugifyName(normalizedName) || String(normalizedId || normalizedName);
+  const now = new Date().toISOString();
+
+  return mapRowToItemRecord({
+    base_value: normalizeOptionalNumber(item.base_value),
+    character: normalizeOptionalText(item.character),
+    description: normalizeOptionalText(item.description),
+    durability: normalizeOptionalNumber(item.durability),
+    etag: normalizeOptionalText(item.etag),
+    gives_light: normalizeOptionalNumber(item.gives_light),
+    height: normalizeOptionalNumber(item.height),
+    id: normalizedId,
+    inserted_at: item.inserted_at ?? now,
+    is_consumable: normalizeOptionalBoolean(item.is_consumable),
+    is_container: normalizeOptionalBoolean(item.is_container),
+    item_type: normalizedItemType,
+    layer: normalizeOptionalNumber(item.layer),
+    level: normalizeOptionalNumber(item.level),
+    long_description: normalizeOptionalText(item.long_description),
+    model: normalizeOptionalText(item.model),
+    mount_point: normalizeOptionalText(item.mount_point),
+    name: normalizedName,
+    on_acquire: normalizeOptionalText(item.on_acquire),
+    on_activate: normalizeOptionalText(item.on_activate),
+    on_consume: normalizeOptionalText(item.on_consume),
+    on_drop: normalizeOptionalText(item.on_drop),
+    on_use: normalizeOptionalText(item.on_use),
+    quality: normalizeOptionalText(item.quality),
+    rarity: normalizeOptionalText(item.rarity),
+    slug: normalizedSlug,
+    source: normalizeOptionalText(item.source),
+    source_kind: normalizeOptionalText(item.source_kind),
+    storage_capacity: normalizeOptionalNumber(item.storage_capacity),
+    textures: normalizeStringArray(item.textures),
+    thumbnail: normalizeOptionalText(item.thumbnail),
+    thumbnail2x: normalizeOptionalText(item.thumbnail2x),
+    type: normalizeOptionalText(item.type),
+    updated_at: item.updated_at ?? now,
+    weapon_grip: normalizeOptionalText(item.weapon_grip),
+    width: normalizeOptionalNumber(item.width)
+  });
+}
+
+export async function createRemoteItemRecord(name: string, itemType: string) {
+  const normalizedName = name.trim();
+  const normalizedItemType = itemType.trim();
+
+  if (!normalizedName) {
+    throw new Error("Item name is required.");
+  }
+
+  if (!normalizedItemType) {
+    throw new Error("Item category is required.");
+  }
+
+  const vaxServer = getVaxServer();
+  const vaxAdminKey = getVaxAdminKey();
+
+  if (!vaxServer) {
+    throw new Error("VAX_SERVER is not configured.");
+  }
+
+  const requestBody: Record<string, unknown> = {
+    item_type: normalizedItemType,
+    name: normalizedName
+  };
+
+  if (normalizedItemType === "body_mounted") {
+    requestBody.mount_point = "body_point";
+  }
+
+  if (normalizedItemType === "weapon") {
+    requestBody.mount_point = "hand_right_point";
+    requestBody.weapon_grip = "one_handed";
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${vaxServer}/api/admin/items`, {
+      body: JSON.stringify(requestBody),
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": vaxAdminKey
+      },
+      method: "POST"
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    throw new Error(`Request to VAX server failed: ${message}`);
+  }
+
+  const responseText = await response.text().catch(() => "");
+  let responseBody: Partial<{ error: string; item: Partial<StoredItemRow>; message: string }> = {};
+
+  if (responseText.trim()) {
+    try {
+      responseBody = JSON.parse(responseText) as typeof responseBody;
+    } catch {
+      responseBody = {};
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error((responseBody.message ?? responseBody.error ?? responseText.trim()) || "Could not create item.");
+  }
+
+  if (!responseBody.item) {
+    throw new Error("The item server did not return the created item.");
+  }
+
+  return mapApiItemToItemRecord(responseBody.item);
+}
+
+export async function loadItemFieldLookups(): Promise<ItemFieldLookups> {
+  const vaxServer = getVaxServer();
+
+  if (!vaxServer) {
+    throw new Error("VAX_SERVER is not configured.");
+  }
+
+  async function loadLookup<T extends string>(pathName: string, fieldName: string) {
+    let response: Response;
+
+    try {
+      response = await fetch(`${vaxServer}${pathName}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "fetch failed";
+      throw new Error(`Request to VAX server failed: ${message}`);
+    }
+
+    const responseText = await response.text().catch(() => "");
+
+    if (!response.ok) {
+      throw new Error(responseText.trim() || "Could not load item lookups.");
+    }
+
+    let responseBody: Record<string, unknown>;
+
+    try {
+      responseBody = JSON.parse(responseText) as Record<string, unknown>;
+    } catch {
+      throw new Error("The item lookup response was not valid JSON.");
+    }
+
+    const values = responseBody[fieldName];
+
+    if (!Array.isArray(values)) {
+      throw new Error(`The item lookup "${fieldName}" was missing.`);
+    }
+
+    return values
+      .filter((value): value is T => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim());
+  }
+
+  const [rarities, mountPoints, weaponGrips] = await Promise.all([
+    loadLookup("/lookup/rarities.json", "rarities"),
+    loadLookup("/lookup/mountpoints.json", "mount_points"),
+    loadLookup("/lookup/weapon_grips.json", "weapon_grips")
+  ]);
+
+  return { mountPoints, rarities, weaponGrips };
+}
+
+export async function updateRemoteItemRecord(
+  itemId: number,
+  fields: Partial<
+    Pick<
+      ItemRecord,
+      "base_value" | "description" | "durability" | "gives_light" | "is_consumable" | "is_container" | "level" | "long_description" | "mount_point" | "quality" | "rarity" | "storage_capacity" | "weapon_grip"
+    >
+  >
+) {
+  const normalizedItemId = await assertItemExists(itemId);
+  const vaxServer = getVaxServer();
+  const vaxAdminKey = getVaxAdminKey();
+
+  if (!vaxServer) {
+    throw new Error("VAX_SERVER is not configured.");
+  }
+
+  const requestBody: Record<string, string | number | boolean | null> = {};
+
+  if ("base_value" in fields) {
+    requestBody.base_value = normalizeOptionalNumber(fields.base_value) ?? null;
+  }
+
+  if ("description" in fields) {
+    requestBody.description = normalizeOptionalText(fields.description) ?? null;
+  }
+
+  if ("durability" in fields) {
+    requestBody.durability = normalizeOptionalNumber(fields.durability) ?? null;
+  }
+
+  if ("gives_light" in fields) {
+    requestBody.gives_light = normalizeOptionalNumber(fields.gives_light) ?? null;
+  }
+
+  if ("is_consumable" in fields) {
+    requestBody.is_consumable = normalizeOptionalBoolean(fields.is_consumable) ?? null;
+  }
+
+  if ("is_container" in fields) {
+    requestBody.is_container = normalizeOptionalBoolean(fields.is_container) ?? null;
+  }
+
+  if ("level" in fields) {
+    requestBody.level = normalizeOptionalNumber(fields.level) ?? null;
+  }
+
+  if ("long_description" in fields) {
+    requestBody.long_description = normalizeOptionalText(fields.long_description) ?? null;
+  }
+
+  if ("mount_point" in fields) {
+    requestBody.mount_point = normalizeOptionalText(fields.mount_point) ?? null;
+  }
+
+  if ("quality" in fields) {
+    requestBody.quality = normalizeOptionalText(fields.quality) ?? null;
+  }
+
+  if ("rarity" in fields) {
+    requestBody.rarity = normalizeOptionalText(fields.rarity) ?? null;
+  }
+
+  if ("storage_capacity" in fields) {
+    requestBody.storage_capacity = normalizeOptionalNumber(fields.storage_capacity) ?? null;
+  }
+
+  if ("weapon_grip" in fields) {
+    requestBody.weapon_grip = normalizeOptionalText(fields.weapon_grip) ?? null;
+  }
+
+  if (!Object.keys(requestBody).length) {
+    throw new Error("At least one item field is required.");
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${vaxServer}/api/admin/items/${normalizedItemId}`, {
+      body: JSON.stringify(requestBody),
+      headers: {
+        "Content-Type": "application/json",
+        "x-admin-key": vaxAdminKey
+      },
+      method: "PATCH"
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    throw new Error(`Request to VAX server failed: ${message}`);
+  }
+
+  const responseText = await response.text().catch(() => "");
+  let responseBody: Partial<{ error: string; item: Partial<StoredItemRow>; message: string }> & Partial<StoredItemRow> = {};
+
+  if (responseText.trim()) {
+    try {
+      responseBody = JSON.parse(responseText) as typeof responseBody;
+    } catch {
+      responseBody = {};
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error((responseBody.message ?? responseBody.error ?? responseText.trim()) || "Could not update item.");
+  }
+
+  const responseItem = "item" in responseBody && responseBody.item ? responseBody.item : responseBody;
+
+  if (!responseItem || typeof responseItem !== "object") {
+    throw new Error("The item server did not return the updated item.");
+  }
+
+  return mapApiItemToItemRecord(responseItem);
+}
+
+async function assertItemExists(itemId: number) {
+  await ensureAssetDatabaseReady();
+  const hasItemsTable = await ensureItemsDeletedColumn();
+
+  if (!hasItemsTable) {
+    throw new Error("Items table not found.");
+  }
+
+  const normalizedItemId = Math.round(itemId);
+
+  if (!Number.isFinite(normalizedItemId) || normalizedItemId <= 0) {
+    throw new Error("Valid item id is required.");
+  }
+
+  const db = await getDatabase();
+  const existingItem = await db<StoredItemRow>("items")
+    .select("id")
+    .first()
+    .where({ id: normalizedItemId, deleted: false });
+
+  if (!existingItem) {
+    throw new Error("Item not found.");
+  }
+
+  return normalizedItemId;
+}
+
+async function uploadItemAssetToVax(
+  itemId: number,
+  file: File,
+  targetPath: string,
+  contentType: string,
+  fallbackErrorMessage: string
+) {
+  const normalizedItemId = await assertItemExists(itemId);
+  const vaxServer = getVaxServer();
+  const vaxAdminKey = getVaxAdminKey();
+
+  if (!vaxServer) {
+    throw new Error("VAX_SERVER is not configured.");
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${vaxServer}/items/${normalizedItemId}/${targetPath}`, {
+      body: Buffer.from(await file.arrayBuffer()),
+      headers: {
+        "Content-Type": contentType,
+        "x-admin-key": vaxAdminKey
+      },
+      method: "PUT"
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    throw new Error(`Request to VAX server failed: ${message}`);
+  }
+
+  const responseText = await response.text().catch(() => "");
+
+  if (!response.ok) {
+    try {
+      const responseBody = JSON.parse(responseText) as Partial<{ error: string; message: string }>;
+      throw new Error(responseBody.message ?? responseBody.error ?? fallbackErrorMessage);
+    } catch {
+      throw new Error(responseText.trim() || fallbackErrorMessage);
+    }
+  }
+
+  return { id: normalizedItemId, ok: true };
+}
+
+async function resizeItemImageContain(buffer: Buffer, targetSize: number) {
+  return sharp(buffer, { failOn: "warning" })
+    .rotate()
+    .resize(targetSize, targetSize, {
+      background: { alpha: 0, b: 0, g: 0, r: 0 },
+      fit: "contain",
+      kernel: sharp.kernel.mks2021
+    })
+    .png({
+      adaptiveFiltering: true,
+      compressionLevel: 9,
+      force: true,
+      palette: false
+    })
+    .toBuffer();
+}
+
+export async function uploadItemModelFile(itemId: number, file: File) {
+  const normalizedFileName = file.name.trim().toLowerCase();
+
+  if (normalizedFileName.endsWith(".glb")) {
+    return uploadItemAssetToVax(itemId, file, "model.glb", "model/gltf-binary", "Could not upload model.");
+  }
+
+  if (normalizedFileName.endsWith(".gltf")) {
+    return uploadItemAssetToVax(itemId, file, "model.gltf", "model/gltf+json", "Could not upload model.");
+  }
+
+  throw new Error("Model uploads require a .glb or .gltf file.");
+}
+
+export async function uploadItemTextureFile(itemId: number, file: File) {
+  const normalizedFileName = file.name.trim().toLowerCase();
+
+  if (file.type !== "image/png" && !normalizedFileName.endsWith(".png")) {
+    throw new Error("Texture uploads currently require a PNG file.");
+  }
+
+  return uploadItemAssetToVax(itemId, file, "texture.png", "image/png", "Could not upload texture.");
+}
+
+export async function uploadItemThumbnailFile(itemId: number, file: File) {
+  const normalizedFileName = file.name.trim().toLowerCase();
+  const fileExtension = path.extname(normalizedFileName);
+
+  if (!file.type.startsWith("image/") && !IMAGE_EXTENSIONS.has(fileExtension)) {
+    throw new Error("Image uploads require a PNG, JPG, WEBP, or GIF file.");
+  }
+
+  let resizedImageBuffer: Buffer;
+
+  try {
+    resizedImageBuffer = await resizeItemImageContain(Buffer.from(await file.arrayBuffer()), 128);
+  } catch {
+    throw new Error("Could not decode the uploaded image.");
+  }
+
+  const normalizedItemId = await assertItemExists(itemId);
+  const vaxServer = getVaxServer();
+  const vaxAdminKey = getVaxAdminKey();
+
+  if (!vaxServer) {
+    throw new Error("VAX_SERVER is not configured.");
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${vaxServer}/items/${normalizedItemId}/image.png`, {
+      body: new Uint8Array(resizedImageBuffer),
+      headers: {
+        "Content-Type": "image/png",
+        "x-admin-key": vaxAdminKey
+      },
+      method: "PUT"
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    throw new Error(`Request to VAX server failed: ${message}`);
+  }
+
+  const responseText = await response.text().catch(() => "");
+
+  if (!response.ok) {
+    try {
+      const responseBody = JSON.parse(responseText) as Partial<{ error: string; message: string }>;
+      throw new Error(responseBody.message ?? responseBody.error ?? "Could not upload item image.");
+    } catch {
+      throw new Error(responseText.trim() || "Could not upload item image.");
+    }
+  }
+
+  try {
+    const responseBody = JSON.parse(responseText) as Partial<{ thumbnail: string }>;
+
+    return {
+      id: normalizedItemId,
+      ok: true,
+      thumbnail: typeof responseBody.thumbnail === "string" ? responseBody.thumbnail : null
+    };
+  } catch {
+    return { id: normalizedItemId, ok: true, thumbnail: null };
+  }
+}
+
+export async function saveItemPreviewImage(itemId: number, imageDataUrl: string) {
+  const normalizedItemId = await assertItemExists(itemId);
+
+  const vaxServer = getVaxServer();
+  const vaxAdminKey = getVaxAdminKey();
+
+  if (!vaxServer) {
+    throw new Error("VAX_SERVER is not configured.");
+  }
+
+  const imageBuffer = extractPngBuffer(imageDataUrl);
+  const imagePng = PNG.sync.read(imageBuffer);
+
+  if (imagePng.width !== 128 || imagePng.height !== 128) {
+    throw new Error("Preview captures must be 128x128 PNG images.");
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${vaxServer}/items/${normalizedItemId}/image.png`, {
+      body: imageBuffer,
+      headers: {
+        "Content-Type": "image/png",
+        "x-admin-key": vaxAdminKey
+      },
+      method: "PUT"
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    throw new Error(`Request to VAX server failed: ${message}`);
+  }
+
+  if (!response.ok) {
+    const responseText = await response.text().catch(() => "");
+    throw new Error(responseText.trim() || "Could not replace item image.");
+  }
+
+  return { id: normalizedItemId, ok: true };
 }
 
 export async function ensureTileLibraryFolder(relativePath: string) {
@@ -1551,7 +4068,7 @@ export async function ensureTileLibraryFolder(relativePath: string) {
   return normalizedPath;
 }
 
-export async function createTileRecord(name: string, tilePath: string) {
+export async function createTileRecord(name: string, tilePath: string, impassible = false) {
   const nextName = normalizeUnderscoreName(name);
   const nextPath = normalizeTileLibraryPath(tilePath);
 
@@ -1571,10 +4088,51 @@ export async function createTileRecord(name: string, tilePath: string) {
     createUniqueSlug(tileRecords, nextName),
     "",
     normalizeSlotRecords(undefined),
-    ""
+    "",
+    impassible
   );
 
   const db = await getDatabase();
+  await upsertTileAsset(db, nextTile);
+
+  return nextTile;
+}
+
+export async function duplicateTileRecord(input: { name: string; slug: string }) {
+  const nextName = normalizeUnderscoreName(input.name);
+  const sourceSlug = input.slug.trim();
+
+  if (!sourceSlug) {
+    throw new Error("Choose a tile before duplicating it.");
+  }
+
+  if (!nextName) {
+    throw new Error("Tile name is required.");
+  }
+
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const existingTile = await db<StoredAssetRow>("map_tiles")
+    .select("*")
+    .first()
+    .where({ asset_key: getTileAssetKey(sourceSlug), deleted: false });
+
+  if (!existingTile) {
+    throw new Error("Tile not found.");
+  }
+
+  const currentTile = mapRowToTileRecord(existingTile);
+  const tileRecords = await readTileRecords();
+  const nextTile = normalizeTilePayload(
+    nextName,
+    currentTile.path,
+    createUniqueSlug(tileRecords, nextName),
+    currentTile.source,
+    currentTile.slots,
+    currentTile.thumbnail || createTileThumbnail(currentTile.slots),
+    currentTile.impassible
+  );
+
   await upsertTileAsset(db, nextTile);
 
   return nextTile;
@@ -1605,15 +4163,68 @@ export async function importSpriteFile(file: File, spritePath: string) {
   }
 
   const fileBuffer = Buffer.from(await file.arrayBuffer());
-  const { height, width } = getSpriteSizeFromBuffer(fileBuffer);
 
   const spriteRecord = {
-    ...createInitialSpriteRecord(normalizedPath, spriteFilename, width, height),
+    ...createInitialSpriteRecord(normalizedPath, spriteFilename, fileBuffer),
     thumbnail: createSpriteThumbnailDataUrl(fileBuffer, spriteFilename)
   };
   await upsertSpriteAsset(db, spriteRecord, fileBuffer);
 
   return spriteRecord;
+}
+
+export async function importTileFile(file: File, tilePath: string) {
+  const normalizedPath = normalizeTileLibraryPath(tilePath);
+
+  if (!normalizedPath) {
+    throw new Error("Choose a tile library folder before importing a tile.");
+  }
+
+  if (path.extname(file.name).toLowerCase() !== SPRITE_IMAGE_EXTENSION) {
+    throw new Error("Tile imports currently require a PNG file.");
+  }
+
+  const normalizedName = normalizeUnderscoreName(path.parse(file.name).name);
+
+  if (!normalizedName) {
+    throw new Error("Tile filename must include a valid name.");
+  }
+
+  await ensureTileLibraryFolder(normalizedPath);
+
+  const tileRecords = await readTileRecords();
+  const baseSlug = slugifyName(normalizedName);
+  const existingTile = tileRecords.find(
+    (candidate) =>
+      normalizeTileLibraryPath(candidate.path) === normalizedPath &&
+      (candidate.slug === baseSlug || candidate.name === normalizedName)
+  );
+  const fileBuffer = Buffer.from(await file.arrayBuffer());
+  const { height, width } = PNG.sync.read(fileBuffer);
+  const pixels = `data:image/png;base64,${fileBuffer.toString("base64")}`;
+  const slots = normalizeSlotRecords([
+    {
+      layers: [pixels],
+      pixels,
+      size: Math.max(width, height),
+      source_x: 0,
+      source_y: 0
+    }
+  ]);
+  const nextTile = normalizeTilePayload(
+    normalizedName,
+    normalizedPath,
+    existingTile?.slug ?? createUniqueSlug(tileRecords, normalizedName),
+    file.name,
+    slots,
+    "",
+    existingTile?.impassible ?? false
+  );
+  const db = await getDatabase();
+
+  await upsertTileAsset(db, nextTile);
+
+  return nextTile;
 }
 
 export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: File | null) {
@@ -1643,13 +4254,6 @@ export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: Fi
     }
 
     thumbnailBuffer = Buffer.from(await replacementFile.arrayBuffer());
-    const { height, width } = getSpriteSizeFromBuffer(thumbnailBuffer);
-
-    nextSprite = normalizeSpriteRecord({
-      ...normalizedSprite,
-      image_h: height,
-      image_w: width
-    });
   } else {
     if (!existingSprite?.image_data) {
       throw new Error("Sprite image is missing in the database.");
@@ -1657,6 +4261,8 @@ export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: Fi
 
     thumbnailBuffer = existingSprite.image_data;
   }
+
+  nextSprite = applySpriteImageMetrics(nextSprite, thumbnailBuffer);
 
   await upsertSpriteAsset(db, nextSprite, thumbnailBuffer);
 
@@ -1667,6 +4273,7 @@ export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: Fi
 }
 
 export async function saveTileRecord(input: {
+  impassible: boolean;
   slots: Array<SlotRecord | null>;
   slug: string;
   source: string;
@@ -1689,7 +4296,8 @@ export async function saveTileRecord(input: {
     currentTile.slug,
     input.source,
     input.slots,
-    createTileThumbnail(input.slots)
+    createTileThumbnail(input.slots),
+    input.impassible
   );
 
   await upsertTileAsset(db, nextTile);
@@ -1789,7 +4397,19 @@ export async function readMapRecords() {
   const db = await getDatabase();
   const [storedMaps, storedPlacements] = await Promise.all([
     db<StoredMapRow>("map_maps")
-      .select(["id", "slug", "name", "width", "height", "deleted", "created_at", "updated_at"])
+      .select([
+        "id",
+        "slug",
+        "name",
+        "about_prompt",
+        "width",
+        "height",
+        "deleted",
+        "mini_map",
+        "is_instance",
+        "created_at",
+        "updated_at"
+      ])
       .where({ deleted: false })
       .orderBy("updated_at", "desc"),
     db("map_map_assets as placements")
@@ -1858,9 +4478,12 @@ export async function readMapRecords() {
     }
 
     return normalizeMapRecord({
+      aboutPrompt: storedMap.about_prompt ?? "",
       cells: flattenMapLayers(layers, storedMap.width, storedMap.height),
       height: storedMap.height,
+      isInstance: storedMap.is_instance,
       layers,
+      miniMap: bufferToPngDataUrl(storedMap.mini_map),
       name: storedMap.name,
       slug: storedMap.slug,
       updatedAt: serializeStoredTimestamp(storedMap.updated_at),
@@ -2009,9 +4632,12 @@ export function createMapRecord(
   const normalizedHeight = normalizeMapDimension(height);
 
   return {
+    aboutPrompt: "",
     cells: flattenMapLayers(createEmptyMapLayers(normalizedWidth, normalizedHeight)),
     height: normalizedHeight,
+    isInstance: false,
     layers: createEmptyMapLayers(normalizedWidth, normalizedHeight),
+    miniMap: "",
     name,
     slug,
     updatedAt: new Date().toISOString(),
@@ -2025,9 +4651,11 @@ export function normalizeTilePayload(
   slug: string,
   source: string,
   slots: Array<SlotRecord | null>,
-  thumbnail = ""
+  thumbnail = "",
+  impassible = true
 ): TileRecord {
   return {
+    impassible: Boolean(impassible),
     name: name.trim(),
     path: normalizeTileRecordPath(path),
     slug: slug.trim(),
@@ -2041,6 +4669,9 @@ export function normalizeMapPayload(
   name: string,
   slug: string,
   layers: MapLayerStack,
+  miniMap = "",
+  aboutPrompt = "",
+  isInstance = false,
   width?: number,
   height?: number
 ): MapRecord {
@@ -2050,9 +4681,12 @@ export function normalizeMapPayload(
   const normalizedLayers = normalizeMapLayers(layers, normalizedWidth, normalizedHeight);
 
   return {
+    aboutPrompt: aboutPrompt.trim(),
     cells: flattenMapLayers(normalizedLayers, normalizedWidth, normalizedHeight),
     height: normalizedHeight,
+    isInstance,
     layers: normalizedLayers,
+    miniMap: miniMap.trim(),
     name: name.trim(),
     slug: slug.trim(),
     updatedAt: new Date().toISOString(),

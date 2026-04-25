@@ -22,19 +22,29 @@ import { ConfirmationDialog } from "./ConfirmationDialog";
 import { FileDropTarget } from "./FileDropTarget";
 import { Panel } from "./Panel";
 import {
+  assetListCheckerThumbClass,
+  assetListClass,
+  assetListEyebrowClass,
+  assetListMetaClass,
+  assetListMonoClass,
+  assetListRowClass,
+  assetListTitleClass,
+  assetListWideThumbClass,
   badgePillClass,
   emptyStateCardClass,
   menuItemButtonClass,
   menuSurfaceClass,
+  overflowMenuAnchorClass,
   overflowMenuButtonClass,
-  previewFrameClass,
-  selectableCardClass,
+  scrollableAssetListClass,
   textInputClass
 } from "./uiStyles";
 import type { SpriteRecord, TileRecord } from "../types";
 
 const CREATE_TILE_PATH = "/__tiles/create";
+const DUPLICATE_TILE_PATH = "/__tiles/duplicate";
 const DELETE_ASSET_PATH = "/__tiles/delete-asset";
+const IMPORT_TILE_PATH = "/__tiles/import-tile";
 const IMPORT_SPRITE_PATH = "/__tiles/import-sprite";
 
 interface TileLibraryFolderEntry {
@@ -59,7 +69,65 @@ type TileLibraryAssetMenuState =
       slug: string;
     };
 
-export function TileLibraryPanel() {
+interface TileLibraryPanelProps {
+  variant?: "default" | "sidebar";
+}
+
+interface AssetOverflowMenuProps {
+  assetName: string;
+  children: React.ReactNode;
+}
+
+function AssetOverflowMenu({ assetName, children }: AssetOverflowMenuProps) {
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const dropdownElement = dropdownRef.current;
+
+    if (!dropdownElement) {
+      return;
+    }
+
+    let isMounted = true;
+    let dropdown: { destroy: () => void } | null = null;
+
+    void import("@preline/dropdown").then(({ default: HSDropdown }) => {
+      if (!isMounted) {
+        return;
+      }
+
+      dropdown = new HSDropdown(dropdownElement as HTMLDivElement & { _floatingUI: unknown });
+    });
+
+    return () => {
+      isMounted = false;
+      dropdown?.destroy();
+    };
+  }, []);
+
+  return (
+    <div className={overflowMenuAnchorClass}>
+        <div
+        className="hs-dropdown relative inline-flex [--auto-close:true] [--gpu-acceleration:false] [--offset:8] [--placement:bottom-right] [--scope:window] [--trigger:click]"
+        ref={dropdownRef}
+      >
+        <button
+          aria-haspopup="menu"
+          aria-label={`Options for ${assetName}`}
+          className={`${overflowMenuButtonClass} hs-dropdown-toggle`}
+          type="button"
+        >
+          ⋮
+        </button>
+        <div className={`${menuSurfaceClass} hs-dropdown-menu hidden`} role="menu">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function TileLibraryPanel({ variant = "default" }: TileLibraryPanelProps) {
   const {
     activeTile,
     activeSprite,
@@ -67,6 +135,7 @@ export function TileLibraryPanel() {
     activeTileSlug,
     addTileLibraryFolder,
     getTileDraftSlots,
+    queueTileSourceImage,
     setActiveSpriteKey,
     setActiveTileSlug,
     setTileDraftSlots,
@@ -81,8 +150,12 @@ export function TileLibraryPanel() {
   } = useStudio();
   const [newTileName, setNewTileName] = useState("");
   const [tileQuery, setTileQuery] = useState("");
+  const [tileImportStatus, setTileImportStatus] = useState("");
   const [spriteImportStatus, setSpriteImportStatus] = useState("");
-  const [assetMenu, setAssetMenu] = useState<TileLibraryAssetMenuState | null>(null);
+  const [assetPendingDuplicate, setAssetPendingDuplicate] = useState<TileLibraryAssetMenuState | null>(null);
+  const [duplicateTileName, setDuplicateTileName] = useState("");
+  const [duplicateStatus, setDuplicateStatus] = useState("");
+  const [isDuplicatingTile, setDuplicatingTile] = useState(false);
   const [assetPendingDelete, setAssetPendingDelete] = useState<TileLibraryAssetMenuState | null>(null);
   const [deleteStatus, setDeleteStatus] = useState("");
   const [isDeletingAsset, setDeletingAsset] = useState(false);
@@ -90,9 +163,13 @@ export function TileLibraryPanel() {
   const [libraryPath, setLibraryPath] = useState(() => activeLibraryPath);
   const [isPending, startTransition] = useTransition();
   const deferredTileQuery = useDeferredValue(tileQuery.trim().toLowerCase());
+  const tileFileInputRef = useRef<HTMLInputElement | null>(null);
   const spriteFileInputRef = useRef<HTMLInputElement | null>(null);
+  const duplicateNameInputRef = useRef<HTMLInputElement | null>(null);
+  const isSidebar = variant === "sidebar";
 
   const normalizedNewTileName = normalizeUnderscoreName(newTileName);
+  const normalizedDuplicateTileName = normalizeUnderscoreName(duplicateTileName);
   const currentLibraryPath = normalizeTileLibraryPath(libraryPath);
   const hasSelectedLibraryFolder = Boolean(currentLibraryPath);
   const currentLibraryLayer = getTileLibraryLayer(currentLibraryPath);
@@ -199,13 +276,20 @@ export function TileLibraryPanel() {
   }, [activeLibraryPath, currentLibraryPath]);
 
   useEffect(() => {
+    setTileImportStatus("");
     setSpriteImportStatus("");
+    resetTileInput();
     resetSpriteInput();
   }, [currentLibraryPath]);
 
   useEffect(() => {
-    setAssetMenu(null);
-  }, [currentLibraryPath]);
+    if (!assetPendingDuplicate) {
+      return;
+    }
+
+    duplicateNameInputRef.current?.focus();
+    duplicateNameInputRef.current?.select();
+  }, [assetPendingDuplicate]);
 
   function navigateToLibraryPath(nextPath: string) {
     const normalizedPath = normalizeTileLibraryPath(nextPath);
@@ -222,6 +306,59 @@ export function TileLibraryPanel() {
     if (spriteFileInputRef.current) {
       spriteFileInputRef.current.value = "";
     }
+  }
+
+  function resetTileInput() {
+    if (tileFileInputRef.current) {
+      tileFileInputRef.current.value = "";
+    }
+  }
+
+  function handleTileImport(file: File) {
+    if (!currentLibraryPath) {
+      return;
+    }
+
+    setTileImportStatus(`Importing ${file.name}...`);
+
+    startTransition(() => {
+      void (async () => {
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("path", currentLibraryPath);
+
+          const response = await fetch(IMPORT_TILE_PATH, {
+            body: formData,
+            method: "POST"
+          });
+          const responseBody = (await response.json()) as Partial<TileRecord> & { error?: string };
+
+          if (!response.ok || responseBody.error) {
+            setTileImportStatus(responseBody.error ?? "Could not import tile.");
+            resetTileInput();
+            return;
+          }
+
+          const importedTile = responseBody as TileRecord;
+          queueTileSourceImage(importedTile.slug, {
+            dataUrl: URL.createObjectURL(file),
+            name: file.name,
+            sourcePath: file.name
+          });
+          upsertTile(importedTile);
+          setTileDraftSlots(importedTile.slug, normalizeSlotRecords(importedTile.slots));
+          setLibraryPath(normalizeTileLibraryPath(importedTile.path));
+          setActiveSpriteKey("");
+          setActiveTileSlug(importedTile.slug);
+          setTileImportStatus(`Imported ${importedTile.name}.`);
+          resetTileInput();
+        } catch {
+          setTileImportStatus("Could not import tile.");
+          resetTileInput();
+        }
+      })();
+    });
   }
 
   function handleSpriteImport(file: File) {
@@ -272,6 +409,7 @@ export function TileLibraryPanel() {
         // round-trip replaces the payload tree and resets local Tile Editor view state.
         const response = await fetch(CREATE_TILE_PATH, {
           body: JSON.stringify({
+            impassible: false,
             name: normalizedNewTileName,
             path: currentLibraryPath
           }),
@@ -312,10 +450,81 @@ export function TileLibraryPanel() {
   }
 
   function openAssetDeleteConfirmation(asset: TileLibraryAssetMenuState) {
-    setAssetMenu(null);
+    setAssetPendingDuplicate(null);
+    setDuplicateTileName("");
+    setDuplicatingTile(false);
+    setDuplicateStatus("");
     setDeletingAsset(false);
     setDeleteStatus("");
     setAssetPendingDelete(asset);
+  }
+
+  function openTileDuplicateConfirmation(tileRecord: TileRecord) {
+    setAssetPendingDelete(null);
+    setDeletingAsset(false);
+    setDeleteStatus("");
+    setDuplicateStatus("");
+    setDuplicatingTile(false);
+    setDuplicateTileName(`${tileRecord.name}_copy`);
+    setAssetPendingDuplicate({
+      assetType: "tile",
+      key: `tile:${tileRecord.slug}`,
+      name: tileRecord.name,
+      path: tileRecord.path,
+      slug: tileRecord.slug
+    });
+  }
+
+  function handleDuplicateTile() {
+    if (!assetPendingDuplicate || assetPendingDuplicate.assetType !== "tile" || isDuplicatingTile) {
+      return;
+    }
+
+    if (!normalizedDuplicateTileName) {
+      setDuplicateStatus("Tile name is required.");
+      return;
+    }
+
+    setDuplicatingTile(true);
+    setDuplicateStatus("");
+
+    void (async () => {
+      try {
+        const response = await fetch(DUPLICATE_TILE_PATH, {
+          body: JSON.stringify({
+            name: normalizedDuplicateTileName,
+            slug: assetPendingDuplicate.slug
+          }),
+          headers: {
+            "Content-Type": "application/json"
+          },
+          method: "POST"
+        });
+        const responseBody = (await response.json()) as Partial<TileRecord> & { error?: string };
+
+        if (!response.ok || responseBody.error) {
+          setDuplicateStatus(responseBody.error ?? "Could not duplicate tile.");
+          return;
+        }
+
+        const duplicatedTile = responseBody as TileRecord;
+        upsertTile(duplicatedTile);
+        setTileDraftSlots(
+          duplicatedTile.slug,
+          getTileDraftSlots(duplicatedTile.slug, normalizeSlotRecords(duplicatedTile.slots))
+        );
+        setLibraryPath(normalizeTileLibraryPath(duplicatedTile.path));
+        setActiveSpriteKey("");
+        setActiveTileSlug(duplicatedTile.slug);
+        setAssetPendingDuplicate(null);
+        setDuplicateTileName("");
+        setDuplicateStatus("");
+      } catch {
+        setDuplicateStatus("Could not duplicate tile.");
+      } finally {
+        setDuplicatingTile(false);
+      }
+    })();
   }
 
   function handleDeleteAsset() {
@@ -376,43 +585,46 @@ export function TileLibraryPanel() {
 
   return (
     <Panel
+      className={isSidebar ? "h-full" : ""}
       actions={
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            className={textInputClass}
-            onChange={(event) => {
-              setNewTileName(event.currentTarget.value);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && normalizedNewTileName) {
-                event.preventDefault();
-                handleCreateTile();
+        isSidebar ? undefined : (
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              className={textInputClass}
+              onChange={(event) => {
+                setNewTileName(event.currentTarget.value);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && normalizedNewTileName) {
+                  event.preventDefault();
+                  handleCreateTile();
+                }
+              }}
+              placeholder={
+                hasSelectedLibraryFolder
+                  ? `New tile name for ${formatTileLibraryPath(currentLibraryPath)}`
+                  : "Select a layer to create tiles"
               }
-            }}
-            placeholder={
-              hasSelectedLibraryFolder
-                ? `New tile name for ${formatTileLibraryPath(currentLibraryPath)}`
-                : "Select a layer to create tiles"
-            }
-            value={newTileName}
-          />
-          <button
-            className={actionButtonClass}
-            disabled={!normalizedNewTileName || !hasSelectedLibraryFolder}
-            onClick={handleCreateTile}
-            type="button"
-          >
-            Create
-          </button>
-          <button
-            className={actionButtonClass}
-            disabled={!normalizedNewTileName || !hasSelectedLibraryFolder}
-            onClick={handleCreateFolder}
-            type="button"
-          >
-            New Folder
-          </button>
-        </div>
+              value={newTileName}
+            />
+            <button
+              className={actionButtonClass}
+              disabled={!normalizedNewTileName || !hasSelectedLibraryFolder}
+              onClick={handleCreateTile}
+              type="button"
+            >
+              Create
+            </button>
+            <button
+              className={actionButtonClass}
+              disabled={!normalizedNewTileName || !hasSelectedLibraryFolder}
+              onClick={handleCreateFolder}
+              type="button"
+            >
+              New Folder
+            </button>
+          </div>
+        )
       }
       subheader={
         <div className="flex flex-wrap items-center gap-2 text-xs leading-5">
@@ -442,200 +654,90 @@ export function TileLibraryPanel() {
       }
       title="Tile Library"
     >
-      <div className="flex flex-wrap items-center gap-3">
+      {isSidebar ? (
+        <div className="flex flex-col items-stretch gap-2">
+          <input
+            className={`${textInputClass} min-w-0 w-full`}
+            onChange={(event) => {
+              setNewTileName(event.currentTarget.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && normalizedNewTileName) {
+                event.preventDefault();
+                handleCreateTile();
+              }
+            }}
+            placeholder={
+              hasSelectedLibraryFolder
+                ? `New tile name for ${formatTileLibraryPath(currentLibraryPath)}`
+                : "Select a layer to create tiles"
+            }
+            value={newTileName}
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className={`${actionButtonClass} min-w-0`}
+              disabled={!normalizedNewTileName || !hasSelectedLibraryFolder}
+              onClick={handleCreateTile}
+              type="button"
+            >
+              Create
+            </button>
+            <button
+              className={`${actionButtonClass} min-w-0`}
+              disabled={!normalizedNewTileName || !hasSelectedLibraryFolder}
+              onClick={handleCreateFolder}
+              type="button"
+            >
+              New Folder
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <div className={`flex ${isSidebar ? "flex-col items-stretch gap-2" : "flex-wrap items-center gap-3"}`}>
         <input
-          className={textInputClass}
+          className={isSidebar ? `${textInputClass} min-w-0 w-full` : textInputClass}
           onChange={(event) => {
             setTileQuery(event.currentTarget.value);
           }}
           placeholder={hasSelectedLibraryFolder ? "Filter folders and tiles" : "Filter layers"}
           value={tileQuery}
         />
-        {spriteImportStatus ? (
-          <div className="text-xs theme-text-muted">{spriteImportStatus}</div>
-        ) : null}
+        {tileImportStatus ? <div className="text-xs theme-text-muted">{tileImportStatus}</div> : null}
+        {spriteImportStatus ? <div className="text-xs theme-text-muted">{spriteImportStatus}</div> : null}
         {newTileName && newTileName !== normalizedNewTileName ? (
           <div className="text-xs theme-text-muted">
             New tile will be created as <span className="font-mono">{normalizedNewTileName}</span>
           </div>
         ) : null}
       </div>
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
-        {filteredFolderEntries.map((folderEntry) => (
-          <button
-            className={`${selectableCardClass(
-              false,
-              "theme-border-panel-quiet theme-surface-panel theme-hover-border-accent-soft theme-hover-bg-panel"
-            )} flex min-h-[4.5rem] flex-col justify-between gap-2 px-3 py-3 text-left`}
-            key={folderEntry.path}
-            onClick={() => {
-              navigateToLibraryPath(folderEntry.path);
-            }}
-            type="button"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="grid min-w-0 gap-1">
-                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
-                  Folder
-                </span>
-                <span className="truncate text-sm font-semibold theme-text-primary">{folderEntry.label}</span>
-              </div>
-              <span className={badgePillClass}>{folderEntry.assetCount}</span>
-            </div>
-          </button>
-        ))}
-        {filteredTiles.map((tileRecord) => (
-          <div className="relative" key={tileRecord.slug}>
-            <button
-              className={overflowMenuButtonClass}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setAssetMenu((currentMenu) =>
-                  currentMenu?.key === `tile:${tileRecord.slug}`
-                    ? null
-                    : {
-                        assetType: "tile",
-                        key: `tile:${tileRecord.slug}`,
-                        name: tileRecord.name,
-                        path: tileRecord.path,
-                        slug: tileRecord.slug
-                      }
-                );
+      <div className={isSidebar ? scrollableAssetListClass : `${assetListClass} md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4`}>
+        {hasSelectedLibraryFolder ? (
+          <>
+            <input
+              accept="image/png,.png"
+              className="hidden"
+              onChange={(event) => {
+                const nextFile = event.currentTarget.files?.[0];
+
+                if (nextFile) {
+                  handleTileImport(nextFile);
+                }
               }}
-              title={`Options for ${tileRecord.name}`}
-              type="button"
-            >
-              ⋮
-            </button>
-            {assetMenu?.key === `tile:${tileRecord.slug}` ? (
-              <div className={menuSurfaceClass}>
-                <button
-                  className={menuItemButtonClass}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openAssetDeleteConfirmation({
-                      assetType: "tile",
-                      key: `tile:${tileRecord.slug}`,
-                      name: tileRecord.name,
-                      path: tileRecord.path,
-                      slug: tileRecord.slug
-                    });
-                  }}
-                  type="button"
-                >
-                  Delete asset
-                </button>
-              </div>
-            ) : null}
-            <button
-              className={`${selectableCardClass(
-                tileRecord.slug === activeTileSlug,
-                "theme-border-panel-quiet theme-bg-input theme-hover-border-accent-soft theme-hover-bg-panel"
-              )} flex min-h-[4.5rem] w-full flex-col justify-between gap-2 px-3 py-3 pr-12 text-left`}
+              ref={tileFileInputRef}
+              type="file"
+            />
+            <FileDropTarget
+              className="w-full px-4 py-4 text-center"
+              disabled={isPending}
+              idleLabel={isPending ? "Importing tile..." : "Click or drop a PNG to import a tile"}
               onClick={() => {
-                setLibraryPath(normalizeTileLibraryPath(tileRecord.path));
-                setActiveSpriteKey("");
-                setActiveTileSlug(tileRecord.slug);
+                tileFileInputRef.current?.click();
               }}
-              type="button"
-            >
-              <div className="grid min-w-0 gap-2">
-                <span className="truncate text-sm font-medium theme-text-primary">{tileRecord.name}</span>
-                {tileRecord.thumbnail ? (
-                  <img
-                    alt={`${tileRecord.name} thumbnail`}
-                    className="h-4 w-20 object-contain [image-rendering:pixelated]"
-                    height={16}
-                    src={tileRecord.thumbnail}
-                    width={80}
-                  />
-                ) : null}
-              </div>
-            </button>
-          </div>
-        ))}
-        {filteredSprites.map((spriteRecord) => (
-          <div className="relative" key={`${spriteRecord.path}/${spriteRecord.filename}`}>
-            <button
-              className={overflowMenuButtonClass}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                const spriteKey = getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename);
-                setAssetMenu((currentMenu) =>
-                  currentMenu?.key === spriteKey
-                    ? null
-                    : {
-                        assetType: "sprite",
-                        filename: spriteRecord.filename,
-                        key: spriteKey,
-                        name: spriteRecord.name,
-                        path: spriteRecord.path
-                      }
-                );
-              }}
-              title={`Options for ${spriteRecord.name}`}
-              type="button"
-            >
-              ⋮
-            </button>
-            {assetMenu?.key === getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) ? (
-              <div className={menuSurfaceClass}>
-                <button
-                  className={menuItemButtonClass}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openAssetDeleteConfirmation({
-                      assetType: "sprite",
-                      filename: spriteRecord.filename,
-                      key: getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename),
-                      name: spriteRecord.name,
-                      path: spriteRecord.path
-                    });
-                  }}
-                  type="button"
-                >
-                  Delete asset
-                </button>
-              </div>
-            ) : null}
-            <button
-              className={`${selectableCardClass(
-                getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === activeSpriteKey,
-                "theme-border-panel-quiet theme-bg-input theme-hover-border-accent-soft"
-              )} flex min-h-[5.5rem] w-full items-center gap-3 px-3 py-3 pr-12 text-left theme-shadow-lift`}
-              onClick={() => {
-                setLibraryPath(normalizeTileLibraryPath(spriteRecord.path));
-                setActiveTileSlug("");
-                setActiveSpriteKey(getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename));
-              }}
-              type="button"
-            >
-              <CheckerboardFrame className={`${previewFrameClass} h-20 w-20 shrink-0 p-2`}>
-                {spriteRecord.thumbnail ? (
-                  <img
-                    alt={`${spriteRecord.name} sprite thumbnail`}
-                    className="max-h-full max-w-full object-contain"
-                    src={spriteRecord.thumbnail}
-                  />
-                ) : null}
-              </CheckerboardFrame>
-              <div className="grid min-w-0 gap-1">
-                <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
-                  Sprite
-                </span>
-                <span className="truncate text-sm font-semibold theme-text-primary">{spriteRecord.name}</span>
-                <span className="truncate text-xs font-mono theme-text-muted">{spriteRecord.filename}</span>
-                <span className="text-xs theme-text-muted">
-                  {spriteRecord.image_w}x{spriteRecord.image_h} px
-                </span>
-              </div>
-            </button>
-          </div>
-        ))}
+              onFileSelected={handleTileImport}
+            />
+          </>
+        ) : null}
         {canImportSprites ? (
           <>
             <input
@@ -662,6 +764,129 @@ export function TileLibraryPanel() {
             />
           </>
         ) : null}
+        {filteredFolderEntries.map((folderEntry) => (
+          <button
+            className={assetListRowClass(false, true)}
+            key={folderEntry.path}
+            onClick={() => {
+              navigateToLibraryPath(folderEntry.path);
+            }}
+            type="button"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className={assetListMetaClass}>
+                <span className={assetListEyebrowClass}>Folder</span>
+                <span className={assetListTitleClass}>{folderEntry.label}</span>
+              </div>
+              <span className={badgePillClass}>{folderEntry.assetCount}</span>
+            </div>
+          </button>
+        ))}
+        {filteredTiles.map((tileRecord) => (
+          <div className="relative" key={tileRecord.slug}>
+            <AssetOverflowMenu
+              assetName={tileRecord.name}
+            >
+              <button
+                className={`${menuItemButtonClass} hs-dropdown-close`}
+                onClick={() => {
+                  openTileDuplicateConfirmation(tileRecord);
+                }}
+                type="button"
+              >
+                Duplicate
+              </button>
+              <button
+                className={`${menuItemButtonClass} hs-dropdown-close`}
+                onClick={() => {
+                  openAssetDeleteConfirmation({
+                    assetType: "tile",
+                    key: `tile:${tileRecord.slug}`,
+                    name: tileRecord.name,
+                    path: tileRecord.path,
+                    slug: tileRecord.slug
+                  });
+                }}
+                type="button"
+              >
+                Delete asset
+              </button>
+            </AssetOverflowMenu>
+            <button
+              className={`${assetListRowClass(tileRecord.slug === activeTileSlug)} pr-10`}
+              onClick={() => {
+                setLibraryPath(normalizeTileLibraryPath(tileRecord.path));
+                setActiveSpriteKey("");
+                setActiveTileSlug(tileRecord.slug);
+              }}
+              type="button"
+            >
+              {tileRecord.thumbnail ? (
+                <img
+                  alt={`${tileRecord.name} thumbnail`}
+                  className={`${assetListWideThumbClass} object-contain [image-rendering:pixelated]`}
+                  height={16}
+                  src={tileRecord.thumbnail}
+                  width={64}
+                />
+              ) : (
+                <div className={assetListWideThumbClass} />
+              )}
+              <div className={assetListMetaClass}>
+                <span className={assetListTitleClass}>{tileRecord.name}</span>
+                <span className={assetListMonoClass}>{tileRecord.slug}</span>
+              </div>
+            </button>
+          </div>
+        ))}
+        {filteredSprites.map((spriteRecord) => (
+          <div className="relative" key={`${spriteRecord.path}/${spriteRecord.filename}`}>
+            <AssetOverflowMenu
+              assetName={spriteRecord.name}
+            >
+              <button
+                className={`${menuItemButtonClass} hs-dropdown-close`}
+                onClick={() => {
+                  openAssetDeleteConfirmation({
+                    assetType: "sprite",
+                    filename: spriteRecord.filename,
+                    key: getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename),
+                    name: spriteRecord.name,
+                    path: spriteRecord.path
+                  });
+                }}
+                type="button"
+              >
+                Delete asset
+              </button>
+            </AssetOverflowMenu>
+            <button
+              className={`${assetListRowClass(
+                getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename) === activeSpriteKey
+              )} pr-10`}
+              onClick={() => {
+                setLibraryPath(normalizeTileLibraryPath(spriteRecord.path));
+                setActiveTileSlug("");
+                setActiveSpriteKey(getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename));
+              }}
+              type="button"
+            >
+              <CheckerboardFrame className={assetListCheckerThumbClass}>
+                {spriteRecord.thumbnail ? (
+                  <img
+                    alt={`${spriteRecord.name} sprite thumbnail`}
+                    className="max-h-full max-w-full object-contain"
+                    src={spriteRecord.thumbnail}
+                  />
+                ) : null}
+              </CheckerboardFrame>
+              <div className={assetListMetaClass}>
+                <span className={assetListTitleClass}>{spriteRecord.name}</span>
+                <span className={assetListMonoClass}>{spriteRecord.filename}</span>
+              </div>
+            </button>
+          </div>
+        ))}
         {!filteredFolderEntries.length && !filteredTiles.length && !filteredSprites.length ? (
           <div className={emptyStateCardClass}>
             {hasSelectedLibraryFolder
@@ -670,6 +895,65 @@ export function TileLibraryPanel() {
           </div>
         ) : null}
       </div>
+      {assetPendingDuplicate?.assetType === "tile" ? (
+        <ConfirmationDialog
+          actions={
+            <>
+              <button
+                className="min-h-11 border theme-border-panel theme-bg-panel px-4 py-2 font-semibold theme-text-muted transition theme-hover-text-primary"
+                disabled={isDuplicatingTile}
+                onClick={() => {
+                  setAssetPendingDuplicate(null);
+                  setDuplicateTileName("");
+                  setDuplicatingTile(false);
+                  setDuplicateStatus("");
+                }}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={actionButtonClass}
+                disabled={isDuplicatingTile || !normalizedDuplicateTileName}
+                onClick={handleDuplicateTile}
+                type="button"
+              >
+                {isDuplicatingTile ? "Duplicating..." : "Duplicate"}
+              </button>
+            </>
+          }
+          description={`Create a copy of ${assetPendingDuplicate.name} with a new tile name.`}
+          key={`duplicate:${assetPendingDuplicate.key}`}
+          title="Duplicate tile"
+        >
+          <div className="grid gap-3">
+            <input
+              className={textInputClass}
+              onChange={(event) => {
+                setDuplicateTileName(event.currentTarget.value);
+                if (duplicateStatus) {
+                  setDuplicateStatus("");
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && normalizedDuplicateTileName && !isDuplicatingTile) {
+                  event.preventDefault();
+                  handleDuplicateTile();
+                }
+              }}
+              placeholder="New tile name"
+              ref={duplicateNameInputRef}
+              value={duplicateTileName}
+            />
+            {normalizedDuplicateTileName && normalizedDuplicateTileName !== duplicateTileName ? (
+              <div className="text-xs theme-text-muted">
+                Tile will be saved as <span className={assetListMonoClass}>{normalizedDuplicateTileName}</span>.
+              </div>
+            ) : null}
+            {duplicateStatus ? <div className="text-sm theme-text-muted">{duplicateStatus}</div> : null}
+          </div>
+        </ConfirmationDialog>
+      ) : null}
       {assetPendingDelete ? (
         <ConfirmationDialog
           actions={

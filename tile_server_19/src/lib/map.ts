@@ -22,6 +22,26 @@ const MAP_MIN_GRID_SIZE = 1;
 const MAP_MAX_GRID_SIZE = 200;
 const DEFAULT_MAP_COLOR = "#ffffff";
 
+function cloneMapLayerCell(cell: MapLayerCell): MapLayerCell {
+  if (!cell) {
+    return null;
+  }
+
+  if (cell.kind === "sprite") {
+    return {
+      kind: "sprite",
+      spriteKey: cell.spriteKey
+    };
+  }
+
+  return {
+    kind: "tile",
+    options: { ...cell.options },
+    slotNum: cell.slotNum,
+    tileSlug: cell.tileSlug
+  };
+}
+
 function normalizeHexColor(value: string | undefined) {
   const trimmedValue = value?.trim() ?? "";
 
@@ -198,6 +218,52 @@ export function createEmptyMapCells(
 
 export function createEmptyMapLayers(width = MAP_DEFAULT_GRID_SIZE, height = MAP_DEFAULT_GRID_SIZE): MapLayerStack {
   return Array.from({ length: MAP_LAYER_COUNT }, () => createEmptyMapCells(width, height));
+}
+
+export function resizeMapLayersExpandingEdges(
+  layers: Array<Array<Array<MapLayerCell | string | null>>> | undefined,
+  currentWidth: number,
+  currentHeight: number,
+  nextWidth: number,
+  nextHeight: number
+): MapLayerStack {
+  const normalizedCurrentWidth = normalizeMapDimension(currentWidth);
+  const normalizedCurrentHeight = normalizeMapDimension(currentHeight);
+  const normalizedNextWidth = normalizeMapDimension(nextWidth);
+  const normalizedNextHeight = normalizeMapDimension(nextHeight);
+
+  if (normalizedNextWidth < normalizedCurrentWidth || normalizedNextHeight < normalizedCurrentHeight) {
+    throw new Error("Reducing map size is not supported yet.");
+  }
+
+  const normalizedLayers = normalizeMapLayers(
+    layers,
+    normalizedCurrentWidth,
+    normalizedCurrentHeight
+  );
+
+  return normalizedLayers.map((layerCells) => {
+    const expandedRows = layerCells.map((row) => {
+      const safeRow = row.slice(0, normalizedCurrentWidth);
+      const fillCell = safeRow.at(-1) ?? null;
+
+      while (safeRow.length < normalizedNextWidth) {
+        safeRow.push(cloneMapLayerCell(fillCell));
+      }
+
+      return safeRow.map((cell) => cloneMapLayerCell(cell));
+    });
+
+    const expandedLastRow =
+      expandedRows.at(-1)?.map((cell) => cloneMapLayerCell(cell)) ??
+      Array.from({ length: normalizedNextWidth }, () => null);
+
+    while (expandedRows.length < normalizedNextHeight) {
+      expandedRows.push(expandedLastRow.map((cell) => cloneMapLayerCell(cell)));
+    }
+
+    return expandedRows;
+  });
 }
 
 export function getMapDimensions(cells: Array<Array<MapLayerCell | string | null>> | undefined) {

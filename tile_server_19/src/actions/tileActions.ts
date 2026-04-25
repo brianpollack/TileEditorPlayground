@@ -11,11 +11,12 @@ import { normalizeUnderscoreName } from "../lib/naming";
 import { normalizeTileLibraryPath } from "../lib/tileLibrary";
 import type { SlotRecord } from "../types";
 
-export async function createTileAction(name: string, tilePath: string) {
-  return createTileRecord(name, tilePath);
+export async function createTileAction(name: string, tilePath: string, impassible = false) {
+  return createTileRecord(name, tilePath, impassible);
 }
 
 export async function saveTileAction(input: {
+  impassible: boolean;
   slots: Array<SlotRecord | null>;
   slug: string;
   source: string;

@@ -1860,6 +1860,7 @@ export function PaintMode({ session }: PaintModeProps) {
           setTileDraftSlots(session.tileSlug, nextDraftSlots);
 
           const savedTile = await saveTileAction({
+            impassible: tileRecord.impassible,
             slots: nextDraftSlots,
             slug: session.tileSlug,
             source: tileRecord.source

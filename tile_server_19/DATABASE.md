@@ -116,11 +116,33 @@ That means the table is acting as both:
   - `tile_w`, `tile_h`
     Sprite footprint expressed in tile units rather than raw pixels.
     Used by map placement and brush-preview logic to understand how many tiles a sprite covers.
+    These values are recalculated from the mount point and image dimensions whenever a sprite is saved or reloaded from the database.
 
   - `mount_x`, `mount_y`
     Sprite anchor point in source-image pixel coordinates.
     Used to align the sprite correctly to a map tile when painting or previewing.
     In the map, the selected grid cell acts as the sprite's anchor tile. The renderer takes the center of that tile, then subtracts `mount_x` and `mount_y` from the sprite image position to decide exactly where the sprite image should land across one or more tiles. This is what lets the "feet" or intended base of a tree, character, or object stay attached to the chosen tile while the rest of the sprite can extend above, below, left, or right of it.
+
+  - `bounding_x`, `bounding_y`, `bounding_w`, `bounding_h`
+    Tight sprite-content bounding box expressed relative to the mount point.
+    `bounding_x` and `bounding_y` are offsets from the mount point, so they are often negative when the sprite extends left/up from the mount.
+    `bounding_w` and `bounding_h` are the width and height of the trimmed box in source-image pixels.
+    The box is derived by trimming edge columns and edge rows whose average alpha is at most 10% opaque, which is equivalent to treating them as at least 90% transparent.
+    After trimming, the left/top/right/bottom edges are snapped to tile-space boundaries, and the stored width/height are derived from those snapped edges so the metadata stays aligned to the sprite's tile grid on all sides.
+    These values are recalculated from `image_data` whenever a sprite is saved and are also backfilled during sprite reads if older metadata is missing or stale.
+
+  - `on_activate`
+    Sprite activation script or command text.
+    Stored as text in `sprite_metadata`.
+    Defaults to an empty string when missing.
+
+  - `is_locked`
+    Boolean flag indicating the sprite should be treated as locked for editing or interaction workflows.
+    Defaults to `false` when missing.
+
+  - `casts_shadow`
+    Boolean flag indicating whether the sprite should be considered a shadow-casting object.
+    Defaults to `true` when missing.
 
   - `offset_x`, `offset_y`
     Extra placement offsets in pixels.
@@ -138,7 +160,7 @@ That means the table is acting as both:
     Numeric id reserved for linking a sprite to an item/system id.
     Useful when sprite assets need stable integration points beyond filename or display name.
 
-  In short, `sprite_metadata` stores the sprite's editable placement, sizing, and semantic behavior fields, while the actual sprite PNG bytes live in `image_data`.
+  In short, `sprite_metadata` stores the sprite's editable placement, sizing, derived footprint/bounds metadata, and semantic behavior fields, while the actual sprite PNG bytes live in `image_data`.
 
 - `created_at timestamptz not null default now()`
   Row creation timestamp.
@@ -190,6 +212,13 @@ This table stores one row per map and keeps the top-level properties separated f
 - `deleted boolean not null default false`
   Soft-delete flag for maps.
   Active map queries should ignore rows where `deleted = true`.
+
+- `mini_map bytea null`
+  PNG image preview for the full published map.
+  Current save behavior renders the composed map with gridlines disabled, then scales it to fit within `512x512` while preserving aspect ratio and using high-quality image smoothing before storing the bytes here.
+
+- `is_instance boolean not null default false`
+  Boolean flag reserved for instance maps.
 
 - `created_at timestamptz not null default now()`
   Row creation timestamp.

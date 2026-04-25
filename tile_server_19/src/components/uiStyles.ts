@@ -36,6 +36,7 @@ export const sectionCardClass = "grid gap-2 border theme-border-panel-soft theme
 export const toolSectionCardClass = "grid gap-3 border theme-border-panel-soft theme-bg-input-soft p-3";
 
 export const previewCanvasClass = "block border theme-border-panel [image-rendering:pixelated]";
+export const smoothPreviewCanvasClass = "block border theme-border-panel";
 
 export const iconButtonClass =
   "grid h-6 w-6 place-items-center border theme-border-panel theme-text-muted transition theme-hover-border-accent theme-hover-text-accent";
@@ -56,13 +57,15 @@ export const floatingPanelSurfaceClass =
   "fixed z-[80] w-[28rem] border theme-border-panel theme-surface-floating theme-shadow-modal";
 
 export const menuSurfaceClass =
-  "absolute top-10 right-2 z-20 min-w-36 border theme-border-panel theme-surface-menu theme-shadow-lift";
+  "z-[90] min-w-36 border theme-border-panel theme-surface-menu theme-shadow-lift";
 
 export const menuItemButtonClass =
   "block w-full px-3 py-2 text-left text-sm font-semibold theme-text-primary transition theme-hover-bg-input";
 
+export const overflowMenuAnchorClass = "absolute top-2 right-2 z-30";
+
 export const overflowMenuButtonClass =
-  "absolute top-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded-full border theme-border-panel theme-bg-input text-sm font-bold theme-text-muted transition theme-hover-border-accent-soft theme-hover-text-primary";
+  "inline-flex h-7 w-7 items-center justify-center rounded-full border theme-border-panel theme-bg-input text-sm font-bold theme-text-muted transition theme-hover-border-accent-soft theme-hover-text-primary";
 
 export const badgePillClass =
   "inline-flex min-w-7 shrink-0 items-center justify-center rounded-full border theme-border-panel theme-bg-input px-2 py-0.5 text-xs font-bold theme-text-muted";
@@ -71,6 +74,30 @@ export const previewFrameClass = "border theme-border-panel theme-bg-input";
 
 export const emptyStateCardClass =
   "border border-dashed theme-border-panel px-4 py-4 text-center text-sm theme-text-muted";
+
+export const assetListClass = "asset-list";
+
+export const scrollableAssetListClass = "asset-list asset-list--scroll";
+
+export const assetListEyebrowClass = "asset-list__eyebrow";
+
+export const assetListMetaClass = "asset-list__meta";
+
+export const assetListTitleClass = "asset-list__title";
+
+export const assetListSubtitleClass = "asset-list__subtitle";
+
+export const assetListMonoClass = "asset-list__subtitle asset-list__mono";
+
+export const assetListThumbClass = "asset-list__thumb";
+
+export const assetListWideThumbClass = "asset-list__thumb asset-list__thumb--wide";
+
+export const assetListCheckerThumbClass = "asset-list__thumb asset-list__thumb--checker";
+
+export const assetListActionButtonClass = "asset-list__action";
+
+export const compactBrushEffectsClass = "brush-palette-effects brush-palette-effects--compact grid gap-1 sm:grid-cols-2";
 
 export const darkCanvasClass = "theme-bg-canvas [image-rendering:pixelated]";
 
@@ -122,6 +149,29 @@ export function visibilityOptionButtonClass(active: boolean) {
   );
 }
 
+export function panelTabButtonClass(active: boolean) {
+  return cx(
+    "panel-tab",
+    active
+      ? "panel-tab--active"
+      : ""
+  );
+}
+
+export const gridVisibilitySwitchClass = "inline-flex cursor-pointer items-center gap-3 select-none";
+
+export const gridVisibilitySwitchInputClass = "peer sr-only";
+
+export const gridVisibilitySwitchTrackClass =
+  "relative h-5 w-9 rounded-full bg-[color-mix(in_srgb,var(--panel-header)_88%,white)] transition-colors after:absolute after:start-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:border after:border-white/80 after:bg-white after:shadow-[0_1px_2px_rgba(15,23,42,0.22)] after:transition-transform after:content-[''] peer-focus-visible:ring-4 peer-focus-visible:ring-[color-mix(in_srgb,var(--accent)_20%,transparent)] peer-checked:bg-[var(--accent)] peer-checked:after:translate-x-full";
+
+export function gridVisibilitySwitchLabelClass(active: boolean) {
+  return cx(
+    "text-sm font-medium transition-colors",
+    active ? "theme-text-primary" : "theme-text-muted"
+  );
+}
+
 export function selectableCardClass(
   active: boolean,
   inactiveClass = "theme-border-panel-quiet theme-bg-input theme-hover-border-accent-soft theme-hover-bg-panel"
@@ -131,5 +181,13 @@ export function selectableCardClass(
     active
       ? "theme-border-accent theme-bg-panel theme-ring-inset-accent"
       : inactiveClass
+  );
+}
+
+export function assetListRowClass(active: boolean, stacked = false) {
+  return cx(
+    "asset-list__row",
+    active ? "asset-list__row--active" : "theme-border-panel-quiet",
+    stacked && "asset-list__row--stacked"
   );
 }

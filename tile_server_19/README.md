@@ -106,6 +106,81 @@ Clipboard entries are `ClipboardSlotRecord | null` in a fixed-length array of 10
 - `image`: PNG data URL
 - `createdAt`: ISO timestamp
 
+## TILE SPACE
+
+Sprite `tile_w` and `tile_h` are based on tile footprint around the mount point, not on raw image size and not on non-transparent pixel scans.
+
+This is the rule:
+
+- the sprite mount point is anchored to the center of the current tile
+- with a `128x128` tile, that center is `64` pixels from each edge
+- we place the full sprite image around that center point
+- we count how many extra tiles the sprite extends into on the left, right, top, and bottom
+- the center tile always counts as `1`
+
+The formulas are:
+
+- `tile_w = coveredTilesLeft + 1 + coveredTilesRight`
+- `tile_h = coveredTilesUp + 1 + coveredTilesDown`
+
+The shared implementation lives in `src/lib/sprites.ts` as `getSpriteTileFootprint(...)`. Sprite save recalculates `tile_w` and `tile_h` from that helper every time a sprite is saved.
+
+Example: width footprint
+
+- `image_w = 252`
+- `mount_x = 135`
+- `TILE_SIZE = 128`
+- center of the current tile is `64` pixels from the left edge
+- the sprite reaches `135` pixels left from the mount point
+- `135 - 64 = 71`, so it extends into tile `-1`
+- the remaining width to the right of the mount is `252 - 135 = 117`
+- `117 - 64 = 53`, so it extends into tile `+1`
+- total width is `3` tiles: left neighbor, center tile, right neighbor
+
+Example: height footprint
+
+- `image_h = 154`
+- `mount_y = 90`
+- `TILE_SIZE = 128`
+- center of the current tile is `64` pixels from the top edge
+- the sprite reaches `90` pixels upward from the mount point
+- `90 - 64 = 26`, so it extends into the tile above
+- the remaining height below the mount is `154 - 90 = 64`
+- that fits exactly in the lower half of the center tile
+- total height is `2` tiles: upper neighbor plus center tile
+
+Important:
+
+- `tile_w` and `tile_h` describe how much tile space the sprite occupies when placed on the map
+- they are intentionally mount-sensitive, so changing `mount_x` or `mount_y` can change the saved tile footprint even when the PNG dimensions stay the same
+
+Bounding box rule:
+
+- sprites also store `bounding_x`, `bounding_y`, `bounding_w`, and `bounding_h`
+- these values are stored relative to the mount point, not as absolute image coordinates
+- because of that, `bounding_x` and `bounding_y` are often negative
+- the bounding box is trimmed from the outer edges by skipping columns and rows whose average alpha is at most 10% opaque
+- after trimming, the left, top, right, and bottom edges are all snapped to tile-space boundaries
+- `bounding_w` and `bounding_h` are then derived from those snapped right/bottom edges minus the snapped left/top edges
+- this gives a tighter content box around the main sprite mass without requiring every edge pixel to be fully opaque
+
+Bounding box example:
+
+- if the sprite content starts `18` pixels from the left edge of the image and `mount_x = 135`
+- then `bounding_x = 18 - 135 = -117`
+- if the visible content starts `12` pixels from the top edge and `mount_y = 90`
+- then `bounding_y = 12 - 90 = -78`
+- `bounding_w` and `bounding_h` remain positive pixel sizes of that trimmed box
+
+Persistence note:
+
+- sprite bounds are persisted in `map_tiles.sprite_metadata`
+- the server recalculates them on save from the sprite PNG bytes
+- sprite reads also backfill them if older database rows are missing the new fields or have stale values
+- the sprite editor draws the current bounds as a light blue overlay so mount changes and sprite reloads stay visually aligned with the saved metadata
+- sprite metadata also now includes `on_activate` text plus `is_locked` and `casts_shadow` booleans
+- default sprite metadata values are `on_activate = ""`, `is_locked = false`, and `casts_shadow = true`
+
 ## Persistence Model
 
 There are three persistence layers:

@@ -53,6 +53,467 @@
 }
 
 @layer components {
+  .navbar {
+    display: flex;
+    width: 100%;
+    min-height: 100vh;
+    flex-direction: column;
+    gap: 0.25rem;
+    overflow-y: auto;
+    background-color: var(--brand);
+    color: var(--panel);
+    border-right: 1px solid color-mix(in srgb, white 8%, transparent);
+    transition: width 180ms ease;
+  }
+
+  .navbar--expanded {
+    width: 13.5rem;
+  }
+
+  .navbar--collapsed {
+    width: 3.5rem;
+  }
+
+  .navbar--collapsed .navbar__section,
+  .navbar--collapsed .navbar__item-row,
+  .navbar--collapsed .navbar__item {
+    width: 100%;
+  }
+
+  .navbar--collapsed .navbar__item {
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0.5rem;
+  }
+
+  .navbar--collapsed .navbar__count {
+    display: none;
+  }
+
+  .navbar__brand {
+    font-family: var(--font-serif);
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1;
+    color: white;
+  }
+
+  .navbar__header {
+    display: flex;
+    min-height: 3rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.5rem 0 0.75rem;
+  }
+
+  .navbar__header--collapsed {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .navbar__toggle {
+    display: inline-flex;
+    min-height: 2rem;
+    min-width: 2rem;
+    align-items: center;
+    justify-content: center;
+    background-color: transparent;
+    color: white;
+    transition: background-color 160ms ease;
+  }
+
+  .navbar__toggle:hover {
+    background-color: color-mix(in srgb, white 10%, transparent);
+  }
+
+  .navbar__section {
+    display: grid;
+    gap: 0.125rem;
+    padding: 0 0.25rem;
+  }
+
+  .navbar__section-label {
+    padding: 0.35rem 0.5rem 0.25rem;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, white 48%, transparent);
+  }
+
+  .navbar__item-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0.125rem;
+  }
+
+  .navbar__item {
+    display: inline-flex;
+    width: 100%;
+    min-height: 2.5rem;
+    align-items: center;
+    gap: 0.625rem;
+    background-color: transparent;
+    padding: 0.4rem 0.5rem;
+    color: white;
+    text-align: left;
+    transition: background-color 160ms ease;
+  }
+
+  .navbar__item:hover {
+    background-color: color-mix(in srgb, white 8%, transparent);
+  }
+
+  .navbar__item:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .navbar__item--active {
+    background-color: color-mix(in srgb, white 12%, transparent);
+  }
+
+  .navbar__item-badge {
+    display: inline-flex;
+    min-height: 1.75rem;
+    min-width: 1.75rem;
+    align-items: center;
+    justify-content: center;
+    color: white;
+  }
+
+  .navbar__item-badge--icon {
+    opacity: 0.92;
+  }
+
+  .navbar__item-title {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.86rem;
+    font-weight: 500;
+    color: white;
+  }
+
+  .navbar__item-description {
+    display: block;
+    margin-top: 0.05rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.69rem;
+    color: color-mix(in srgb, white 50%, transparent);
+  }
+
+  .navbar__item-close {
+    display: inline-flex;
+    min-height: 2.5rem;
+    min-width: 2rem;
+    align-items: center;
+    justify-content: center;
+    background-color: transparent;
+    color: color-mix(in srgb, white 58%, transparent);
+    transition: background-color 160ms ease;
+  }
+
+  .navbar__item-close:hover {
+    background-color: color-mix(in srgb, white 8%, transparent);
+    color: white;
+  }
+
+  .navbar__count {
+    margin-left: auto;
+    display: inline-flex;
+    min-width: 1.1rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background-color: var(--accent);
+    padding: 0.05rem 0.3rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    color: var(--panel);
+  }
+
+  .navbar__clipboard {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem 0.5rem;
+  }
+
+  .navbar__clipboard-description {
+    margin-top: 0.1rem;
+    font-size: 0.68rem;
+    line-height: 1.35;
+    color: color-mix(in srgb, white 50%, transparent);
+  }
+
+  .navbar__clipboard-clear {
+    display: inline-flex;
+    min-height: 1.1rem;
+    min-width: 1.1rem;
+    align-items: center;
+    justify-content: center;
+    color: color-mix(in srgb, white 68%, transparent);
+  }
+
+  .navbar__clipboard-clear:hover {
+    color: white;
+  }
+
+  .navbar__clipboard-slot {
+    background-color: color-mix(in srgb, white 4%, transparent);
+    transition: background-color 160ms ease;
+  }
+
+  .navbar__clipboard-slot:hover {
+    background-color: color-mix(in srgb, white 8%, transparent);
+  }
+
+  .navbar__clipboard-slot--selected {
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+
+  .navbar__clipboard-status {
+    font-size: 0.66rem;
+    line-height: 1.35;
+    color: color-mix(in srgb, white 46%, transparent);
+  }
+
+  .asset-list {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .asset-list--scroll {
+    overflow-y: auto;
+    padding-right: 0.25rem;
+  }
+
+  .asset-list__row {
+    display: flex;
+    width: 100%;
+    min-height: 3.25rem;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+    background-color: transparent;
+    padding: 0.5rem;
+    text-align: left;
+    transition:
+      background-color 160ms ease,
+      border-color 160ms ease;
+  }
+
+  .asset-list__row:hover {
+    background-color: var(--panel);
+  }
+
+  .asset-list__row--active {
+    border-color: var(--accent);
+    background-color: var(--accent-surface);
+  }
+
+  .asset-list__row--stacked {
+    min-height: 3rem;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 0.25rem;
+  }
+
+  .asset-list__eyebrow {
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+
+  .asset-list__meta {
+    display: grid;
+    min-width: 0;
+    gap: 0.1rem;
+  }
+
+  .asset-list__title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .asset-list__subtitle {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+  }
+
+  .asset-list__mono {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+  }
+
+  .asset-list__thumb {
+    display: inline-flex;
+    height: 2.5rem;
+    width: 2.5rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .asset-list__thumb--wide {
+    width: 4rem;
+    height: 1.25rem;
+  }
+
+  .asset-list__thumb--checker {
+    border: 0;
+    padding: 0.25rem;
+  }
+
+  .asset-list__action {
+    display: inline-flex;
+    height: 1.75rem;
+    width: 1.75rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--line);
+    background-color: color-mix(in srgb, var(--panel) 92%, transparent);
+    color: var(--ink-soft);
+    transition:
+      border-color 160ms ease,
+      color 160ms ease,
+      background-color 160ms ease;
+  }
+
+  .asset-list__action:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background-color: var(--panel);
+  }
+
+  .brush-palette-effects.brush-palette-effects--compact > label {
+    min-height: 1.9rem;
+    gap: 0.5rem;
+    border: 0;
+    background-color: transparent;
+    padding: 0.2rem 0;
+    font-size: 0.78rem;
+  }
+
+  .brush-palette-effects.brush-palette-effects--compact > label > input[type="checkbox"] {
+    height: 0.9rem;
+    width: 0.9rem;
+  }
+
+  .brush-palette-effects.brush-palette-effects--compact > label > input[type="color"] {
+    height: 1.5rem;
+    width: 2.3rem;
+    border: 0;
+    padding: 0;
+  }
+
+  .panel-tabs {
+    display: flex;
+    align-items: end;
+    gap: 0.25rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+    padding-bottom: 0.35rem;
+  }
+
+  .panel-tab {
+    position: relative;
+    display: inline-flex;
+    min-height: 2.2rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    background-color: transparent;
+    padding: 0.45rem 0.85rem 0.55rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--ink-soft);
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      border-color 160ms ease;
+  }
+
+  .panel-tab:hover {
+    background-color: color-mix(in srgb, var(--panel) 72%, transparent);
+    color: var(--ink);
+  }
+
+  .panel-tab--active {
+    border-color: color-mix(in srgb, var(--line) 88%, transparent);
+    background-color: var(--panel);
+    color: var(--ink);
+    box-shadow: inset 0 2px 0 0 var(--accent);
+  }
+
+  .personality-range {
+    width: 100%;
+    min-width: 0;
+    appearance: none;
+    background: transparent;
+  }
+
+  .personality-range:focus {
+    outline: none;
+  }
+
+  .personality-range::-webkit-slider-runnable-track {
+    height: 0.45rem;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent) 62%, white) 0%,
+      color-mix(in srgb, var(--accent) 90%, var(--brand)) 100%
+    );
+  }
+
+  .personality-range::-webkit-slider-thumb {
+    appearance: none;
+    width: 1rem;
+    height: 1rem;
+    margin-top: -0.275rem;
+    border: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+    border-radius: 999px;
+    background: var(--panel);
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--overlay) 22%, transparent);
+  }
+
+  .personality-range::-moz-range-track {
+    height: 0.45rem;
+    border: 0;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent) 62%, white) 0%,
+      color-mix(in srgb, var(--accent) 90%, var(--brand)) 100%
+    );
+  }
+
+  .personality-range::-moz-range-thumb {
+    width: 1rem;
+    height: 1rem;
+    border: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
+    border-radius: 999px;
+    background: var(--panel);
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--overlay) 22%, transparent);
+  }
+
   .theme-text-primary { color: var(--ink); }
   .theme-text-muted { color: var(--ink-soft); }
   .theme-text-subtle { color: var(--ink-subtle); }

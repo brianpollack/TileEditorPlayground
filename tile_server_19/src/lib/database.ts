@@ -10,6 +10,8 @@ const ENV_PATH = path.join(WORKSPACE_ROOT, ".env");
 const DATABASE_TABLE_NAME = "map_tiles";
 const MAPS_TABLE_NAME = "map_maps";
 const MAP_ASSETS_TABLE_NAME = "map_map_assets";
+const PERSONALITIES_TABLE_NAME = "personalities";
+const PERSONALITY_EVENTS_TABLE_NAME = "personality_events";
 
 let cachedConnectionString: string | null | undefined;
 let databaseInstance: Knex | null = null;
@@ -133,6 +135,7 @@ export async function ensureDatabaseSchema(db: Knex) {
       table.text("asset_key").notNullable().unique();
       table.text("asset_name").notNullable();
       table.text("asset_type").notNullable();
+      table.boolean("impassible").notNullable().defaultTo(true);
       table.boolean("deleted").notNullable().defaultTo(false);
       table.text("sub_folder").notNullable();
       table.text("asset_slug");
@@ -154,6 +157,15 @@ export async function ensureDatabaseSchema(db: Knex) {
     });
   }
 
+  const hasImpassibleColumn = await db.schema.hasColumn(DATABASE_TABLE_NAME, "impassible");
+
+  if (!hasImpassibleColumn) {
+    await db.schema.alterTable(DATABASE_TABLE_NAME, (table) => {
+      table.boolean("impassible").defaultTo(true);
+    });
+    await db(DATABASE_TABLE_NAME).whereNull("impassible").update({ impassible: true });
+  }
+
   await db.raw(
     "create index if not exists map_tiles_asset_type_folder_name_idx on map_tiles (asset_type, sub_folder, asset_name)"
   );
@@ -171,9 +183,12 @@ export async function ensureDatabaseSchema(db: Knex) {
       table.uuid("id").primary();
       table.text("slug").notNullable().unique();
       table.text("name").notNullable();
+      table.text("about_prompt");
       table.integer("width").notNullable();
       table.integer("height").notNullable();
       table.boolean("deleted").notNullable().defaultTo(false);
+      table.binary("mini_map");
+      table.boolean("is_instance").notNullable().defaultTo(false);
       table.timestamp("created_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
       table.timestamp("updated_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
     });
@@ -184,6 +199,30 @@ export async function ensureDatabaseSchema(db: Knex) {
   if (!hasMapDeletedColumn) {
     await db.schema.alterTable(MAPS_TABLE_NAME, (table) => {
       table.boolean("deleted").notNullable().defaultTo(false);
+    });
+  }
+
+  const hasMapAboutPromptColumn = await db.schema.hasColumn(MAPS_TABLE_NAME, "about_prompt");
+
+  if (!hasMapAboutPromptColumn) {
+    await db.schema.alterTable(MAPS_TABLE_NAME, (table) => {
+      table.text("about_prompt");
+    });
+  }
+
+  const hasMapMiniMapColumn = await db.schema.hasColumn(MAPS_TABLE_NAME, "mini_map");
+
+  if (!hasMapMiniMapColumn) {
+    await db.schema.alterTable(MAPS_TABLE_NAME, (table) => {
+      table.binary("mini_map");
+    });
+  }
+
+  const hasMapIsInstanceColumn = await db.schema.hasColumn(MAPS_TABLE_NAME, "is_instance");
+
+  if (!hasMapIsInstanceColumn) {
+    await db.schema.alterTable(MAPS_TABLE_NAME, (table) => {
+      table.boolean("is_instance").notNullable().defaultTo(false);
     });
   }
 
@@ -217,6 +256,127 @@ export async function ensureDatabaseSchema(db: Knex) {
     });
   }
 
+  const hasPersonalitiesTable = await db.schema.hasTable(PERSONALITIES_TABLE_NAME);
+
+  if (!hasPersonalitiesTable) {
+    await db.schema.createTable(PERSONALITIES_TABLE_NAME, (table) => {
+      table.text("character_slug").primary();
+      table.text("voice_id");
+      table.text("chat_provider");
+      table.text("chat_model");
+      table.integer("base_hp").notNullable().defaultTo(100);
+      table.integer("gold").notNullable().defaultTo(0);
+      table.text("name").notNullable();
+      table.text("role");
+      table.text("titles");
+      table.text("gender").notNullable().defaultTo("NB");
+      table.integer("age");
+      table.integer("reputation").notNullable().defaultTo(50);
+      table.text("temperament");
+      table.text("emotional_range");
+      table.text("speech_pattern");
+      table.integer("aggression").notNullable().defaultTo(50);
+      table.integer("altruism").notNullable().defaultTo(50);
+      table.integer("honesty").notNullable().defaultTo(50);
+      table.integer("courage").notNullable().defaultTo(50);
+      table.integer("impulsiveness").notNullable().defaultTo(50);
+      table.integer("optimism").notNullable().defaultTo(50);
+      table.integer("sociability").notNullable().defaultTo(50);
+      table.integer("loyalty").notNullable().defaultTo(50);
+      table.integer("goodness").notNullable().defaultTo(50);
+      table.text("goals");
+      table.text("backstory").defaultTo("");
+      table.text("hidden_desires");
+      table.text("fears");
+      table.text("family_description");
+      table.text("areas_of_expertise");
+      table.text("specialties");
+      table.text("custom_profile_pic");
+      table.text("secrets_you_know").defaultTo("");
+      table.text("things_you_can_share").defaultTo("");
+      table.text("smalltalk_topics_enjoyed").defaultTo("");
+      table.text("other_world_knowledge").defaultTo("");
+      table.text("physical_description");
+      table.text("distinguishing_feature");
+      table.text("speech_style");
+      table.text("accent");
+      table.text("mannerisms");
+      table.text("clothing_style");
+      table.text("summary");
+      table.text("llm_prompt_base");
+      table.timestamp("inserted_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+      table.timestamp("updated_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+    });
+  }
+
+  const personalityTextColumnsWithEmptyDefault = [
+    "backstory",
+    "secrets_you_know",
+    "things_you_can_share",
+    "smalltalk_topics_enjoyed",
+    "other_world_knowledge"
+  ] as const;
+
+  for (const columnName of personalityTextColumnsWithEmptyDefault) {
+    const hasColumn = await db.schema.hasColumn(PERSONALITIES_TABLE_NAME, columnName);
+
+    if (!hasColumn) {
+      await db.schema.alterTable(PERSONALITIES_TABLE_NAME, (table) => {
+        table.text(columnName).defaultTo("");
+      });
+    }
+
+    await db(PERSONALITIES_TABLE_NAME).whereNull(columnName).update({ [columnName]: "" });
+  }
+
+  const hasCustomProfilePicColumn = await db.schema.hasColumn(PERSONALITIES_TABLE_NAME, "custom_profile_pic");
+
+  if (!hasCustomProfilePicColumn) {
+    await db.schema.alterTable(PERSONALITIES_TABLE_NAME, (table) => {
+      table.text("custom_profile_pic");
+    });
+  }
+
+  const personalityChatTextColumns = ["chat_provider", "chat_model"] as const;
+
+  for (const columnName of personalityChatTextColumns) {
+    const hasColumn = await db.schema.hasColumn(PERSONALITIES_TABLE_NAME, columnName);
+
+    if (!hasColumn) {
+      await db.schema.alterTable(PERSONALITIES_TABLE_NAME, (table) => {
+        table.text(columnName);
+      });
+    }
+  }
+
+  const hasPersonalityEventsTable = await db.schema.hasTable(PERSONALITY_EVENTS_TABLE_NAME);
+
+  if (!hasPersonalityEventsTable) {
+    await db.schema.createTable(PERSONALITY_EVENTS_TABLE_NAME, (table) => {
+      table.bigIncrements("id").primary();
+      table.text("personality_id").notNullable();
+      table.text("event_type").notNullable();
+      table.text("name").notNullable();
+      table.jsonb("event_details").notNullable().defaultTo(db.raw("'{}'::jsonb"));
+      table.text("lua_script").notNullable();
+      table.boolean("enabled").notNullable().defaultTo(true);
+      table.text("response_context").notNullable().defaultTo("");
+      table.timestamp("inserted_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+      table.timestamp("updated_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+    });
+  }
+
+  const hasPersonalityEventResponseContextColumn = await db.schema.hasColumn(
+    PERSONALITY_EVENTS_TABLE_NAME,
+    "response_context"
+  );
+
+  if (!hasPersonalityEventResponseContextColumn) {
+    await db.schema.alterTable(PERSONALITY_EVENTS_TABLE_NAME, (table) => {
+      table.text("response_context").notNullable().defaultTo("");
+    });
+  }
+
   await db.raw(
     "create index if not exists map_maps_deleted_updated_idx on map_maps (deleted, updated_at desc)"
   );
@@ -228,5 +388,14 @@ export async function ensureDatabaseSchema(db: Knex) {
   );
   await db.raw(
     "create index if not exists map_map_assets_sprite_asset_idx on map_map_assets (sprite_asset_id)"
+  );
+  await db.raw(
+    "create index if not exists personalities_gender_idx on personalities (gender)"
+  );
+  await db.raw(
+    "create index if not exists personalities_role_idx on personalities (role)"
+  );
+  await db.raw(
+    "create index if not exists personality_events_personality_idx on personality_events (personality_id, updated_at desc)"
   );
 }
