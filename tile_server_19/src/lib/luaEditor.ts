@@ -1,6 +1,7 @@
 import type { Ace } from "ace-builds";
 import styluaWasmUrl from "@johnnymorganz/stylua/stylua_lib_bg.wasm?url";
 import { parse } from "luaparse";
+import { LUA_SCRIPTING_GUIDE_PATH } from "./luaPaths";
 
 export interface LuaScriptError {
   column: number;
@@ -140,4 +141,23 @@ export async function formatLuaScript(script: string) {
   config.syntax = styluaModule.LuaVersion.All;
 
   return styluaModule.formatCode(script, config, null, styluaModule.OutputVerification.Full);
+}
+
+export function openLuaScriptingGuide() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const popup = window.open(
+    LUA_SCRIPTING_GUIDE_PATH,
+    "lua-scripting-guide",
+    "popup=yes,width=1120,height=860,resizable=yes,scrollbars=yes"
+  );
+
+  if (popup) {
+    popup.focus();
+    return;
+  }
+
+  window.open(LUA_SCRIPTING_GUIDE_PATH, "_blank", "noopener,noreferrer");
 }

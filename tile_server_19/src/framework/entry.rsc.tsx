@@ -4,8 +4,21 @@ import {
   loadServerAction,
   renderToReadableStream
 } from "@vitejs/plugin-rsc/rsc";
+import githubMarkdownCss from "github-markdown-css/github-markdown.css?raw";
+import { Marked } from "marked";
+import { getHeadingList, gfmHeadingId, resetHeadings } from "marked-gfm-heading-id";
+import Prism from "prismjs";
+import prismCss from "prismjs/themes/prism-tomorrow.css?raw";
+import "prismjs/components/prism-bash.js";
+import "prismjs/components/prism-json.js";
+import "prismjs/components/prism-lua.js";
+import "prismjs/components/prism-markdown.js";
+import "prismjs/components/prism-sql.js";
+import "prismjs/components/prism-typescript.js";
 
 import AppDocument from "../app/AppDocument";
+import { escapeHtml } from "../lib/escapeHtml";
+import { LUA_API_HELPER_PATH, LUA_SCRIPTING_GUIDE_PATH } from "../lib/luaPaths";
 import {
   createPersonalityRecord,
   createPersonalityEventRecord,
@@ -58,10 +71,66 @@ const UPDATE_PERSONALITY_EVENT_PATH = "/__personalities/events/update";
 const UPDATE_PERSONALITY_PATH = "/__personalities/update";
 const IMPORT_SPRITE_PATH = "/__tiles/import-sprite";
 const SAVE_SPRITE_PATH = "/__tiles/save-sprite";
-const LUA_API_HELPER_PATH = "/__lua/api-helper";
 const LUA_API_HELPER_SOURCE_URL = "https://vax.protovateai.com/lua_api_helper.json";
+const LUA_SCRIPTING_GUIDE_SOURCE_URL = "https://vax.protovateai.com/lua_scripting_guide.md";
 const VAX_PROXY_PATH_PREFIX = "/__vax-proxy";
 const VAX_PROXY_ORIGIN = "https://vax.protovateai.com";
+const luaGuideRenderer = new Marked({
+  async: false,
+  breaks: false,
+  gfm: true
+});
+
+function normalizePrismLanguage(language: string | null | undefined) {
+  const normalizedLanguage = (language ?? "").trim().toLowerCase();
+
+  if (!normalizedLanguage) {
+    return "text";
+  }
+
+  if (normalizedLanguage === "shell" || normalizedLanguage === "sh" || normalizedLanguage === "zsh") {
+    return "bash";
+  }
+
+  if (normalizedLanguage === "ts") {
+    return "typescript";
+  }
+
+  if (normalizedLanguage === "md") {
+    return "markdown";
+  }
+
+  return normalizedLanguage;
+}
+
+function renderLuaGuideCodeBlock(code: string, language: string | null | undefined) {
+  const prismLanguage = normalizePrismLanguage(language);
+  const languageGrammar = Prism.languages[prismLanguage];
+  const highlightedCode = languageGrammar
+    ? Prism.highlight(code, languageGrammar, prismLanguage)
+    : escapeHtml(code);
+  const languageLabel = prismLanguage === "text" ? "Plain Text" : prismLanguage.toUpperCase();
+
+  return `
+    <div class="guide-code-block" data-language="${escapeHtml(prismLanguage)}">
+      <div class="guide-code-toolbar">
+        <span class="guide-code-language">${escapeHtml(languageLabel)}</span>
+        <button class="guide-code-copy" type="button">Copy</button>
+      </div>
+      <pre class="language-${escapeHtml(prismLanguage)}"><code class="language-${escapeHtml(prismLanguage)}">${highlightedCode}</code></pre>
+    </div>
+  `;
+}
+
+luaGuideRenderer.use({
+  renderer: {
+    code(token) {
+      return renderLuaGuideCodeBlock(token.text, token.lang);
+    }
+  }
+});
+
+luaGuideRenderer.use(gfmHeadingId());
 
 function getHtmlRequestUrl(request: Request) {
   const url = new URL(request.url);
@@ -71,6 +140,309 @@ function getHtmlRequestUrl(request: Request) {
   }
 
   return url.toString();
+}
+
+function buildLuaGuideDocument(markdownBodyHtml: string, headings: Array<{ id: string; level: number; raw: string }>) {
+  const tocHtml = headings.length
+    ? `
+        <aside class="guide-toc">
+          <div class="guide-toc__title">Contents</div>
+          <nav>
+            ${headings
+              .map(
+                (heading) => `
+                  <a class="guide-toc__link guide-toc__link--level-${heading.level}" href="#${escapeHtml(heading.id)}">
+                    ${escapeHtml(heading.raw)}
+                  </a>
+                `
+              )
+              .join("")}
+          </nav>
+        </aside>
+      `
+    : "";
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lua Scripting Guide</title>
+    <style>
+      ${githubMarkdownCss}
+      ${prismCss}
+
+      :root {
+        color-scheme: light dark;
+      }
+
+      body {
+        color: #1f2328;
+        font-family: "Segoe UI", "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
+        margin: 0;
+        background: #f6f8fa;
+      }
+
+      .guide-layout {
+        box-sizing: border-box;
+        display: grid;
+        gap: 24px;
+        grid-template-columns: minmax(0, 1fr);
+        margin: 0 auto;
+        max-width: 1400px;
+        padding: 24px;
+      }
+
+      .guide-shell {
+        background: #fff;
+        border: 1px solid #d0d7de;
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(31, 35, 40, 0.08);
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .guide-header {
+        align-items: center;
+        background: linear-gradient(180deg, #ffffff 0%, #f6f8fa 100%);
+        border-bottom: 1px solid #d8dee4;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        padding: 16px 24px;
+      }
+
+      .guide-header__title {
+        color: #1f2328;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .guide-header__link {
+        color: #0969da;
+        font-size: 13px;
+        font-weight: 600;
+        text-decoration: none;
+      }
+
+      .guide-body {
+        min-width: 0;
+      }
+
+      .markdown-body {
+        box-sizing: border-box;
+        font-family: "Segoe UI", "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
+        font-size: 16px;
+        line-height: 1.65;
+        margin: 0 auto;
+        max-width: 980px;
+        min-width: 200px;
+        padding: 32px;
+      }
+
+      .markdown-body code,
+      .markdown-body pre,
+      .markdown-body tt {
+        font-family:
+          "SFMono-Regular",
+          SFMono-Regular,
+          ui-monospace,
+          Menlo,
+          Monaco,
+          Consolas,
+          "Liberation Mono",
+          "Courier New",
+          monospace;
+      }
+
+      .markdown-body pre {
+        background: transparent;
+        padding: 0;
+      }
+
+      .guide-code-block {
+        background: #0f172a;
+        border: 1px solid #1e293b;
+        border-radius: 14px;
+        margin: 20px 0;
+        overflow: hidden;
+      }
+
+      .guide-code-toolbar {
+        align-items: center;
+        background: rgba(15, 23, 42, 0.92);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 14px;
+      }
+
+      .guide-code-language {
+        color: #cbd5e1;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .guide-code-copy {
+        appearance: none;
+        background: #1d4ed8;
+        border: 0;
+        border-radius: 999px;
+        color: #fff;
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 8px 12px;
+      }
+
+      .guide-code-copy:hover {
+        background: #1e40af;
+      }
+
+      .guide-code-copy.is-copied {
+        background: #047857;
+      }
+
+      .guide-code-block pre[class*="language-"] {
+        margin: 0;
+        overflow: auto;
+        padding: 18px 20px 20px;
+      }
+
+      .guide-code-block code[class*="language-"] {
+        font-size: 13px;
+        line-height: 1.6;
+        text-shadow: none;
+      }
+
+      .guide-toc {
+        background: #fff;
+        border: 1px solid #d0d7de;
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(31, 35, 40, 0.08);
+        height: fit-content;
+        padding: 18px 16px;
+        position: sticky;
+        top: 24px;
+      }
+
+      .guide-toc__title {
+        color: #1f2328;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        margin-bottom: 12px;
+        text-transform: uppercase;
+      }
+
+      .guide-toc nav {
+        display: grid;
+        gap: 8px;
+      }
+
+      .guide-toc__link {
+        color: #57606a;
+        font-size: 13px;
+        line-height: 1.4;
+        text-decoration: none;
+      }
+
+      .guide-toc__link:hover {
+        color: #0969da;
+      }
+
+      .guide-toc__link--level-2 {
+        padding-left: 12px;
+      }
+
+      .guide-toc__link--level-3,
+      .guide-toc__link--level-4,
+      .guide-toc__link--level-5,
+      .guide-toc__link--level-6 {
+        padding-left: 24px;
+      }
+
+      @media (min-width: 1100px) {
+        .guide-layout {
+          grid-template-columns: minmax(0, 1fr) 280px;
+        }
+      }
+
+      @media (max-width: 767px) {
+        .guide-layout {
+          padding: 12px;
+        }
+
+        .guide-header {
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 14px 16px;
+        }
+
+        .markdown-body {
+          padding: 20px 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="guide-layout">
+      <div class="guide-shell">
+        <div class="guide-header">
+          <div class="guide-header__title">Lua Scripting Guide</div>
+          <a class="guide-header__link" href="${LUA_SCRIPTING_GUIDE_SOURCE_URL}" target="_blank" rel="noreferrer">
+            Open Raw Markdown
+          </a>
+        </div>
+        <div class="guide-body">
+          <article class="markdown-body">
+            ${markdownBodyHtml}
+          </article>
+        </div>
+      </div>
+      ${tocHtml}
+    </div>
+    <script>
+      const copyButtons = Array.from(document.querySelectorAll(".guide-code-copy"));
+
+      async function copyGuideCode(button) {
+        const codeElement = button.closest(".guide-code-block")?.querySelector("code");
+
+        if (!codeElement) {
+          return;
+        }
+
+        const originalLabel = button.textContent || "Copy";
+
+        try {
+          await navigator.clipboard.writeText(codeElement.innerText);
+          button.textContent = "Copied";
+          button.classList.add("is-copied");
+        } catch {
+          button.textContent = "Copy Failed";
+        }
+
+        window.setTimeout(() => {
+          button.textContent = originalLabel;
+          button.classList.remove("is-copied");
+        }, 1600);
+      }
+
+      for (const button of copyButtons) {
+        button.addEventListener("click", () => {
+          void copyGuideCode(button);
+        });
+      }
+    </script>
+  </body>
+</html>`;
 }
 
 export default async function handler(request: Request) {
@@ -605,6 +977,47 @@ export default async function handler(request: Request) {
       const message = error instanceof Error ? error.message : "Could not load Lua API helper.";
 
       return Response.json({ error: message }, { status: 502 });
+    }
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === LUA_SCRIPTING_GUIDE_PATH) {
+    try {
+      const upstreamResponse = await fetch(LUA_SCRIPTING_GUIDE_SOURCE_URL, {
+        headers: {
+          accept: "text/markdown,text/plain;q=0.9,*/*;q=0.8"
+        }
+      });
+
+      if (!upstreamResponse.ok) {
+        throw new Error(`Could not load Lua scripting guide (${upstreamResponse.status}).`);
+      }
+
+      const markdown = await upstreamResponse.text();
+      resetHeadings();
+      const markdownBodyHtml = luaGuideRenderer.parse(markdown) as string;
+      const headings = (getHeadingList() as Array<{ id: string; level: number; raw: string }>)
+        .filter((heading) => heading.level >= 1 && heading.level <= 4);
+      const responseHtml = buildLuaGuideDocument(markdownBodyHtml, headings);
+
+      return new Response(responseHtml, {
+        headers: {
+          "Cache-Control": "public, max-age=300",
+          "Content-Type": "text/html; charset=utf-8"
+        }
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Could not load Lua scripting guide.";
+      const responseHtml = buildLuaGuideDocument(
+        `<h1>Lua Scripting Guide Unavailable</h1><p>${escapeHtml(message)}</p>`,
+        []
+      );
+
+      return new Response(responseHtml, {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8"
+        },
+        status: 502
+      });
     }
   }
 

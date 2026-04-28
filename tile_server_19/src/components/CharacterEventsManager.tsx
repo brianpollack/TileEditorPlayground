@@ -15,11 +15,23 @@ import { useStudio } from "../app/StudioContext";
 import {
   createLuaErrorAnnotations,
   formatLuaScript,
+  openLuaScriptingGuide,
   validateLuaScript
 } from "../lib/luaEditor";
-import { useLuaAceSupport } from "../lib/luaApiHelper";
+import {
+  useLuaAceSupport,
+  useLuaEventDefinitions
+} from "../lib/luaApiHelper";
+import {
+  createLuaEventDraft,
+  mergeLuaEventOptions,
+  sortLuaEvents,
+  type LuaEventDraftState,
+  type LuaEventOption
+} from "../lib/luaEventHelpers";
 import type { CharacterEventRecord } from "../types";
 import { actionButtonClass } from "./buttonStyles";
+import { LuaEventDefinitionHelp } from "./LuaEventDefinitionHelp";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
 import {
@@ -27,42 +39,10 @@ import {
   assetListRowClass,
   assetListSubtitleClass,
   assetListTitleClass,
-  compactTextInputClass,
   emptyStateCardClass,
   secondaryButtonClass,
-  statusChipClass,
-  textInputClass
+  statusChipClass
 } from "./uiStyles";
-
-interface CharacterEventDraftState {
-  characterEvent: string;
-  enabled: boolean;
-  luaScript: string;
-}
-
-function createCharacterEventDraft(eventRecord: CharacterEventRecord | null): CharacterEventDraftState {
-  return {
-    characterEvent: eventRecord?.character_event ?? "",
-    enabled: eventRecord?.enabled ?? true,
-    luaScript: eventRecord?.lua_script ?? ""
-  };
-}
-
-function sortCharacterEvents(events: CharacterEventRecord[]) {
-  return events.slice().sort((left, right) => {
-    if (left.enabled !== right.enabled) {
-      return left.enabled ? -1 : 1;
-    }
-
-    const nameComparison = left.character_event.localeCompare(right.character_event);
-
-    if (nameComparison !== 0) {
-      return nameComparison;
-    }
-
-    return left.id.localeCompare(right.id, undefined, { numeric: true });
-  });
-}
 
 export function CharacterEventsManager() {
   const { activePersonality } = useStudio();
@@ -71,35 +51,49 @@ export function CharacterEventsManager() {
     enableLiveAutocompletion,
     enableSnippets,
     handleEditorLoad,
-    helperWarning
+    helperWarning: aceHelperWarning
   } = useLuaAceSupport();
+  const {
+    eventDefinitions,
+    helperWarning: eventDefinitionWarning
+  } = useLuaEventDefinitions("character");
   const [events, setEvents] = useState<CharacterEventRecord[]>([]);
-  const [activeEventId, setActiveEventId] = useState("");
-  const [draft, setDraft] = useState<CharacterEventDraftState>(() => createCharacterEventDraft(null));
-  const [newEventName, setNewEventName] = useState("");
-  const [isCreatingEvent, setCreatingEvent] = useState(false);
+  const [activeEventName, setActiveEventName] = useState("");
+  const [draft, setDraft] = useState<LuaEventDraftState>(() => createLuaEventDraft(null));
   const [isLoadingEvents, setLoadingEvents] = useState(false);
   const [isSavingEvent, setSavingEvent] = useState(false);
   const [isFormattingLua, setFormattingLua] = useState(false);
   const [luaAnnotations, setLuaAnnotations] = useState<Ace.Annotation[]>([]);
   const [status, setStatus] = useState("");
 
-  const activeEvent = useMemo(
-    () => events.find((eventRecord) => eventRecord.id === activeEventId) ?? null,
-    [activeEventId, events]
+  const eventOptions = useMemo<LuaEventOption<CharacterEventRecord>[]>(
+    () => mergeLuaEventOptions(eventDefinitions, events, (eventRecord) => eventRecord.character_event),
+    [eventDefinitions, events]
   );
+  const activeEventOption = useMemo(
+    () => eventOptions.find((eventOption) => eventOption.eventName === activeEventName) ?? null,
+    [activeEventName, eventOptions]
+  );
+  const activeEvent = activeEventOption?.record ?? null;
 
   useEffect(() => {
-    setDraft(createCharacterEventDraft(activeEvent));
+    setDraft(createLuaEventDraft(activeEvent));
     setLuaAnnotations([]);
-  }, [activeEvent?.id]);
+  }, [activeEvent?.id, activeEventOption?.eventName]);
+
+  useEffect(() => {
+    setActiveEventName((currentEventName) =>
+      eventOptions.some((eventOption) => eventOption.eventName === currentEventName)
+        ? currentEventName
+        : eventOptions[0]?.eventName ?? ""
+    );
+  }, [eventOptions]);
 
   useEffect(() => {
     if (!activePersonality?.character_slug) {
       setEvents([]);
-      setActiveEventId("");
-      setDraft(createCharacterEventDraft(null));
-      setNewEventName("");
+      setActiveEventName("");
+      setDraft(createLuaEventDraft(null));
       setLuaAnnotations([]);
       setStatus("");
       return;
@@ -110,19 +104,12 @@ export function CharacterEventsManager() {
 
     void readCharacterEventsAction(activePersonality.character_slug)
       .then((nextEvents) => {
-        const sortedEvents = sortCharacterEvents(nextEvents);
-
-        setEvents(sortedEvents);
-        setActiveEventId((currentEventId) =>
-          sortedEvents.some((eventRecord) => eventRecord.id === currentEventId)
-            ? currentEventId
-            : sortedEvents[0]?.id ?? ""
-        );
+        setEvents(sortLuaEvents(nextEvents, (eventRecord) => eventRecord.character_event));
       })
       .catch((error: unknown) => {
         setEvents([]);
-        setActiveEventId("");
-        setDraft(createCharacterEventDraft(null));
+        setActiveEventName("");
+        setDraft(createLuaEventDraft(null));
         setLuaAnnotations([]);
         setStatus(error instanceof Error ? error.message : "Could not load character events.");
       })
@@ -131,48 +118,8 @@ export function CharacterEventsManager() {
       });
   }, [activePersonality?.character_slug]);
 
-  function handleCreateEvent() {
-    if (!activePersonality?.character_slug || isCreatingEvent) {
-      return;
-    }
-
-    const normalizedEventName = newEventName.trim();
-
-    if (!normalizedEventName) {
-      setStatus("Event name is required.");
-      return;
-    }
-
-    setCreatingEvent(true);
-    setStatus("");
-
-    void createCharacterEventAction({
-      characterEvent: normalizedEventName,
-      characterName: activePersonality.character_slug
-    })
-      .then((createdEvent) => {
-        setEvents((currentEvents) => sortCharacterEvents([...currentEvents, createdEvent]));
-        setActiveEventId(createdEvent.id);
-        setNewEventName("");
-        setStatus("Event created.");
-      })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : "Could not create character event.");
-      })
-      .finally(() => {
-        setCreatingEvent(false);
-      });
-  }
-
   function handleSaveEvent() {
-    if (!activePersonality?.character_slug || !activeEvent || isSavingEvent) {
-      return;
-    }
-
-    const normalizedEventName = draft.characterEvent.trim();
-
-    if (!normalizedEventName) {
-      setStatus("Event name is required.");
+    if (!activePersonality?.character_slug || !activeEventOption || isSavingEvent) {
       return;
     }
 
@@ -188,30 +135,43 @@ export function CharacterEventsManager() {
     setSavingEvent(true);
     setStatus("");
 
-    void saveCharacterEventAction({
-      characterEvent: normalizedEventName,
-      characterName: activePersonality.character_slug,
-      enabled: draft.enabled,
-      id: activeEvent.id,
-      luaScript: draft.luaScript
-    })
-      .then((updatedEvent) => {
+    void (async () => {
+      try {
+        const createdOrExistingEvent =
+          activeEvent ??
+          (await createCharacterEventAction({
+            characterEvent: activeEventOption.eventName,
+            characterName: activePersonality.character_slug
+          }));
+        const savedEvent =
+          createdOrExistingEvent.enabled === draft.enabled &&
+          createdOrExistingEvent.lua_script === draft.luaScript
+            ? createdOrExistingEvent
+            : await saveCharacterEventAction({
+                characterEvent: activeEventOption.eventName,
+                characterName: activePersonality.character_slug,
+                enabled: draft.enabled,
+                id: createdOrExistingEvent.id,
+                luaScript: draft.luaScript
+              });
+
         setEvents((currentEvents) =>
-          sortCharacterEvents(
-            currentEvents.map((eventRecord) =>
-              eventRecord.id === updatedEvent.id ? updatedEvent : eventRecord
-            )
+          sortLuaEvents(
+            [
+              ...currentEvents.filter((eventRecord) => eventRecord.id !== savedEvent.id),
+              savedEvent
+            ],
+            (eventRecord) => eventRecord.character_event
           )
         );
-        setDraft(createCharacterEventDraft(updatedEvent));
+        setDraft(createLuaEventDraft(savedEvent));
         setStatus("Event saved.");
-      })
-      .catch((error: unknown) => {
+      } catch (error: unknown) {
         setStatus(error instanceof Error ? error.message : "Could not save character event.");
-      })
-      .finally(() => {
+      } finally {
         setSavingEvent(false);
-      });
+      }
+    })();
   }
 
   function handleFormatLua() {
@@ -269,57 +229,40 @@ export function CharacterEventsManager() {
               {activePersonality ? <div className={statusChipClass}>{activePersonality.name}</div> : null}
             </div>
 
-            <div className="grid gap-2">
-              <SectionEyebrow>Create Event</SectionEyebrow>
-              <div className="flex gap-2">
-                <input
-                  autoComplete="off"
-                  className={`${compactTextInputClass} min-w-0 flex-1`}
-                  disabled={!activePersonality || isCreatingEvent}
-                  onChange={(event) => {
-                    setNewEventName(event.currentTarget.value);
-                    if (status) {
-                      setStatus("");
-                    }
-                  }}
-                  placeholder="on_player_join"
-                  value={newEventName}
-                />
-                <button
-                  className={actionButtonClass}
-                  disabled={!activePersonality || !newEventName.trim() || isCreatingEvent}
-                  onClick={handleCreateEvent}
-                  type="button"
-                >
-                  {isCreatingEvent ? "Adding..." : "Create"}
-                </button>
-              </div>
-            </div>
-
             <div className="asset-list asset-list--scroll">
-              {events.map((eventRecord) => (
-                <button
-                  className={assetListRowClass(eventRecord.id === activeEventId)}
-                  key={eventRecord.id}
-                  onClick={() => {
-                    setActiveEventId(eventRecord.id);
-                    setStatus("");
-                  }}
-                  type="button"
-                >
-                  <div className={assetListMetaClass}>
-                    <strong className={assetListTitleClass}>{eventRecord.character_event}</strong>
-                    <span className={assetListSubtitleClass}>
-                      {eventRecord.enabled ? "Enabled" : "Disabled"}
-                    </span>
-                  </div>
-                </button>
-              ))}
+              {eventOptions.map((eventOption) => {
+                const isConfigured = Boolean(eventOption.record);
+                const displayColor = isConfigured ? "#000000" : "#909090";
+
+                return (
+                  <button
+                    className={assetListRowClass(eventOption.eventName === activeEventName)}
+                    key={eventOption.eventName}
+                    onClick={() => {
+                      setActiveEventName(eventOption.eventName);
+                      setStatus("");
+                    }}
+                    type="button"
+                  >
+                    <div className={assetListMetaClass}>
+                      <strong className={assetListTitleClass} style={{ color: displayColor }}>
+                        {eventOption.eventName}
+                      </strong>
+                      <span className={assetListSubtitleClass} style={{ color: displayColor }}>
+                        {isConfigured ? (eventOption.record?.enabled ? "Configured • Enabled" : "Configured • Disabled") : "Available • Not configured"}
+                      </span>
+                      <span className={assetListSubtitleClass} style={{ color: displayColor }}>
+                        {eventOption.description || "No helper description is available for this event."}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
 
             {isLoadingEvents ? <div className="text-sm theme-text-muted">Loading character events...</div> : null}
-            {!isLoadingEvents && activePersonality && !events.length ? (
-              <div className={emptyStateCardClass}>No character events yet.</div>
+            {!isLoadingEvents && activePersonality && !eventOptions.length ? (
+              <div className={emptyStateCardClass}>No character events are available.</div>
             ) : null}
           </Panel>
         </div>
@@ -327,10 +270,10 @@ export function CharacterEventsManager() {
         <Panel
           className="xl:h-[calc(100vh-7rem)]"
           description={
-            activeEvent
-              ? `${activeEvent.character_name} • ${activeEvent.character_event}`
+            activeEventOption
+              ? `${activePersonality?.character_slug ?? ""} • ${activeEventOption.eventName}`
               : activePersonality
-                ? `Select or create a character event for ${activePersonality.name}.`
+                ? `Select a character event for ${activePersonality.name}.`
                 : "Select a personality before editing character events."
           }
           footer={
@@ -338,9 +281,7 @@ export function CharacterEventsManager() {
               {status ? (
                 <div
                   className={
-                    status === "Event saved." ||
-                    status === "Event created." ||
-                    status === "Lua formatted."
+                    status === "Event saved." || status === "Lua formatted."
                       ? "text-sm theme-text-muted"
                       : "text-sm text-[#b42318]"
                   }
@@ -353,7 +294,14 @@ export function CharacterEventsManager() {
               <div className="flex flex-wrap gap-2">
                 <button
                   className={secondaryButtonClass}
-                  disabled={!activeEvent || isSavingEvent || isFormattingLua}
+                  onClick={openLuaScriptingGuide}
+                  type="button"
+                >
+                  Scripting Guide
+                </button>
+                <button
+                  className={secondaryButtonClass}
+                  disabled={!activeEventOption || isSavingEvent || isFormattingLua}
                   onClick={handleFormatLua}
                   type="button"
                 >
@@ -361,7 +309,7 @@ export function CharacterEventsManager() {
                 </button>
                 <button
                   className={actionButtonClass}
-                  disabled={!activeEvent || isSavingEvent || isFormattingLua}
+                  disabled={!activeEventOption || isSavingEvent || isFormattingLua}
                   onClick={handleSaveEvent}
                   type="button"
                 >
@@ -370,30 +318,17 @@ export function CharacterEventsManager() {
               </div>
             </div>
           }
-          title={activeEvent ? activeEvent.character_event : "Character Event Editor"}
+          title={activeEventOption ? activeEventOption.eventName : "Character Event Editor"}
         >
-          {activeEvent ? (
+          {activeEventOption ? (
             <div className="grid min-h-0 gap-4 overflow-y-auto pr-1">
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
-                <label className="grid gap-1">
+                <div className="grid gap-1">
                   <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
                     Event Name
                   </span>
-                  <input
-                    className={`${textInputClass} !min-w-0 w-full max-w-full`}
-                    onChange={(event) => {
-                      setDraft((currentDraft) => ({
-                        ...currentDraft,
-                        characterEvent: event.currentTarget.value
-                      }));
-                      setLuaAnnotations([]);
-                      if (status) {
-                        setStatus("");
-                      }
-                    }}
-                    value={draft.characterEvent}
-                  />
-                </label>
+                  <div className="font-mono text-sm theme-text-primary">{activeEventOption.eventName}</div>
+                </div>
 
                 <label className="flex items-end gap-2 pb-3 text-sm theme-text-muted">
                   <input
@@ -414,10 +349,13 @@ export function CharacterEventsManager() {
                 </label>
               </div>
 
+              <LuaEventDefinitionHelp eventDefinition={activeEventOption.definition} />
+
               <div className="grid gap-3">
                 <SectionEyebrow>Lua Script</SectionEyebrow>
                 <div className="overflow-hidden border theme-border-panel">
                   <AceEditor
+                    annotations={luaAnnotations}
                     className="w-full"
                     enableBasicAutocompletion={enableBasicAutocompletion}
                     enableLiveAutocompletion={enableLiveAutocompletion}
@@ -425,7 +363,7 @@ export function CharacterEventsManager() {
                     fontSize={13}
                     height="640px"
                     mode="lua"
-                    name={`character-event-lua-${activeEvent.id}`}
+                    name={`character-event-lua-${activeEventOption.eventName}`}
                     onChange={(value) => {
                       setDraft((currentDraft) => ({
                         ...currentDraft,
@@ -436,13 +374,12 @@ export function CharacterEventsManager() {
                         setStatus("");
                       }
                     }}
-                    annotations={luaAnnotations}
                     onLoad={handleEditorLoad}
                     setOptions={{
                       showFoldWidgets: false,
                       tabSize: 2,
-                      useWorker: false,
-                      useSoftTabs: true
+                      useSoftTabs: true,
+                      useWorker: false
                     }}
                     theme="tomorrow_night"
                     value={draft.luaScript}
@@ -450,7 +387,10 @@ export function CharacterEventsManager() {
                     wrapEnabled
                   />
                 </div>
-                {helperWarning ? <div className="text-sm text-[#b42318]">{helperWarning}</div> : null}
+                {aceHelperWarning ? <div className="text-sm text-[#b42318]">{aceHelperWarning}</div> : null}
+                {!aceHelperWarning && eventDefinitionWarning ? (
+                  <div className="text-sm text-[#b42318]">{eventDefinitionWarning}</div>
+                ) : null}
               </div>
             </div>
           ) : (

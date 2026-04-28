@@ -13,6 +13,7 @@ import { useLuaAceSupport } from "../lib/luaApiHelper";
 import {
   createLuaErrorAnnotations,
   formatLuaScript,
+  openLuaScriptingGuide,
   validateLuaScript
 } from "../lib/luaEditor";
 import type { PersonalityEventRecord } from "../types";
@@ -370,6 +371,13 @@ export function PersonalityEventsManager() {
                 <div />
               )}
               <div className="flex flex-wrap gap-2">
+                <button
+                  className={secondaryButtonClass}
+                  onClick={openLuaScriptingGuide}
+                  type="button"
+                >
+                  Scripting Guide
+                </button>
                 <button
                   className={secondaryButtonClass}
                   disabled={!activeEvent || isSavingEvent || isFormattingLua}

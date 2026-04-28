@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Ace } from "ace-builds";
 import * as languageTools from "ace-builds/src-noconflict/ext-language_tools";
+import { escapeHtml } from "./escapeHtml";
+import { LUA_API_HELPER_PATH } from "./luaPaths";
 
-const LUA_API_HELPER_URL = "/__lua/api-helper";
+const LUA_API_HELPER_URL = LUA_API_HELPER_PATH;
 const LUA_API_COMPLETER_ID = "lua-api-helper";
 
 interface LuaApiHelperCompletionEntry {
@@ -30,17 +32,58 @@ interface LuaApiHelperTableMember {
   type?: string;
 }
 
+interface LuaApiHelperFieldDefinition {
+  description?: string;
+  type?: string;
+}
+
+interface LuaApiHelperEventGlobalDefinition {
+  $ref?: string;
+  description?: string;
+  fields?: Record<string, LuaApiHelperFieldDefinition>;
+  members?: LuaApiHelperTableMember[];
+}
+
+interface LuaApiHelperEventDefinitionPayload {
+  description?: string;
+  globals?: Record<string, LuaApiHelperEventGlobalDefinition | null>;
+}
+
+interface LuaApiHelperEventCollection {
+  description?: string;
+  [eventName: string]: LuaApiHelperEventDefinitionPayload | string | undefined;
+}
+
 interface LuaApiHelperTable {
   availability?: string;
+  action_functions?: LuaApiHelperTableMember[];
   description?: string;
   kind?: string;
+  memory?: {
+    description?: string;
+  };
   members?: LuaApiHelperTableMember[];
+  snapshot_fields?: LuaApiHelperTableMember[];
   writeback_rules?: string[];
+}
+
+export type LuaEventContext = "character" | "personality" | "zone";
+
+export interface LuaEventGlobalHelpEntry {
+  description: string;
+  name: string;
+}
+
+export interface LuaEventDefinition {
+  description: string;
+  eventName: string;
+  globals: LuaEventGlobalHelpEntry[];
 }
 
 interface LuaApiHelperPayload {
   completions?: LuaApiHelperCompletionEntry[];
   description?: string;
+  events?: Partial<Record<LuaEventContext, LuaApiHelperEventCollection>>;
   name?: string;
   notes?: string[];
   snippets?: LuaApiHelperSnippetEntry[];
@@ -51,6 +94,7 @@ interface LuaApiHelperPayload {
 type LuaApiHelperLoadResult =
   | {
       completer: Ace.Completer;
+      payload: LuaApiHelperPayload;
       status: "ready";
     }
   | {
@@ -59,15 +103,6 @@ type LuaApiHelperLoadResult =
 
 let luaApiHelperPromise: Promise<LuaApiHelperLoadResult> | null = null;
 let luaApiHelperCachedResult: LuaApiHelperLoadResult | null = null;
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
 
 function buildTableDocHtml(name: string, table: LuaApiHelperTable | undefined) {
   if (!table) {
@@ -84,8 +119,14 @@ function buildTableDocHtml(name: string, table: LuaApiHelperTable | undefined) {
     sections.push(`<p><strong>Availability:</strong> ${escapeHtml(table.availability)}</p>`);
   }
 
-  if (table.members?.length) {
-    const members = table.members
+  const allMembers = [
+    ...(table.members ?? []),
+    ...(table.snapshot_fields ?? []),
+    ...(table.action_functions ?? [])
+  ];
+
+  if (allMembers.length) {
+    const members = allMembers
       .slice(0, 12)
       .map((member) => {
         const signature = member.signature ?? member.name ?? "";
@@ -108,9 +149,90 @@ function buildTableDocHtml(name: string, table: LuaApiHelperTable | undefined) {
     sections.push(`<div><strong>Notes</strong><ul>${rules}</ul></div>`);
   }
 
+  if (table.memory?.description) {
+    sections.push(`<div><strong>Memory</strong><p>${escapeHtml(table.memory.description)}</p></div>`);
+  }
+
   return sections.length
     ? `<div><strong>${escapeHtml(name)}</strong>${sections.join("")}</div>`
     : "";
+}
+
+function resolveTableReferenceName(referenceValue: string | undefined) {
+  if (!referenceValue?.startsWith("tables.")) {
+    return "";
+  }
+
+  return referenceValue.slice("tables.".length).trim();
+}
+
+function createEventGlobalDescription(
+  payload: LuaApiHelperPayload,
+  globalName: string,
+  globalDefinition: LuaApiHelperEventGlobalDefinition | null
+) {
+  if (!globalDefinition) {
+    return "";
+  }
+
+  const inlineDescription = globalDefinition.description?.trim();
+
+  if (inlineDescription) {
+    return inlineDescription;
+  }
+
+  const tableReferenceName = resolveTableReferenceName(globalDefinition.$ref);
+  const referencedTable = tableReferenceName ? payload.tables?.[tableReferenceName] : undefined;
+
+  if (referencedTable?.description?.trim()) {
+    return referencedTable.description.trim();
+  }
+
+  if (globalDefinition.fields && Object.keys(globalDefinition.fields).length > 0) {
+    return Object.entries(globalDefinition.fields)
+      .map(([fieldName, fieldDefinition]) =>
+        `${fieldName}${fieldDefinition.description ? `: ${fieldDefinition.description}` : ""}`
+      )
+      .join("; ");
+  }
+
+  if (globalDefinition.members?.length) {
+    return globalDefinition.members
+      .map((member) => member.signature ?? member.name ?? "")
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  return `${globalName} is available in this event.`;
+}
+
+function mapEventDefinitions(
+  payload: LuaApiHelperPayload,
+  context: LuaEventContext
+): LuaEventDefinition[] {
+  const eventCollection = payload.events?.[context];
+
+  if (!eventCollection) {
+    return [];
+  }
+
+  return Object.entries(eventCollection)
+    .filter(([eventName, eventDefinition]) => eventName !== "description" && typeof eventDefinition === "object" && eventDefinition !== null)
+    .map(([eventName, eventDefinition]) => {
+      const typedDefinition = eventDefinition as LuaApiHelperEventDefinitionPayload;
+
+      return {
+        description: typedDefinition.description?.trim() ?? "",
+        eventName,
+        globals: Object.entries(typedDefinition.globals ?? {})
+          .filter(([, globalDefinition]) => globalDefinition !== null)
+          .map(([globalName, globalDefinition]) => ({
+            description: createEventGlobalDescription(payload, globalName, globalDefinition),
+            name: globalName
+          }))
+      };
+    })
+    .sort((left, right) => left.eventName.localeCompare(right.eventName));
 }
 
 function buildCompletionDocHtml(
@@ -255,6 +377,7 @@ async function loadLuaApiHelperSupport() {
 
         return {
           completer: createLuaApiCompleter(payload),
+          payload,
           status: "ready"
         } satisfies LuaApiHelperLoadResult;
       })
@@ -327,6 +450,40 @@ export function useLuaAceSupport() {
     enableLiveAutocompletion: true,
     enableSnippets: true,
     handleEditorLoad,
+    helperStatus,
+    helperWarning: helperStatus === "error" ? "Type information unable to load" : ""
+  };
+}
+
+export function useLuaEventDefinitions(context: LuaEventContext) {
+  const [helperStatus, setHelperStatus] = useState<"loading" | "ready" | "error">(
+    luaApiHelperCachedResult?.status ?? "loading"
+  );
+  const [eventDefinitions, setEventDefinitions] = useState<LuaEventDefinition[]>(() =>
+    luaApiHelperCachedResult?.status === "ready"
+      ? mapEventDefinitions(luaApiHelperCachedResult.payload, context)
+      : []
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void loadLuaApiHelperSupport().then((result) => {
+      if (cancelled) {
+        return;
+      }
+
+      setHelperStatus(result.status);
+      setEventDefinitions(result.status === "ready" ? mapEventDefinitions(result.payload, context) : []);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [context]);
+
+  return {
+    eventDefinitions,
     helperStatus,
     helperWarning: helperStatus === "error" ? "Type information unable to load" : ""
   };

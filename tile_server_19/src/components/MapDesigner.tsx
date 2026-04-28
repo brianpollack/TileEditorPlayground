@@ -76,9 +76,20 @@ import {
 import {
   createLuaErrorAnnotations,
   formatLuaScript,
+  openLuaScriptingGuide,
   validateLuaScript
 } from "../lib/luaEditor";
-import { useLuaAceSupport } from "../lib/luaApiHelper";
+import {
+  useLuaAceSupport,
+  useLuaEventDefinitions
+} from "../lib/luaApiHelper";
+import {
+  createLuaEventDraft,
+  mergeLuaEventOptions,
+  sortLuaEvents,
+  type LuaEventDraftState,
+  type LuaEventOption
+} from "../lib/luaEventHelpers";
 import { normalizeUnderscoreName } from "../lib/naming";
 import { describeSlot, sanitizeSlotRecord, type SlotKey } from "../lib/slots";
 import {
@@ -94,6 +105,7 @@ import { useImageCache } from "../lib/useImageCache";
 import { actionButtonClass } from "./buttonStyles";
 import { CheckerboardFrame } from "./CheckerboardFrame";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
+import { LuaEventDefinitionHelp } from "./LuaEventDefinitionHelp";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
 import {
@@ -203,36 +215,6 @@ interface MapAiPreviewSnapshot {
   layers: MapLayerStack;
   maskedCells: Set<string>;
   selection: MapAiSelection;
-}
-
-interface ZoneEventDraftState {
-  enabled: boolean;
-  luaScript: string;
-  zoneEvent: string;
-}
-
-function createZoneEventDraft(eventRecord: ZoneEventRecord | null): ZoneEventDraftState {
-  return {
-    enabled: eventRecord?.enabled ?? true,
-    luaScript: eventRecord?.lua_script ?? "",
-    zoneEvent: eventRecord?.zone_event ?? ""
-  };
-}
-
-function sortZoneEvents(events: ZoneEventRecord[]) {
-  return events.slice().sort((left, right) => {
-    if (left.enabled !== right.enabled) {
-      return left.enabled ? -1 : 1;
-    }
-
-    const nameComparison = left.zone_event.localeCompare(right.zone_event);
-
-    if (nameComparison !== 0) {
-      return nameComparison;
-    }
-
-    return left.id.localeCompare(right.id, undefined, { numeric: true });
-  });
 }
 
 interface MapWorkspaceProps {
@@ -919,12 +901,10 @@ export function MapDesigner() {
   const [isResizeDialogOpen, setIsResizeDialogOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
   const [zoneEvents, setZoneEvents] = useState<ZoneEventRecord[]>([]);
-  const [activeZoneEventId, setActiveZoneEventId] = useState("");
-  const [zoneEventDraft, setZoneEventDraft] = useState<ZoneEventDraftState>(() => createZoneEventDraft(null));
-  const [newZoneEventName, setNewZoneEventName] = useState("");
+  const [activeZoneEventName, setActiveZoneEventName] = useState("");
+  const [zoneEventDraft, setZoneEventDraft] = useState<LuaEventDraftState>(() => createLuaEventDraft(null));
   const [zoneEventStatus, setZoneEventStatus] = useState("");
   const [isZoneEventsLoading, setZoneEventsLoading] = useState(false);
-  const [isZoneEventCreating, setZoneEventCreating] = useState(false);
   const [isZoneEventSaving, setZoneEventSaving] = useState(false);
   const [isZoneEventFormatting, setZoneEventFormatting] = useState(false);
   const [zoneEventLuaAnnotations, setZoneEventLuaAnnotations] = useState<Ace.Annotation[]>([]);
@@ -968,6 +948,8 @@ export function MapDesigner() {
   const createNameInputRef = useRef<HTMLInputElement | null>(null);
   const resizeWidthInputRef = useRef<HTMLInputElement | null>(null);
   const deferredMapQuery = useDeferredValue(mapQuery.trim().toLowerCase());
+  const { eventDefinitions: zoneEventDefinitions, helperWarning: zoneEventDefinitionWarning } =
+    useLuaEventDefinitions("zone");
   const normalizedNewMapName = normalizeUnderscoreName(newMapName);
   const normalizedNewMapWidth = normalizeMapDimension(newMapWidth);
   const normalizedNewMapHeight = normalizeMapDimension(newMapHeight);
@@ -1021,10 +1003,15 @@ export function MapDesigner() {
     )
   );
   const spriteThumbnailUrls = sprites.map((spriteRecord) => spriteRecord.thumbnail ?? "");
-  const activeZoneEvent = useMemo(
-    () => zoneEvents.find((eventRecord) => eventRecord.id === activeZoneEventId) ?? null,
-    [activeZoneEventId, zoneEvents]
+  const zoneEventOptions = useMemo<LuaEventOption<ZoneEventRecord>[]>(
+    () => mergeLuaEventOptions(zoneEventDefinitions, zoneEvents, (eventRecord) => eventRecord.zone_event),
+    [zoneEventDefinitions, zoneEvents]
   );
+  const activeZoneEventOption = useMemo(
+    () => zoneEventOptions.find((eventOption) => eventOption.eventName === activeZoneEventName) ?? null,
+    [activeZoneEventName, zoneEventOptions]
+  );
+  const activeZoneEvent = activeZoneEventOption?.record ?? null;
 
   useEffect(() => {
     setHasMounted(true);
@@ -1037,9 +1024,17 @@ export function MapDesigner() {
   }, [activeMap]);
 
   useEffect(() => {
-    setZoneEventDraft(createZoneEventDraft(activeZoneEvent));
+    setZoneEventDraft(createLuaEventDraft(activeZoneEvent));
     setZoneEventLuaAnnotations([]);
-  }, [activeZoneEvent?.id]);
+  }, [activeZoneEvent?.id, activeZoneEventOption?.eventName]);
+
+  useEffect(() => {
+    setActiveZoneEventName((currentEventName) =>
+      zoneEventOptions.some((eventOption) => eventOption.eventName === currentEventName)
+        ? currentEventName
+        : zoneEventOptions[0]?.eventName ?? ""
+    );
+  }, [zoneEventOptions]);
 
   useEffect(() => {
     if (!activeMap) {
@@ -1075,12 +1070,10 @@ export function MapDesigner() {
     setIsAiModalOpen(false);
     setIsAiRunningModalOpen(false);
     setZoneEvents([]);
-    setActiveZoneEventId("");
-    setZoneEventDraft(createZoneEventDraft(null));
-    setNewZoneEventName("");
+    setActiveZoneEventName("");
+    setZoneEventDraft(createLuaEventDraft(null));
     setZoneEventStatus("");
     setZoneEventsLoading(false);
-    setZoneEventCreating(false);
     setZoneEventSaving(false);
     setZoneEventFormatting(false);
     setZoneEventLuaAnnotations([]);
@@ -1095,8 +1088,8 @@ export function MapDesigner() {
 
     if (!activeMap?.name) {
       setZoneEvents([]);
-      setActiveZoneEventId("");
-      setZoneEventDraft(createZoneEventDraft(null));
+      setActiveZoneEventName("");
+      setZoneEventDraft(createLuaEventDraft(null));
       setZoneEventLuaAnnotations([]);
       setZoneEventStatus("");
       return;
@@ -1107,19 +1100,12 @@ export function MapDesigner() {
 
     void readMapZoneEventsAction(activeMap.name)
       .then((nextEvents) => {
-        const sortedEvents = sortZoneEvents(nextEvents);
-
-        setZoneEvents(sortedEvents);
-        setActiveZoneEventId((currentEventId) =>
-          sortedEvents.some((eventRecord) => eventRecord.id === currentEventId)
-            ? currentEventId
-            : sortedEvents[0]?.id ?? ""
-        );
+        setZoneEvents(sortLuaEvents(nextEvents, (eventRecord) => eventRecord.zone_event));
       })
       .catch((error: unknown) => {
         setZoneEvents([]);
-        setActiveZoneEventId("");
-        setZoneEventDraft(createZoneEventDraft(null));
+        setActiveZoneEventName("");
+        setZoneEventDraft(createLuaEventDraft(null));
         setZoneEventLuaAnnotations([]);
         setZoneEventStatus(error instanceof Error ? error.message : "Could not load zone events.");
       })
@@ -2693,48 +2679,8 @@ export function MapDesigner() {
       });
   }
 
-  function handleCreateZoneEvent() {
-    if (!activeMap || isZoneEventCreating) {
-      return;
-    }
-
-    const normalizedEventName = newZoneEventName.trim();
-
-    if (!normalizedEventName) {
-      setZoneEventStatus("Event name is required.");
-      return;
-    }
-
-    setZoneEventCreating(true);
-    setZoneEventStatus("");
-
-    void createMapZoneEventAction({
-      eventName: normalizedEventName,
-      mapName: activeMap.name
-    })
-      .then((createdEvent) => {
-        setZoneEvents((currentEvents) => sortZoneEvents([...currentEvents, createdEvent]));
-        setActiveZoneEventId(createdEvent.id);
-        setNewZoneEventName("");
-        setZoneEventStatus("Event created.");
-      })
-      .catch((error: unknown) => {
-        setZoneEventStatus(error instanceof Error ? error.message : "Could not create zone event.");
-      })
-      .finally(() => {
-        setZoneEventCreating(false);
-      });
-  }
-
   function handleSaveZoneEvent() {
-    if (!activeMap || !activeZoneEvent || isZoneEventSaving) {
-      return;
-    }
-
-    const normalizedEventName = zoneEventDraft.zoneEvent.trim();
-
-    if (!normalizedEventName) {
-      setZoneEventStatus("Event name is required.");
+    if (!activeMap || !activeZoneEventOption || isZoneEventSaving) {
       return;
     }
 
@@ -2750,30 +2696,43 @@ export function MapDesigner() {
     setZoneEventSaving(true);
     setZoneEventStatus("");
 
-    void saveMapZoneEventAction({
-      enabled: zoneEventDraft.enabled,
-      eventName: normalizedEventName,
-      id: activeZoneEvent.id,
-      luaScript: zoneEventDraft.luaScript,
-      mapName: activeMap.name
-    })
-      .then((updatedEvent) => {
+    void (async () => {
+      try {
+        const createdOrExistingEvent =
+          activeZoneEvent ??
+          (await createMapZoneEventAction({
+            eventName: activeZoneEventOption.eventName,
+            mapName: activeMap.name
+          }));
+        const savedEvent =
+          createdOrExistingEvent.enabled === zoneEventDraft.enabled &&
+          createdOrExistingEvent.lua_script === zoneEventDraft.luaScript
+            ? createdOrExistingEvent
+            : await saveMapZoneEventAction({
+                enabled: zoneEventDraft.enabled,
+                eventName: activeZoneEventOption.eventName,
+                id: createdOrExistingEvent.id,
+                luaScript: zoneEventDraft.luaScript,
+                mapName: activeMap.name
+              });
+
         setZoneEvents((currentEvents) =>
-          sortZoneEvents(
-            currentEvents.map((eventRecord) =>
-              eventRecord.id === updatedEvent.id ? updatedEvent : eventRecord
-            )
+          sortLuaEvents(
+            [
+              ...currentEvents.filter((eventRecord) => eventRecord.id !== savedEvent.id),
+              savedEvent
+            ],
+            (eventRecord) => eventRecord.zone_event
           )
         );
-        setZoneEventDraft(createZoneEventDraft(updatedEvent));
+        setZoneEventDraft(createLuaEventDraft(savedEvent));
         setZoneEventStatus("Event saved.");
-      })
-      .catch((error: unknown) => {
+      } catch (error: unknown) {
         setZoneEventStatus(error instanceof Error ? error.message : "Could not save zone event.");
-      })
-      .finally(() => {
+      } finally {
         setZoneEventSaving(false);
-      });
+      }
+    })();
   }
 
   function handleFormatZoneEventLua() {
@@ -3180,64 +3139,51 @@ export function MapDesigner() {
               </>
             ) : activeSidebarTab === "events" ? (
               <div className="grid min-h-0 gap-3">
-                <div className="grid gap-2">
-                  <SectionEyebrow>Create Event</SectionEyebrow>
-                  <div className="flex gap-2">
-                    <input
-                      autoComplete="off"
-                      className={`${compactTextInputClass} min-w-0 flex-1`}
-                      disabled={!activeMap || isZoneEventCreating}
-                      onChange={(event) => {
-                        setNewZoneEventName(event.currentTarget.value);
-                        if (zoneEventStatus) {
-                          setZoneEventStatus("");
-                        }
-                      }}
-                      placeholder="on_player_join"
-                      value={newZoneEventName}
-                    />
-                    <button
-                      className={actionButtonClass}
-                      disabled={!activeMap || !newZoneEventName.trim() || isZoneEventCreating}
-                      onClick={handleCreateZoneEvent}
-                      type="button"
-                    >
-                      {isZoneEventCreating ? "Adding..." : "Create"}
-                    </button>
-                  </div>
-                </div>
-
                 <div className="grid min-h-0 gap-2">
                   <SectionEyebrow>Events</SectionEyebrow>
                   <div className={scrollableAssetListClass}>
-                    {zoneEvents.map((eventRecord) => (
+                    {zoneEventOptions.map((eventOption) => {
+                      const isConfigured = Boolean(eventOption.record);
+                      const displayColor = isConfigured ? "#000000" : "#909090";
+
+                      return (
                       <button
-                        className={assetListRowClass(eventRecord.id === activeZoneEventId)}
-                        key={eventRecord.id}
+                        className={assetListRowClass(eventOption.eventName === activeZoneEventName)}
+                        key={eventOption.eventName}
                         onClick={() => {
-                          setActiveZoneEventId(eventRecord.id);
+                          setActiveZoneEventName(eventOption.eventName);
                           setZoneEventStatus("");
                         }}
                         type="button"
                       >
                         <div className={assetListMetaClass}>
-                          <span className={assetListTitleClass}>{eventRecord.zone_event}</span>
-                          <span className={assetListSubtitleClass}>
-                            {eventRecord.enabled ? "Enabled" : "Disabled"}
+                          <span className={assetListTitleClass} style={{ color: displayColor }}>
+                            {eventOption.eventName}
+                          </span>
+                          <span className={assetListSubtitleClass} style={{ color: displayColor }}>
+                            {isConfigured
+                              ? eventOption.record?.enabled
+                                ? "Configured • Enabled"
+                                : "Configured • Disabled"
+                              : "Available • Not configured"}
+                          </span>
+                          <span className={assetListSubtitleClass} style={{ color: displayColor }}>
+                            {eventOption.description || "No helper description is available for this event."}
                           </span>
                         </div>
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 
                 {isZoneEventsLoading ? (
                   <div className="text-sm theme-text-muted">Loading zone events...</div>
                 ) : null}
-                {!isZoneEventsLoading && activeMap && !zoneEvents.length ? (
-                  <div className={emptyStateCardClass}>No events found for {activeMap.name}.</div>
+                {!isZoneEventsLoading && activeMap && !zoneEventOptions.length ? (
+                  <div className={emptyStateCardClass}>No events are available for {activeMap.name}.</div>
                 ) : null}
-                {zoneEventStatus && zoneEventStatus !== "Event saved." && zoneEventStatus !== "Event created." ? (
+                {zoneEventStatus && zoneEventStatus !== "Event saved." ? (
                   <div className="text-sm text-[#b42318]">{zoneEventStatus}</div>
                 ) : null}
               </div>
@@ -3538,10 +3484,10 @@ export function MapDesigner() {
           <Panel
             className="xl:h-[calc(100vh-7rem)]"
             description={
-              activeZoneEvent
-                ? `${activeZoneEvent.zone_name} • ${activeZoneEvent.zone_event}`
+              activeZoneEventOption
+                ? `${activeMap?.name ?? ""} • ${activeZoneEventOption.eventName}`
                 : activeMap
-                  ? `Select or create a zone event for ${activeMap.name}.`
+                  ? `Select a zone event for ${activeMap.name}.`
                   : "Choose a map before editing zone events."
             }
             footer={
@@ -3550,7 +3496,6 @@ export function MapDesigner() {
                   <div
                     className={
                       zoneEventStatus === "Event saved." ||
-                      zoneEventStatus === "Event created." ||
                       zoneEventStatus === "Lua formatted."
                         ? "text-sm theme-text-muted"
                         : "text-sm text-[#b42318]"
@@ -3564,7 +3509,14 @@ export function MapDesigner() {
                 <div className="flex flex-wrap gap-2">
                   <button
                     className={secondaryButtonClass}
-                    disabled={!activeZoneEvent || isZoneEventSaving || isZoneEventFormatting}
+                    onClick={openLuaScriptingGuide}
+                    type="button"
+                  >
+                    Scripting Guide
+                  </button>
+                  <button
+                    className={secondaryButtonClass}
+                    disabled={!activeZoneEventOption || isZoneEventSaving || isZoneEventFormatting}
                     onClick={handleFormatZoneEventLua}
                     type="button"
                   >
@@ -3572,7 +3524,7 @@ export function MapDesigner() {
                   </button>
                   <button
                     className={actionButtonClass}
-                    disabled={!activeZoneEvent || isZoneEventSaving || isZoneEventFormatting}
+                    disabled={!activeZoneEventOption || isZoneEventSaving || isZoneEventFormatting}
                     onClick={handleSaveZoneEvent}
                     type="button"
                   >
@@ -3581,30 +3533,17 @@ export function MapDesigner() {
                 </div>
               </div>
             }
-            title={activeZoneEvent ? activeZoneEvent.zone_event : "Event Editor"}
+            title={activeZoneEventOption ? activeZoneEventOption.eventName : "Event Editor"}
           >
-            {activeZoneEvent ? (
+            {activeZoneEventOption ? (
               <div className="grid min-h-0 gap-4 overflow-y-auto pr-1">
                 <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
-                  <label className="grid gap-1">
+                  <div className="grid gap-1">
                     <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
                       Event Name
                     </span>
-                    <input
-                      className={`${textInputClass} !min-w-0 w-full max-w-full`}
-                      onChange={(event) => {
-                        setZoneEventDraft((currentDraft) => ({
-                          ...currentDraft,
-                          zoneEvent: event.currentTarget.value
-                        }));
-                        setZoneEventLuaAnnotations([]);
-                        if (zoneEventStatus) {
-                          setZoneEventStatus("");
-                        }
-                      }}
-                      value={zoneEventDraft.zoneEvent}
-                    />
-                  </label>
+                    <div className="font-mono text-sm theme-text-primary">{activeZoneEventOption.eventName}</div>
+                  </div>
 
                   <label className="flex items-end gap-2 pb-3 text-sm theme-text-muted">
                     <input
@@ -3625,6 +3564,8 @@ export function MapDesigner() {
                   </label>
                 </div>
 
+                <LuaEventDefinitionHelp eventDefinition={activeZoneEventOption.definition} />
+
                 <div className="grid gap-3">
                   <SectionEyebrow>Lua Script</SectionEyebrow>
                   <div className="overflow-hidden border theme-border-panel">
@@ -3636,7 +3577,7 @@ export function MapDesigner() {
                       fontSize={13}
                       height="640px"
                       mode="lua"
-                      name={`map-zone-event-lua-${activeZoneEvent.id}`}
+                      name={`map-zone-event-lua-${activeZoneEventOption.eventName}`}
                       onChange={(value) => {
                         setZoneEventDraft((currentDraft) => ({
                           ...currentDraft,
@@ -3662,6 +3603,9 @@ export function MapDesigner() {
                     />
                   </div>
                   {luaHelperWarning ? <div className="text-sm text-[#b42318]">{luaHelperWarning}</div> : null}
+                  {!luaHelperWarning && zoneEventDefinitionWarning ? (
+                    <div className="text-sm text-[#b42318]">{zoneEventDefinitionWarning}</div>
+                  ) : null}
                 </div>
               </div>
             ) : (
