@@ -1,10 +1,16 @@
 "use server";
 
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
 import {
+  createZoneEventRecord,
   createMapRecord,
   createUniqueSlug,
   normalizeMapPayload,
+  readZoneEventRecords,
   readMapRecords,
+  updateZoneEventRecord,
   writeMapRecord
 } from "../lib/serverStore";
 import { normalizeMapDimension } from "../lib/map";
@@ -103,4 +109,56 @@ export async function resizeMapAction(input: {
   await writeMapRecord(nextMap);
 
   return nextMap;
+}
+
+function decodePngDataUrl(dataUrl: string) {
+  const match = dataUrl.match(/^data:image\/png;base64,(?<payload>.+)$/u);
+
+  if (!match?.groups?.payload) {
+    throw new Error("Expected a PNG image to export.");
+  }
+
+  return Buffer.from(match.groups.payload, "base64");
+}
+
+export async function exportTerrainMapAction(input: {
+  dataUrl: string;
+}) {
+  const outputDirectory = path.resolve(process.cwd(), "../output");
+  const fileName = "current_map.png";
+  const absolutePath = path.join(outputDirectory, fileName);
+
+  await fs.mkdir(outputDirectory, { recursive: true });
+  await fs.writeFile(absolutePath, decodePngDataUrl(input.dataUrl));
+
+  return {
+    absolutePath,
+    fileName
+  };
+}
+
+export async function readMapZoneEventsAction(mapName: string) {
+  return readZoneEventRecords(mapName);
+}
+
+export async function createMapZoneEventAction(input: {
+  eventName: string;
+  mapName: string;
+}) {
+  return createZoneEventRecord(input.mapName, input.eventName);
+}
+
+export async function saveMapZoneEventAction(input: {
+  enabled: boolean;
+  eventName: string;
+  id: string;
+  luaScript: string;
+  mapName: string;
+}) {
+  return updateZoneEventRecord(input.mapName, {
+    enabled: input.enabled,
+    id: input.id,
+    lua_script: input.luaScript,
+    zone_event: input.eventName
+  });
 }

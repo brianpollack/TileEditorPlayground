@@ -48,6 +48,7 @@ import {
   getSpriteTileFootprint
 } from "./sprites";
 import type {
+  CharacterEventRecord,
   ClipboardSlotRecord,
   ExportArtifact,
   ItemRecord,
@@ -60,7 +61,8 @@ import type {
   PersonalityRecord,
   SpriteRecord,
   SlotRecord,
-  TileRecord
+  TileRecord,
+  ZoneEventRecord
 } from "../types";
 
 const APP_ROOT = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -279,6 +281,26 @@ interface StoredPersonalityEventRow {
   name: string;
   personality_id: string;
   response_context: string | null;
+  updated_at: Date | string;
+}
+
+interface StoredZoneEventRow {
+  enabled: boolean | null;
+  id: number | string;
+  inserted_at: Date | string;
+  lua_script: string | null;
+  updated_at: Date | string;
+  zone_event: string;
+  zone_name: string;
+}
+
+interface StoredCharacterEventRow {
+  character_event: string;
+  character_name: string;
+  enabled: boolean | null;
+  id: number | string;
+  inserted_at: Date | string;
+  lua_script: string | null;
   updated_at: Date | string;
 }
 
@@ -1080,6 +1102,36 @@ function mapRowToPersonalityEventRecord(row: StoredPersonalityEventRow): Persona
     name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : `event_${row.id}`,
     personality_id: row.personality_id,
     response_context: typeof row.response_context === "string" ? row.response_context : "",
+    updated_at: serializeStoredTimestamp(row.updated_at)
+  };
+}
+
+function mapRowToZoneEventRecord(row: StoredZoneEventRow): ZoneEventRecord {
+  return {
+    enabled: row.enabled !== false,
+    id: String(row.id),
+    inserted_at: serializeStoredTimestamp(row.inserted_at),
+    lua_script: typeof row.lua_script === "string" ? row.lua_script : "",
+    updated_at: serializeStoredTimestamp(row.updated_at),
+    zone_event:
+      typeof row.zone_event === "string" && row.zone_event.trim()
+        ? row.zone_event.trim()
+        : `event_${row.id}`,
+    zone_name: typeof row.zone_name === "string" ? row.zone_name.trim() : ""
+  };
+}
+
+function mapRowToCharacterEventRecord(row: StoredCharacterEventRow): CharacterEventRecord {
+  return {
+    character_event:
+      typeof row.character_event === "string" && row.character_event.trim()
+        ? row.character_event.trim()
+        : `event_${row.id}`,
+    character_name: typeof row.character_name === "string" ? row.character_name.trim() : "",
+    enabled: row.enabled !== false,
+    id: String(row.id),
+    inserted_at: serializeStoredTimestamp(row.inserted_at),
+    lua_script: typeof row.lua_script === "string" ? row.lua_script : "",
     updated_at: serializeStoredTimestamp(row.updated_at)
   };
 }
@@ -2270,6 +2322,66 @@ function normalizePersonalityEventName(value: unknown) {
   return normalizedName;
 }
 
+function normalizeZoneEventId(value: unknown) {
+  const numericId = typeof value === "number" ? value : Number(String(value ?? "").trim());
+
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    throw new Error("Valid event id is required.");
+  }
+
+  return numericId;
+}
+
+function normalizeZoneEventName(value: unknown) {
+  const normalizedName = normalizeOptionalText(value);
+
+  if (!normalizedName) {
+    throw new Error("Event name is required.");
+  }
+
+  return normalizedName;
+}
+
+function normalizeZoneName(value: unknown) {
+  const normalizedName = normalizeOptionalText(value);
+
+  if (!normalizedName) {
+    throw new Error("Map name is required.");
+  }
+
+  return normalizedName;
+}
+
+function normalizeCharacterEventId(value: unknown) {
+  const numericId = typeof value === "number" ? value : Number(String(value ?? "").trim());
+
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    throw new Error("Valid event id is required.");
+  }
+
+  return numericId;
+}
+
+function normalizeCharacterEventName(value: unknown) {
+  const normalizedName = normalizeOptionalText(value);
+
+  if (!normalizedName) {
+    throw new Error("Event name is required.");
+  }
+
+  return normalizedName;
+}
+
+function normalizeCharacterName(value: unknown) {
+  const normalizedName = normalizeOptionalText(value);
+
+  if (!normalizedName) {
+    throw new Error("Character name is required.");
+  }
+
+  return normalizedName;
+}
+
 function normalizePersonalityToolEventDetails(value: unknown, eventName: string) {
   const details = normalizePersonalityEventDetails(value);
 
@@ -2302,6 +2414,214 @@ async function assertPersonalityRecordExists(db: Awaited<ReturnType<typeof getDa
   if (!existingPersonality) {
     throw new Error("Personality not found.");
   }
+}
+
+async function assertZoneEventsTableExists(db: Awaited<ReturnType<typeof getDatabase>>) {
+  const hasZoneEventsTable = await db.schema.hasTable("zone_events");
+
+  if (!hasZoneEventsTable) {
+    throw new Error("zone_events table not found.");
+  }
+}
+
+async function assertCharacterEventsTableExists(db: Awaited<ReturnType<typeof getDatabase>>) {
+  const hasCharacterEventsTable = await db.schema.hasTable("character_events");
+
+  if (!hasCharacterEventsTable) {
+    throw new Error("character_events table not found.");
+  }
+}
+
+export async function readZoneEventRecords(zoneName: string): Promise<ZoneEventRecord[]> {
+  await ensureAssetDatabaseReady();
+  const normalizedZoneName = normalizeZoneName(zoneName);
+  const db = await getDatabase();
+
+  await assertZoneEventsTableExists(db);
+
+  const rows = await db<StoredZoneEventRow>("zone_events")
+    .select("*")
+    .where({ zone_name: normalizedZoneName })
+    .orderBy([
+      { column: "enabled", order: "desc" },
+      { column: "zone_event", order: "asc" },
+      { column: "id", order: "asc" }
+    ]);
+
+  return rows.map(mapRowToZoneEventRecord);
+}
+
+export async function createZoneEventRecord(zoneName: string, zoneEvent: string) {
+  await ensureAssetDatabaseReady();
+  const normalizedZoneName = normalizeZoneName(zoneName);
+  const normalizedZoneEvent = normalizeZoneEventName(zoneEvent);
+  const db = await getDatabase();
+
+  await assertZoneEventsTableExists(db);
+
+  const existingEvent = await db<StoredZoneEventRow>("zone_events")
+    .select("id")
+    .first()
+    .where({ zone_event: normalizedZoneEvent, zone_name: normalizedZoneName });
+
+  if (existingEvent) {
+    throw new Error(`Event ${normalizedZoneEvent} already exists for ${normalizedZoneName}.`);
+  }
+
+  const timestamp = new Date();
+  const [createdEvent] = await db<StoredZoneEventRow>("zone_events")
+    .insert({
+      enabled: true,
+      inserted_at: timestamp,
+      lua_script: "return \"\"",
+      updated_at: timestamp,
+      zone_event: normalizedZoneEvent,
+      zone_name: normalizedZoneName
+    })
+    .returning("*");
+
+  if (!createdEvent) {
+    throw new Error("Could not create zone event.");
+  }
+
+  return mapRowToZoneEventRecord(createdEvent);
+}
+
+export async function updateZoneEventRecord(
+  zoneName: string,
+  fields: Partial<ZoneEventRecord> & { id?: string | number }
+) {
+  await ensureAssetDatabaseReady();
+  const normalizedZoneName = normalizeZoneName(zoneName);
+  const eventId = normalizeZoneEventId(fields.id);
+  const normalizedZoneEvent = normalizeZoneEventName(fields.zone_event);
+  const luaScript = typeof fields.lua_script === "string" ? fields.lua_script : "";
+  const enabled = fields.enabled !== false;
+  const db = await getDatabase();
+
+  await assertZoneEventsTableExists(db);
+
+  const conflictingEvent = await db<StoredZoneEventRow>("zone_events")
+    .select("id")
+    .first()
+    .where({ zone_event: normalizedZoneEvent, zone_name: normalizedZoneName })
+    .whereNot({ id: eventId });
+
+  if (conflictingEvent) {
+    throw new Error(`Event ${normalizedZoneEvent} already exists for ${normalizedZoneName}.`);
+  }
+
+  const [updatedEvent] = await db<StoredZoneEventRow>("zone_events")
+    .where({ id: eventId, zone_name: normalizedZoneName })
+    .update({
+      enabled,
+      lua_script: luaScript,
+      updated_at: new Date(),
+      zone_event: normalizedZoneEvent
+    })
+    .returning("*");
+
+  if (!updatedEvent) {
+    throw new Error("Zone event not found.");
+  }
+
+  return mapRowToZoneEventRecord(updatedEvent);
+}
+
+export async function readCharacterEventRecords(characterName: string): Promise<CharacterEventRecord[]> {
+  await ensureAssetDatabaseReady();
+  const normalizedCharacterName = normalizeCharacterName(characterName);
+  const db = await getDatabase();
+
+  await assertCharacterEventsTableExists(db);
+
+  const rows = await db<StoredCharacterEventRow>("character_events")
+    .select("*")
+    .where({ character_name: normalizedCharacterName })
+    .orderBy([
+      { column: "enabled", order: "desc" },
+      { column: "character_event", order: "asc" },
+      { column: "id", order: "asc" }
+    ]);
+
+  return rows.map(mapRowToCharacterEventRecord);
+}
+
+export async function createCharacterEventRecord(characterName: string, characterEvent: string) {
+  await ensureAssetDatabaseReady();
+  const normalizedCharacterName = normalizeCharacterName(characterName);
+  const normalizedCharacterEvent = normalizeCharacterEventName(characterEvent);
+  const db = await getDatabase();
+
+  await assertCharacterEventsTableExists(db);
+
+  const existingEvent = await db<StoredCharacterEventRow>("character_events")
+    .select("id")
+    .first()
+    .where({ character_event: normalizedCharacterEvent, character_name: normalizedCharacterName });
+
+  if (existingEvent) {
+    throw new Error(`Event ${normalizedCharacterEvent} already exists for ${normalizedCharacterName}.`);
+  }
+
+  const timestamp = new Date();
+  const [createdEvent] = await db<StoredCharacterEventRow>("character_events")
+    .insert({
+      character_event: normalizedCharacterEvent,
+      character_name: normalizedCharacterName,
+      enabled: true,
+      inserted_at: timestamp,
+      lua_script: "return \"\"",
+      updated_at: timestamp
+    })
+    .returning("*");
+
+  if (!createdEvent) {
+    throw new Error("Could not create character event.");
+  }
+
+  return mapRowToCharacterEventRecord(createdEvent);
+}
+
+export async function updateCharacterEventRecord(
+  characterName: string,
+  fields: Partial<CharacterEventRecord> & { id?: string | number }
+) {
+  await ensureAssetDatabaseReady();
+  const normalizedCharacterName = normalizeCharacterName(characterName);
+  const eventId = normalizeCharacterEventId(fields.id);
+  const normalizedCharacterEvent = normalizeCharacterEventName(fields.character_event);
+  const luaScript = typeof fields.lua_script === "string" ? fields.lua_script : "";
+  const enabled = fields.enabled !== false;
+  const db = await getDatabase();
+
+  await assertCharacterEventsTableExists(db);
+
+  const conflictingEvent = await db<StoredCharacterEventRow>("character_events")
+    .select("id")
+    .first()
+    .where({ character_event: normalizedCharacterEvent, character_name: normalizedCharacterName })
+    .whereNot({ id: eventId });
+
+  if (conflictingEvent) {
+    throw new Error(`Event ${normalizedCharacterEvent} already exists for ${normalizedCharacterName}.`);
+  }
+
+  const [updatedEvent] = await db<StoredCharacterEventRow>("character_events")
+    .where({ id: eventId, character_name: normalizedCharacterName })
+    .update({
+      character_event: normalizedCharacterEvent,
+      enabled,
+      lua_script: luaScript,
+      updated_at: new Date()
+    })
+    .returning("*");
+
+  if (!updatedEvent) {
+    throw new Error("Character event not found.");
+  }
+
+  return mapRowToCharacterEventRecord(updatedEvent);
 }
 
 export async function readPersonalityEventRecords(characterSlug: string): Promise<PersonalityEventRecord[]> {

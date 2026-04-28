@@ -5,10 +5,15 @@ import {
   useDeferredValue,
   useEffect,
   useEffectEvent,
+  useMemo,
   useRef,
   useState,
   useTransition
 } from "react";
+import type { Ace } from "ace-builds";
+import AceEditor from "react-ace";
+import "ace-builds/src-noconflict/mode-lua";
+import "ace-builds/src-noconflict/theme-tomorrow_night";
 import {
   faChevronRight,
   faEraser,
@@ -25,7 +30,15 @@ import {
   prepareMapAiRunAction,
   runMapAiModelAction
 } from "../actions/mapAiActions";
-import { createMapAction, resizeMapAction, saveMapAction } from "../actions/mapActions";
+import {
+  createMapZoneEventAction,
+  createMapAction,
+  exportTerrainMapAction,
+  readMapZoneEventsAction,
+  resizeMapAction,
+  saveMapZoneEventAction,
+  saveMapAction
+} from "../actions/mapActions";
 import { useStudio } from "../app/StudioContext";
 import {
   MAP_DEFAULT_GRID_SIZE,
@@ -60,6 +73,12 @@ import {
   resizeMapLayersExpandingEdges,
   serializeMapTileOptionsKey
 } from "../lib/map";
+import {
+  createLuaErrorAnnotations,
+  formatLuaScript,
+  validateLuaScript
+} from "../lib/luaEditor";
+import { useLuaAceSupport } from "../lib/luaApiHelper";
 import { normalizeUnderscoreName } from "../lib/naming";
 import { describeSlot, sanitizeSlotRecord, type SlotKey } from "../lib/slots";
 import {
@@ -110,8 +129,15 @@ import {
   visibilityOptionButtonClass,
   zoomButtonClass
 } from "./uiStyles";
-import type { MapTileOptions, SpriteRecord, TileCell, TileRecord } from "../types";
-import type { MapAssetPlacement, MapLayerStack } from "../types";
+import type {
+  MapAssetPlacement,
+  MapLayerStack,
+  MapTileOptions,
+  SpriteRecord,
+  TileCell,
+  TileRecord,
+  ZoneEventRecord
+} from "../types";
 
 const MAP_PREVIEW_SIZE = 128;
 const MAP_MINI_MAP_MAX_SIZE = 512;
@@ -149,8 +175,8 @@ const BRUSH_OPTION_DEFINITIONS = [
   { id: "color", label: "Color" }
 ] as const;
 const DEFAULT_MAP_BRUSH_OPTIONS = normalizeMapTileOptions(undefined);
-type MapSidebarTab = "ai" | "brushes" | "maps";
 type MapAiTool = (typeof AI_TOOL_OPTIONS)[number]["id"];
+type MapSidebarTab = "ai" | "brushes" | "events" | "maps";
 
 interface MapAiSelection {
   bottomTileY: number;
@@ -177,6 +203,36 @@ interface MapAiPreviewSnapshot {
   layers: MapLayerStack;
   maskedCells: Set<string>;
   selection: MapAiSelection;
+}
+
+interface ZoneEventDraftState {
+  enabled: boolean;
+  luaScript: string;
+  zoneEvent: string;
+}
+
+function createZoneEventDraft(eventRecord: ZoneEventRecord | null): ZoneEventDraftState {
+  return {
+    enabled: eventRecord?.enabled ?? true,
+    luaScript: eventRecord?.lua_script ?? "",
+    zoneEvent: eventRecord?.zone_event ?? ""
+  };
+}
+
+function sortZoneEvents(events: ZoneEventRecord[]) {
+  return events.slice().sort((left, right) => {
+    if (left.enabled !== right.enabled) {
+      return left.enabled ? -1 : 1;
+    }
+
+    const nameComparison = left.zone_event.localeCompare(right.zone_event);
+
+    if (nameComparison !== 0) {
+      return nameComparison;
+    }
+
+    return left.id.localeCompare(right.id, undefined, { numeric: true });
+  });
 }
 
 interface MapWorkspaceProps {
@@ -815,6 +871,13 @@ export function MapDesigner() {
     tiles,
     upsertMap
   } = useStudio();
+  const {
+    enableBasicAutocompletion,
+    enableLiveAutocompletion,
+    enableSnippets,
+    handleEditorLoad: handleLuaEditorLoad,
+    helperWarning: luaHelperWarning
+  } = useLuaAceSupport();
   const initialMapDesignerUiState = getMapDesignerUiState(activeMapSlug);
   const [activeLayerIndex, setActiveLayerIndex] = useState(initialMapDesignerUiState.activeLayerIndex);
   const [hoverCell, setHoverCell] = useState<TileCell | null>(null);
@@ -855,6 +918,16 @@ export function MapDesigner() {
   const [resizeMapHeight, setResizeMapHeight] = useState(String(MAP_DEFAULT_GRID_SIZE));
   const [isResizeDialogOpen, setIsResizeDialogOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
+  const [zoneEvents, setZoneEvents] = useState<ZoneEventRecord[]>([]);
+  const [activeZoneEventId, setActiveZoneEventId] = useState("");
+  const [zoneEventDraft, setZoneEventDraft] = useState<ZoneEventDraftState>(() => createZoneEventDraft(null));
+  const [newZoneEventName, setNewZoneEventName] = useState("");
+  const [zoneEventStatus, setZoneEventStatus] = useState("");
+  const [isZoneEventsLoading, setZoneEventsLoading] = useState(false);
+  const [isZoneEventCreating, setZoneEventCreating] = useState(false);
+  const [isZoneEventSaving, setZoneEventSaving] = useState(false);
+  const [isZoneEventFormatting, setZoneEventFormatting] = useState(false);
+  const [zoneEventLuaAnnotations, setZoneEventLuaAnnotations] = useState<Ace.Annotation[]>([]);
   const [saveConfirmationMessage, setSaveConfirmationMessage] = useState("");
   const [mapAboutPromptDrafts, setMapAboutPromptDrafts] = useState<Record<string, string>>(() =>
     Object.fromEntries(maps.map((mapRecord) => [mapRecord.slug, mapRecord.aboutPrompt ?? ""]))
@@ -948,6 +1021,10 @@ export function MapDesigner() {
     )
   );
   const spriteThumbnailUrls = sprites.map((spriteRecord) => spriteRecord.thumbnail ?? "");
+  const activeZoneEvent = useMemo(
+    () => zoneEvents.find((eventRecord) => eventRecord.id === activeZoneEventId) ?? null,
+    [activeZoneEventId, zoneEvents]
+  );
 
   useEffect(() => {
     setHasMounted(true);
@@ -958,6 +1035,11 @@ export function MapDesigner() {
       setMapStatus(`Editing ${activeMap.name} (${activeMap.width}x${activeMap.height}).`);
     }
   }, [activeMap]);
+
+  useEffect(() => {
+    setZoneEventDraft(createZoneEventDraft(activeZoneEvent));
+    setZoneEventLuaAnnotations([]);
+  }, [activeZoneEvent?.id]);
 
   useEffect(() => {
     if (!activeMap) {
@@ -992,9 +1074,59 @@ export function MapDesigner() {
     setAiSubmitting(false);
     setIsAiModalOpen(false);
     setIsAiRunningModalOpen(false);
+    setZoneEvents([]);
+    setActiveZoneEventId("");
+    setZoneEventDraft(createZoneEventDraft(null));
+    setNewZoneEventName("");
+    setZoneEventStatus("");
+    setZoneEventsLoading(false);
+    setZoneEventCreating(false);
+    setZoneEventSaving(false);
+    setZoneEventFormatting(false);
+    setZoneEventLuaAnnotations([]);
     setBrushEyedropperActive(false);
     lastPlacedPlacementRef.current = null;
   }, [activeMapSlug]);
+
+  useEffect(() => {
+    if (activeSidebarTab !== "events") {
+      return;
+    }
+
+    if (!activeMap?.name) {
+      setZoneEvents([]);
+      setActiveZoneEventId("");
+      setZoneEventDraft(createZoneEventDraft(null));
+      setZoneEventLuaAnnotations([]);
+      setZoneEventStatus("");
+      return;
+    }
+
+    setZoneEventsLoading(true);
+    setZoneEventStatus("");
+
+    void readMapZoneEventsAction(activeMap.name)
+      .then((nextEvents) => {
+        const sortedEvents = sortZoneEvents(nextEvents);
+
+        setZoneEvents(sortedEvents);
+        setActiveZoneEventId((currentEventId) =>
+          sortedEvents.some((eventRecord) => eventRecord.id === currentEventId)
+            ? currentEventId
+            : sortedEvents[0]?.id ?? ""
+        );
+      })
+      .catch((error: unknown) => {
+        setZoneEvents([]);
+        setActiveZoneEventId("");
+        setZoneEventDraft(createZoneEventDraft(null));
+        setZoneEventLuaAnnotations([]);
+        setZoneEventStatus(error instanceof Error ? error.message : "Could not load zone events.");
+      })
+      .finally(() => {
+        setZoneEventsLoading(false);
+      });
+  }, [activeMap?.name, activeSidebarTab]);
 
   useEffect(() => {
     return () => {
@@ -1693,6 +1825,27 @@ export function MapDesigner() {
       return outputCanvas.toDataURL("image/png");
     }
   );
+
+  const renderTerrainExportDataUrl = useEffectEvent(async () => {
+    await Promise.all(
+      [...tileSlotUrls, ...spriteThumbnailUrls].filter(Boolean).map((imageUrl) => imageCache.ensureImage(imageUrl))
+    );
+
+    const outputCanvas = document.createElement("canvas");
+    ensureCanvasSize(outputCanvas, mapCanvasWidth, mapCanvasHeight);
+    const outputContext = outputCanvas.getContext("2d");
+
+    if (!outputContext) {
+      throw new Error("Could not render the terrain export.");
+    }
+
+    outputContext.imageSmoothingEnabled = false;
+    renderMapGrid(outputContext, draftLayers, (layerIndex) => layerVisibilities[layerIndex] ?? 1, {
+      showGrid: false
+    });
+
+    return outputCanvas.toDataURL("image/png");
+  });
 
   const renderAiPreviewData = useEffectEvent(async (snapshot: MapAiPreviewSnapshot) => {
     await Promise.all(snapshot.assetImageUrls.map((imageUrl) => imageCache.ensureImage(imageUrl)));
@@ -2519,6 +2672,139 @@ export function MapDesigner() {
       });
   }
 
+  function handleExportTerrain() {
+    if (!activeMap) {
+      setMapStatus("Choose a map before exporting terrain.");
+      return;
+    }
+
+    setBusyLabel("Exporting terrain");
+
+    void renderTerrainExportDataUrl()
+      .then((dataUrl) => exportTerrainMapAction({ dataUrl }))
+      .then(() => {
+        setMapStatus(`Exported terrain for ${activeMap.name} to ./output/current_map.png.`);
+      })
+      .catch((error: unknown) => {
+        setMapStatus(error instanceof Error ? error.message : "Could not export the terrain map.");
+      })
+      .finally(() => {
+        setBusyLabel("");
+      });
+  }
+
+  function handleCreateZoneEvent() {
+    if (!activeMap || isZoneEventCreating) {
+      return;
+    }
+
+    const normalizedEventName = newZoneEventName.trim();
+
+    if (!normalizedEventName) {
+      setZoneEventStatus("Event name is required.");
+      return;
+    }
+
+    setZoneEventCreating(true);
+    setZoneEventStatus("");
+
+    void createMapZoneEventAction({
+      eventName: normalizedEventName,
+      mapName: activeMap.name
+    })
+      .then((createdEvent) => {
+        setZoneEvents((currentEvents) => sortZoneEvents([...currentEvents, createdEvent]));
+        setActiveZoneEventId(createdEvent.id);
+        setNewZoneEventName("");
+        setZoneEventStatus("Event created.");
+      })
+      .catch((error: unknown) => {
+        setZoneEventStatus(error instanceof Error ? error.message : "Could not create zone event.");
+      })
+      .finally(() => {
+        setZoneEventCreating(false);
+      });
+  }
+
+  function handleSaveZoneEvent() {
+    if (!activeMap || !activeZoneEvent || isZoneEventSaving) {
+      return;
+    }
+
+    const normalizedEventName = zoneEventDraft.zoneEvent.trim();
+
+    if (!normalizedEventName) {
+      setZoneEventStatus("Event name is required.");
+      return;
+    }
+
+    const validationResult = validateLuaScript(zoneEventDraft.luaScript);
+
+    if (!validationResult.ok) {
+      setZoneEventLuaAnnotations(createLuaErrorAnnotations(validationResult));
+      setZoneEventStatus(validationResult.error.message);
+      return;
+    }
+
+    setZoneEventLuaAnnotations([]);
+    setZoneEventSaving(true);
+    setZoneEventStatus("");
+
+    void saveMapZoneEventAction({
+      enabled: zoneEventDraft.enabled,
+      eventName: normalizedEventName,
+      id: activeZoneEvent.id,
+      luaScript: zoneEventDraft.luaScript,
+      mapName: activeMap.name
+    })
+      .then((updatedEvent) => {
+        setZoneEvents((currentEvents) =>
+          sortZoneEvents(
+            currentEvents.map((eventRecord) =>
+              eventRecord.id === updatedEvent.id ? updatedEvent : eventRecord
+            )
+          )
+        );
+        setZoneEventDraft(createZoneEventDraft(updatedEvent));
+        setZoneEventStatus("Event saved.");
+      })
+      .catch((error: unknown) => {
+        setZoneEventStatus(error instanceof Error ? error.message : "Could not save zone event.");
+      })
+      .finally(() => {
+        setZoneEventSaving(false);
+      });
+  }
+
+  function handleFormatZoneEventLua() {
+    const validationResult = validateLuaScript(zoneEventDraft.luaScript);
+
+    if (!validationResult.ok) {
+      setZoneEventLuaAnnotations(createLuaErrorAnnotations(validationResult));
+      setZoneEventStatus(validationResult.error.message);
+      return;
+    }
+
+    setZoneEventFormatting(true);
+    setZoneEventLuaAnnotations([]);
+    setZoneEventStatus("");
+
+    void formatLuaScript(zoneEventDraft.luaScript)
+      .then((formattedScript) => {
+        setZoneEventDraft((currentDraft) => ({
+          ...currentDraft,
+          luaScript: formattedScript
+        }));
+        setZoneEventStatus("Lua formatted.");
+      })
+      .catch((error: unknown) => {
+        setZoneEventStatus(error instanceof Error ? error.message : "Could not format Lua script.");
+      })
+      .finally(() => {
+        setZoneEventFormatting(false);
+      });
+  }
+
   function updateAiModelStatus(
     modelId: string,
     nextStatus: Partial<MapAiModelStatus> & Pick<MapAiModelStatus, "status">
@@ -2806,6 +3092,10 @@ export function MapDesigner() {
             description={
               activeSidebarTab === "maps"
                 ? "Choose an existing map or create a new one."
+                : activeSidebarTab === "events"
+                  ? activeMap
+                    ? `Zone events for ${activeMap.name}.`
+                    : "Choose a map before editing zone events."
                 : activeSidebarTab === "brushes"
                   ? `Pick a tile or sprite from ${selectedLayer.index} - ${selectedLayer.description}, then paint it onto the active layer.`
                   : "Build an AI mask on top of the current map, then drag a selection to generate the AI image and edit mask."
@@ -2820,7 +3110,16 @@ export function MapDesigner() {
                 }}
                 type="button"
               >
-                Map Library
+                Maps
+              </button>
+              <button
+                className={panelTabButtonClass(activeSidebarTab === "events")}
+                onClick={() => {
+                  setActiveSidebarTab("events");
+                }}
+                type="button"
+              >
+                Events
               </button>
               <button
                 className={panelTabButtonClass(activeSidebarTab === "brushes")}
@@ -2879,6 +3178,69 @@ export function MapDesigner() {
                   <div className="text-sm theme-text-muted">No maps match that filter.</div>
                 ) : null}
               </>
+            ) : activeSidebarTab === "events" ? (
+              <div className="grid min-h-0 gap-3">
+                <div className="grid gap-2">
+                  <SectionEyebrow>Create Event</SectionEyebrow>
+                  <div className="flex gap-2">
+                    <input
+                      autoComplete="off"
+                      className={`${compactTextInputClass} min-w-0 flex-1`}
+                      disabled={!activeMap || isZoneEventCreating}
+                      onChange={(event) => {
+                        setNewZoneEventName(event.currentTarget.value);
+                        if (zoneEventStatus) {
+                          setZoneEventStatus("");
+                        }
+                      }}
+                      placeholder="on_player_join"
+                      value={newZoneEventName}
+                    />
+                    <button
+                      className={actionButtonClass}
+                      disabled={!activeMap || !newZoneEventName.trim() || isZoneEventCreating}
+                      onClick={handleCreateZoneEvent}
+                      type="button"
+                    >
+                      {isZoneEventCreating ? "Adding..." : "Create"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid min-h-0 gap-2">
+                  <SectionEyebrow>Events</SectionEyebrow>
+                  <div className={scrollableAssetListClass}>
+                    {zoneEvents.map((eventRecord) => (
+                      <button
+                        className={assetListRowClass(eventRecord.id === activeZoneEventId)}
+                        key={eventRecord.id}
+                        onClick={() => {
+                          setActiveZoneEventId(eventRecord.id);
+                          setZoneEventStatus("");
+                        }}
+                        type="button"
+                      >
+                        <div className={assetListMetaClass}>
+                          <span className={assetListTitleClass}>{eventRecord.zone_event}</span>
+                          <span className={assetListSubtitleClass}>
+                            {eventRecord.enabled ? "Enabled" : "Disabled"}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {isZoneEventsLoading ? (
+                  <div className="text-sm theme-text-muted">Loading zone events...</div>
+                ) : null}
+                {!isZoneEventsLoading && activeMap && !zoneEvents.length ? (
+                  <div className={emptyStateCardClass}>No events found for {activeMap.name}.</div>
+                ) : null}
+                {zoneEventStatus && zoneEventStatus !== "Event saved." && zoneEventStatus !== "Event created." ? (
+                  <div className="text-sm text-[#b42318]">{zoneEventStatus}</div>
+                ) : null}
+              </div>
             ) : activeSidebarTab === "brushes" ? (
               <div className="grid min-h-0 gap-3">
                 <div className={`grid gap-2 ${activeBrushTile ? "" : "opacity-65"}`}>
@@ -3158,206 +3520,353 @@ export function MapDesigner() {
                     The size label always uses the real tile size of {TILE_SIZE}px, not the current zoom level.
                   </div>
                 </div>
+
+                <button
+                  className={actionButtonClass}
+                  disabled={!activeMap || Boolean(busyLabel)}
+                  onClick={handleExportTerrain}
+                  type="button"
+                >
+                  Export Terrain
+                </button>
               </div>
             )}
           </Panel>
         </div>
 
-        <Panel
-            actions={
-              <div className="grid gap-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    className={actionButtonClass}
-                    disabled={!activeMap || !hasMapDraftChanges || Boolean(busyLabel)}
-                    onClick={handleSaveMap}
-                    type="button"
+        {activeSidebarTab === "events" ? (
+          <Panel
+            className="xl:h-[calc(100vh-7rem)]"
+            description={
+              activeZoneEvent
+                ? `${activeZoneEvent.zone_name} • ${activeZoneEvent.zone_event}`
+                : activeMap
+                  ? `Select or create a zone event for ${activeMap.name}.`
+                  : "Choose a map before editing zone events."
+            }
+            footer={
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                {zoneEventStatus ? (
+                  <div
+                    className={
+                      zoneEventStatus === "Event saved." ||
+                      zoneEventStatus === "Event created." ||
+                      zoneEventStatus === "Lua formatted."
+                        ? "text-sm theme-text-muted"
+                        : "text-sm text-[#b42318]"
+                    }
                   >
-                    Save Map
-                  </button>
+                    {zoneEventStatus}
+                  </div>
+                ) : (
+                  <div />
+                )}
+                <div className="flex flex-wrap gap-2">
                   <button
                     className={secondaryButtonClass}
-                    disabled={!activeMap || Boolean(busyLabel)}
-                    onClick={() => {
-                      setResizeMapWidth(String(mapWidth));
-                      setResizeMapHeight(String(mapHeight));
-                      setIsResizeDialogOpen(true);
-                    }}
+                    disabled={!activeZoneEvent || isZoneEventSaving || isZoneEventFormatting}
+                    onClick={handleFormatZoneEventLua}
                     type="button"
                   >
-                    Resize
+                    {isZoneEventFormatting ? "Formatting..." : "Format Lua"}
+                  </button>
+                  <button
+                    className={actionButtonClass}
+                    disabled={!activeZoneEvent || isZoneEventSaving || isZoneEventFormatting}
+                    onClick={handleSaveZoneEvent}
+                    type="button"
+                  >
+                    {isZoneEventSaving ? "Saving..." : "Save Event"}
                   </button>
                 </div>
-                {saveConfirmationMessage ? (
-                  <div className="text-xs font-medium theme-text-muted">
-                    {saveConfirmationMessage}
-                  </div>
-                ) : null}
               </div>
             }
-            description={canvasDescription}
-            footer={
-              <div className="flex flex-wrap items-center gap-3">
-                <div className={statusChipClass}>
-                  {busyLabel ? `${busyLabel}...` : activeModeLabel}
-                </div>
-                {activeSidebarTab === "ai" ? (
-                  <div className={statusChipClass}>Selection: {aiSelectionSizeLabel}</div>
-                ) : null}
-              </div>
-            }
-            title="Map Canvas"
+            title={activeZoneEvent ? activeZoneEvent.zone_event : "Event Editor"}
           >
-            <MapWorkspace
-              activeLayerIndex={activeLayerIndex}
-              activeModeLabel={activeModeLabel}
-              activeMapAboutPrompt={activeMapAboutPrompt}
-              activeSidebarTab={activeSidebarTab}
-              activeAiTool={activeAiTool}
-              activeBrushSlotNum={activeBrushTileSlotNum}
-              activeLayerTitle={activeLayerTitle}
-              activeOpacityValue={activeOpacityValue}
-              brushSlotOptions={availableBrushSlotOptions}
-              canZoomIn={currentScale > MAP_MIN_SCALE_PERCENT}
-              canZoomOut={currentScale < MAP_MAX_SCALE_PERCENT}
-              hoverCanvasRef={hoverCanvasRef}
-              isGridVisible={isGridVisible}
-              layerPreviewCanvasRefs={layerPreviewCanvasRefs}
-              layerVisibilities={layerVisibilities}
-              mapCanvasHeight={mapCanvasHeight}
-              mapCanvasRef={mapCanvasRef}
-              mapCanvasWidth={mapCanvasWidth}
-              mapCursorClassName={mapCursorClassName}
-              mapFrameRef={mapFrameRef}
-              onCanvasClick={() => {}}
-              onCanvasMouseDown={(event) => {
-                const nextCell = getMapCellFromPointerEvent(
-                  event.currentTarget,
-                  event.nativeEvent,
-                  mapWidth,
-                  mapHeight
-                );
+            {activeZoneEvent ? (
+              <div className="grid min-h-0 gap-4 overflow-y-auto pr-1">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
+                  <label className="grid gap-1">
+                    <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
+                      Event Name
+                    </span>
+                    <input
+                      className={`${textInputClass} !min-w-0 w-full max-w-full`}
+                      onChange={(event) => {
+                        setZoneEventDraft((currentDraft) => ({
+                          ...currentDraft,
+                          zoneEvent: event.currentTarget.value
+                        }));
+                        setZoneEventLuaAnnotations([]);
+                        if (zoneEventStatus) {
+                          setZoneEventStatus("");
+                        }
+                      }}
+                      value={zoneEventDraft.zoneEvent}
+                    />
+                  </label>
 
-                if (!nextCell) {
-                  return;
-                }
+                  <label className="flex items-end gap-2 pb-3 text-sm theme-text-muted">
+                    <input
+                      checked={zoneEventDraft.enabled}
+                      onChange={(event) => {
+                        setZoneEventDraft((currentDraft) => ({
+                          ...currentDraft,
+                          enabled: event.currentTarget.checked
+                        }));
+                        setZoneEventLuaAnnotations([]);
+                        if (zoneEventStatus) {
+                          setZoneEventStatus("");
+                        }
+                      }}
+                      type="checkbox"
+                    />
+                    Enabled
+                  </label>
+                </div>
 
-                setHoverCell(nextCell);
+                <div className="grid gap-3">
+                  <SectionEyebrow>Lua Script</SectionEyebrow>
+                  <div className="overflow-hidden border theme-border-panel">
+                    <AceEditor
+                      className="w-full"
+                      enableBasicAutocompletion={enableBasicAutocompletion}
+                      enableLiveAutocompletion={enableLiveAutocompletion}
+                      enableSnippets={enableSnippets}
+                      fontSize={13}
+                      height="640px"
+                      mode="lua"
+                      name={`map-zone-event-lua-${activeZoneEvent.id}`}
+                      onChange={(value) => {
+                        setZoneEventDraft((currentDraft) => ({
+                          ...currentDraft,
+                          luaScript: value
+                        }));
+                        setZoneEventLuaAnnotations([]);
+                        if (zoneEventStatus) {
+                          setZoneEventStatus("");
+                        }
+                      }}
+                      annotations={zoneEventLuaAnnotations}
+                      onLoad={handleLuaEditorLoad}
+                      setOptions={{
+                        showFoldWidgets: false,
+                        tabSize: 2,
+                        useWorker: false,
+                        useSoftTabs: true
+                      }}
+                      theme="tomorrow_night"
+                      value={zoneEventDraft.luaScript}
+                      width="100%"
+                      wrapEnabled
+                    />
+                  </div>
+                  {luaHelperWarning ? <div className="text-sm text-[#b42318]">{luaHelperWarning}</div> : null}
+                </div>
+              </div>
+            ) : (
+              <div className="flex min-h-[20rem] items-center justify-center text-sm theme-text-muted">
+                Select an event to edit.
+              </div>
+            )}
+          </Panel>
+        ) : (
+          <Panel
+              actions={
+                <div className="grid gap-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      className={actionButtonClass}
+                      disabled={!activeMap || !hasMapDraftChanges || Boolean(busyLabel)}
+                      onClick={handleSaveMap}
+                      type="button"
+                    >
+                      Save Map
+                    </button>
+                    <button
+                      className={secondaryButtonClass}
+                      disabled={!activeMap || Boolean(busyLabel)}
+                      onClick={() => {
+                        setResizeMapWidth(String(mapWidth));
+                        setResizeMapHeight(String(mapHeight));
+                        setIsResizeDialogOpen(true);
+                      }}
+                      type="button"
+                    >
+                      Resize
+                    </button>
+                  </div>
+                  {saveConfirmationMessage ? (
+                    <div className="text-xs font-medium theme-text-muted">
+                      {saveConfirmationMessage}
+                    </div>
+                  ) : null}
+                </div>
+              }
+              description={canvasDescription}
+              footer={
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className={statusChipClass}>
+                    {busyLabel ? `${busyLabel}...` : activeModeLabel}
+                  </div>
+                  {activeSidebarTab === "ai" ? (
+                    <div className={statusChipClass}>Selection: {aiSelectionSizeLabel}</div>
+                  ) : null}
+                </div>
+              }
+              title="Map Canvas"
+            >
+              <MapWorkspace
+                activeLayerIndex={activeLayerIndex}
+                activeModeLabel={activeModeLabel}
+                activeMapAboutPrompt={activeMapAboutPrompt}
+                activeSidebarTab={activeSidebarTab}
+                activeAiTool={activeAiTool}
+                activeBrushSlotNum={activeBrushTileSlotNum}
+                activeLayerTitle={activeLayerTitle}
+                activeOpacityValue={activeOpacityValue}
+                brushSlotOptions={availableBrushSlotOptions}
+                canZoomIn={currentScale > MAP_MIN_SCALE_PERCENT}
+                canZoomOut={currentScale < MAP_MAX_SCALE_PERCENT}
+                hoverCanvasRef={hoverCanvasRef}
+                isGridVisible={isGridVisible}
+                layerPreviewCanvasRefs={layerPreviewCanvasRefs}
+                layerVisibilities={layerVisibilities}
+                mapCanvasHeight={mapCanvasHeight}
+                mapCanvasRef={mapCanvasRef}
+                mapCanvasWidth={mapCanvasWidth}
+                mapCursorClassName={mapCursorClassName}
+                mapFrameRef={mapFrameRef}
+                onCanvasClick={() => {}}
+                onCanvasMouseDown={(event) => {
+                  const nextCell = getMapCellFromPointerEvent(
+                    event.currentTarget,
+                    event.nativeEvent,
+                    mapWidth,
+                    mapHeight
+                  );
 
-                if (activeSidebarTab === "ai") {
-                  beginPaint();
-
-                  if (activeAiTool === "select") {
-                    setAiSelectionDraft({
-                      anchorCell: nextCell,
-                      focusCell: nextCell
-                    });
+                  if (!nextCell) {
                     return;
                   }
 
-                  applyAiMaskCell(nextCell, activeAiTool);
-                  return;
-                }
+                  setHoverCell(nextCell);
 
-                if (isBrushEyedropperActive) {
-                  sampleBrushFromCell(nextCell);
-                  return;
-                }
+                  if (activeSidebarTab === "ai") {
+                    beginPaint();
 
-                if (event.shiftKey && paintLineFromLastPlacement(nextCell)) {
-                  return;
-                }
+                    if (activeAiTool === "select") {
+                      setAiSelectionDraft({
+                        anchorCell: nextCell,
+                        focusCell: nextCell
+                      });
+                      return;
+                    }
 
-                beginPaint();
-                paintCell(nextCell);
-                lastPaintedCellKeyRef.current = getMapCellKey(nextCell.tileX, nextCell.tileY);
-              }}
-              onCanvasMouseLeave={() => {
-                if (activeSidebarTab === "ai" && activeAiTool === "select" && drawingRef.current) {
-                  return;
-                }
+                    applyAiMaskCell(nextCell, activeAiTool);
+                    return;
+                  }
 
-                finishPaint();
-                setHoverCell(null);
-              }}
-              onCanvasMouseMove={handlePointerUpdate}
-              onCanvasMouseUp={() => {
-                if (activeSidebarTab === "ai" && activeAiTool === "select") {
-                  return;
-                }
+                  if (isBrushEyedropperActive) {
+                    sampleBrushFromCell(nextCell);
+                    return;
+                  }
 
-                finishPaint();
-              }}
-              onChangeActiveMapAboutPrompt={(value) => {
-                if (!activeMap) {
-                  return;
-                }
+                  if (event.shiftKey && paintLineFromLastPlacement(nextCell)) {
+                    return;
+                  }
 
-                setMapAboutPromptDrafts((currentDrafts) => ({
-                  ...currentDrafts,
-                  [activeMap.slug]: value
-                }));
-              }}
-              onClearAllLayers={() => {
-                setMapDraftLayers(activeMapSlug, createEmptyMapLayers(mapWidth, mapHeight), mapWidth, mapHeight);
-                setMapStatus(`Cleared every layer from the current draft map (${mapWidth}x${mapHeight}).`);
-              }}
-              onClearLayer={(layerIndex) => {
-                clearLayer(layerIndex);
-                setMapStatus(`Cleared ${TILE_LIBRARY_LAYERS[layerIndex]?.description ?? `Layer ${layerIndex}`}.`);
-              }}
-              onSelectBrushSlot={(slotNum) => {
-                if (!activeBrushTile) {
-                  return;
-                }
+                  beginPaint();
+                  paintCell(nextCell);
+                  lastPaintedCellKeyRef.current = getMapCellKey(nextCell.tileX, nextCell.tileY);
+                }}
+                onCanvasMouseLeave={() => {
+                  if (activeSidebarTab === "ai" && activeAiTool === "select" && drawingRef.current) {
+                    return;
+                  }
 
-                setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(activeBrushTile.slug, slotNum));
-              }}
-              onSelectLayer={setActiveLayerIndex}
-              onSetLayerVisibility={(layerIndex, visibility) => {
-                setLayerVisibilities((currentVisibilities) => {
-                  const nextVisibilities = currentVisibilities.slice();
-                  nextVisibilities[layerIndex] = visibility;
-                  return nextVisibilities;
-                });
-              }}
-              onToggleGridVisibility={() => {
-                setGridVisible((currentValue) => !currentValue);
-              }}
-              onZoomActual={() => {
-                setMapScalePercent(100);
-              }}
-              onZoomIn={() => {
-                setMapScalePercent((value) =>
-                  clampMapScalePercent(
-                    (value ??
-                      getAutoFitMapScalePercent(
-                        mapFrameRef.current,
-                        mapCanvasWidth,
-                        mapCanvasHeight
-                      )) +
-                      MAP_SCALE_STEP_PERCENT
-                  )
-                );
-              }}
-              onZoomOut={() => {
-                setMapScalePercent((value) =>
-                  clampMapScalePercent(
-                    (value ??
-                      getAutoFitMapScalePercent(
-                        mapFrameRef.current,
-                        mapCanvasWidth,
-                        mapCanvasHeight
-                      )) -
-                      MAP_SCALE_STEP_PERCENT
-                  )
-                );
-              }}
-              previewCanvasRef={previewCanvasRef}
-              scalePercent={currentScale}
-              selectedBrushLabel={selectedBrushLabel}
-            />
-          </Panel>
+                  finishPaint();
+                  setHoverCell(null);
+                }}
+                onCanvasMouseMove={handlePointerUpdate}
+                onCanvasMouseUp={() => {
+                  if (activeSidebarTab === "ai" && activeAiTool === "select") {
+                    return;
+                  }
+
+                  finishPaint();
+                }}
+                onChangeActiveMapAboutPrompt={(value) => {
+                  if (!activeMap) {
+                    return;
+                  }
+
+                  setMapAboutPromptDrafts((currentDrafts) => ({
+                    ...currentDrafts,
+                    [activeMap.slug]: value
+                  }));
+                }}
+                onClearAllLayers={() => {
+                  setMapDraftLayers(activeMapSlug, createEmptyMapLayers(mapWidth, mapHeight), mapWidth, mapHeight);
+                  setMapStatus(`Cleared every layer from the current draft map (${mapWidth}x${mapHeight}).`);
+                }}
+                onClearLayer={(layerIndex) => {
+                  clearLayer(layerIndex);
+                  setMapStatus(`Cleared ${TILE_LIBRARY_LAYERS[layerIndex]?.description ?? `Layer ${layerIndex}`}.`);
+                }}
+                onSelectBrushSlot={(slotNum) => {
+                  if (!activeBrushTile) {
+                    return;
+                  }
+
+                  setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(activeBrushTile.slug, slotNum));
+                }}
+                onSelectLayer={setActiveLayerIndex}
+                onSetLayerVisibility={(layerIndex, visibility) => {
+                  setLayerVisibilities((currentVisibilities) => {
+                    const nextVisibilities = currentVisibilities.slice();
+                    nextVisibilities[layerIndex] = visibility;
+                    return nextVisibilities;
+                  });
+                }}
+                onToggleGridVisibility={() => {
+                  setGridVisible((currentValue) => !currentValue);
+                }}
+                onZoomActual={() => {
+                  setMapScalePercent(100);
+                }}
+                onZoomIn={() => {
+                  setMapScalePercent((value) =>
+                    clampMapScalePercent(
+                      (value ??
+                        getAutoFitMapScalePercent(
+                          mapFrameRef.current,
+                          mapCanvasWidth,
+                          mapCanvasHeight
+                        )) +
+                        MAP_SCALE_STEP_PERCENT
+                    )
+                  );
+                }}
+                onZoomOut={() => {
+                  setMapScalePercent((value) =>
+                    clampMapScalePercent(
+                      (value ??
+                        getAutoFitMapScalePercent(
+                          mapFrameRef.current,
+                          mapCanvasWidth,
+                          mapCanvasHeight
+                        )) -
+                        MAP_SCALE_STEP_PERCENT
+                    )
+                  );
+                }}
+                previewCanvasRef={previewCanvasRef}
+                scalePercent={currentScale}
+                selectedBrushLabel={selectedBrushLabel}
+              />
+            </Panel>
+        )}
       </div>
 
       {isAiModalOpen && aiSelection ? (

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { faClipboard } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 
 import { ClipboardManager } from "../components/ClipboardManager";
+import { CharacterEventsManager } from "../components/CharacterEventsManager";
 import { FontAwesomeIcon } from "../components/FontAwesomeIcon";
 import { ItemManager } from "../components/ItemManager";
 import { MapDesigner } from "../components/MapDesigner";
@@ -42,6 +43,7 @@ type StudioView =
   | "tile-workshop"
   | "sprite-editor"
   | "map-designer"
+  | "character-events"
   | "item-manager"
   | "personality-events"
   | "personality-manager";
@@ -145,6 +147,10 @@ function getInitialActiveView(
     return "personality-events";
   }
 
+  if (normalizedMode === "character_events") {
+    return "character-events";
+  }
+
   if (normalizedMode === "sprite" && hasInitialSpriteSelection) {
     return "sprite-editor";
   }
@@ -185,6 +191,10 @@ function getSerializedMode(activeView: StudioViewId, paintEditors: PaintEditorSe
     return "personality_events";
   }
 
+  if (activeView === "character-events") {
+    return "character_events";
+  }
+
   if (activeView === "sprite-editor") {
     return "sprite";
   }
@@ -222,7 +232,11 @@ function getDocumentTitle(activeView: StudioViewId, paintEditors: PaintEditorSes
   }
 
   if (activeView === "personality-events") {
-    return "Personality Events";
+    return "LLM Chat Tools";
+  }
+
+  if (activeView === "character-events") {
+    return "Character Events";
   }
 
   if (activeView === "sprite-editor") {
@@ -397,6 +411,13 @@ function getViewFromHash(hash: string): StudioView {
   }
 
   if (
+    normalizedHash === "#/character-events" ||
+    normalizedHash === "#character-events"
+  ) {
+    return "character-events";
+  }
+
+  if (
     normalizedHash === "#/sprite" ||
     normalizedHash === "#sprite" ||
     normalizedHash === "#/sprite-editor" ||
@@ -423,6 +444,10 @@ function getHashForView(view: StudioView) {
 
   if (view === "personality-events") {
     return "#/personality-events";
+  }
+
+  if (view === "character-events") {
+    return "#/character-events";
   }
 
   if (view === "sprite-editor") {
@@ -1597,6 +1622,7 @@ export function TileServerApp({
       activeView !== "map-designer" &&
       activeView !== "item-manager" &&
       activeView !== "personality-events" &&
+      activeView !== "character-events" &&
       activeView !== "personality-manager" &&
       !paintEditors.some((editor) => editor.id === activeView)
     ) {
@@ -2169,22 +2195,37 @@ export function TileServerApp({
           </aside>
 
           <main className="min-w-0 flex-1 p-3 md:p-4">
-              <div className="min-h-full">
-              <div className={activeView === "tile-workshop" || activeView === "sprite-editor" ? "block h-full" : "hidden h-full"}>
-                <TileWorkshop />
-              </div>
-              <div className={activeView === "map-designer" ? "block h-full" : "hidden h-full"}>
-                <MapDesigner />
-              </div>
-              <div className={activeView === "item-manager" ? "block h-full" : "hidden h-full"}>
-                <ItemManager />
-              </div>
-              <div className={activeView === "personality-manager" ? "block h-full" : "hidden h-full"}>
-                <PersonalityManager />
-              </div>
-              <div className={activeView === "personality-events" ? "block h-full" : "hidden h-full"}>
-                <PersonalityEventsManager />
-              </div>
+            <div className="min-h-full">
+              {activeView === "tile-workshop" || activeView === "sprite-editor" ? (
+                <div className="block h-full">
+                  <TileWorkshop />
+                </div>
+              ) : null}
+              {activeView === "map-designer" ? (
+                <div className="block h-full">
+                  <MapDesigner />
+                </div>
+              ) : null}
+              {activeView === "item-manager" ? (
+                <div className="block h-full">
+                  <ItemManager />
+                </div>
+              ) : null}
+              {activeView === "personality-manager" ? (
+                <div className="block h-full">
+                  <PersonalityManager />
+                </div>
+              ) : null}
+              {activeView === "personality-events" ? (
+                <div className="block h-full">
+                  <PersonalityEventsManager />
+                </div>
+              ) : null}
+              {activeView === "character-events" ? (
+                <div className="block h-full">
+                  <CharacterEventsManager />
+                </div>
+              ) : null}
               {paintEditors
                 .filter((editor) => activeView === editor.id)
                 .map((editor) => (

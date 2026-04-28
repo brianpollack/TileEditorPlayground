@@ -58,6 +58,10 @@ const UPDATE_PERSONALITY_EVENT_PATH = "/__personalities/events/update";
 const UPDATE_PERSONALITY_PATH = "/__personalities/update";
 const IMPORT_SPRITE_PATH = "/__tiles/import-sprite";
 const SAVE_SPRITE_PATH = "/__tiles/save-sprite";
+const LUA_API_HELPER_PATH = "/__lua/api-helper";
+const LUA_API_HELPER_SOURCE_URL = "https://vax.protovateai.com/lua_api_helper.json";
+const VAX_PROXY_PATH_PREFIX = "/__vax-proxy";
+const VAX_PROXY_ORIGIN = "https://vax.protovateai.com";
 
 function getHtmlRequestUrl(request: Request) {
   const url = new URL(request.url);
@@ -575,6 +579,108 @@ export default async function handler(request: Request) {
       const message = error instanceof Error ? error.message : "Could not save sprite.";
 
       return Response.json({ error: message }, { status: 400 });
+    }
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === LUA_API_HELPER_PATH) {
+    try {
+      const upstreamResponse = await fetch(LUA_API_HELPER_SOURCE_URL, {
+        headers: {
+          accept: "application/json"
+        }
+      });
+
+      if (!upstreamResponse.ok) {
+        throw new Error(`Could not load Lua API helper (${upstreamResponse.status}).`);
+      }
+
+      const helperPayload = await upstreamResponse.json();
+
+      return Response.json(helperPayload, {
+        headers: {
+          "Cache-Control": "public, max-age=300"
+        }
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Could not load Lua API helper.";
+
+      return Response.json({ error: message }, { status: 502 });
+    }
+  }
+
+  if (
+    (request.method === "GET" || request.method === "HEAD") &&
+    requestUrl.pathname.startsWith(`${VAX_PROXY_PATH_PREFIX}/`)
+  ) {
+    try {
+      const upstreamPath = requestUrl.pathname.slice(VAX_PROXY_PATH_PREFIX.length);
+      const upstreamUrl = new URL(`${VAX_PROXY_ORIGIN}${upstreamPath}${requestUrl.search}`);
+      const upstreamResponse = await fetch(upstreamUrl, {
+        headers: {
+          accept: request.headers.get("accept") ?? "*/*"
+        }
+      });
+
+      if (request.method === "HEAD") {
+        const headHeaders = new Headers();
+        const headContentType = upstreamResponse.headers.get("content-type");
+        const headCacheControl = upstreamResponse.headers.get("cache-control");
+
+        if (headContentType) {
+          headHeaders.set("Content-Type", headContentType);
+        }
+
+        if (headCacheControl) {
+          headHeaders.set("Cache-Control", headCacheControl);
+        }
+
+        return new Response(null, {
+          headers: headHeaders,
+          status: upstreamResponse.status
+        });
+      }
+
+      if (!upstreamResponse.ok) {
+        return new Response(upstreamResponse.body, {
+          headers: {
+            "Content-Type": upstreamResponse.headers.get("content-type") ?? "application/octet-stream"
+          },
+          status: upstreamResponse.status
+        });
+      }
+
+      const responseHeaders = new Headers();
+      const contentType = upstreamResponse.headers.get("content-type");
+      const cacheControl = upstreamResponse.headers.get("cache-control");
+      const etag = upstreamResponse.headers.get("etag");
+      const lastModified = upstreamResponse.headers.get("last-modified");
+
+      if (contentType) {
+        responseHeaders.set("Content-Type", contentType);
+      }
+
+      if (cacheControl) {
+        responseHeaders.set("Cache-Control", cacheControl);
+      } else {
+        responseHeaders.set("Cache-Control", "public, max-age=300");
+      }
+
+      if (etag) {
+        responseHeaders.set("ETag", etag);
+      }
+
+      if (lastModified) {
+        responseHeaders.set("Last-Modified", lastModified);
+      }
+
+      return new Response(upstreamResponse.body, {
+        headers: responseHeaders,
+        status: upstreamResponse.status
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Could not load Vax asset.";
+
+      return Response.json({ error: message }, { status: 502 });
     }
   }
 

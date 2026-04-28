@@ -4,6 +4,8 @@ import {
   encodeReply,
   setServerCallback
 } from "@vitejs/plugin-rsc/browser";
+import "ace-builds/src-noconflict/ace";
+import "ace-builds/esm-resolver";
 import React from "react";
 import { hydrateRoot } from "react-dom/client";
 

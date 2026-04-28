@@ -19,7 +19,7 @@ models=(
 )
 
 prompts=(
-  "explorer_f.md"
+  "keys.md"
 )
 
 for model in "${models[@]}"; do

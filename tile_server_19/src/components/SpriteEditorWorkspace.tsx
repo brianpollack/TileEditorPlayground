@@ -7,6 +7,7 @@ import "ace-builds/src-noconflict/mode-lua";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
 
 import { TILE_SIZE } from "../lib/constants";
+import { useLuaAceSupport } from "../lib/luaApiHelper";
 import { actionButtonClass } from "./buttonStyles";
 import { FileDropTarget } from "./FileDropTarget";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
@@ -73,6 +74,13 @@ function SpriteEditorWorkspaceImpl({
   spriteRecord,
   statusMessage
 }: SpriteEditorWorkspaceProps) {
+  const {
+    enableBasicAutocompletion,
+    enableLiveAutocompletion,
+    enableSnippets,
+    handleEditorLoad,
+    helperWarning
+  } = useLuaAceSupport();
   const metadataFieldClass = `${compactTextInputClass} w-full max-w-[200px]`;
   const roundedTileWidth = spriteRecord ? Math.ceil(spriteRecord.tile_w) : 0;
   const roundedTileHeight = spriteRecord ? Math.ceil(spriteRecord.tile_h) : 0;
@@ -339,14 +347,19 @@ function SpriteEditorWorkspaceImpl({
                 <div className="overflow-hidden border theme-border-panel">
                   <AceEditor
                     className="w-full"
+                    enableBasicAutocompletion={enableBasicAutocompletion}
+                    enableLiveAutocompletion={enableLiveAutocompletion}
+                    enableSnippets={enableSnippets}
                     fontSize={13}
                     height="220px"
                     mode="lua"
                     name="sprite-on-activate-editor"
                     onChange={onOnActivateChange}
+                    onLoad={handleEditorLoad}
                     setOptions={{
                       showFoldWidgets: false,
                       tabSize: 2,
+                      useWorker: false,
                       useSoftTabs: true
                     }}
                     theme="tomorrow_night"
@@ -354,6 +367,7 @@ function SpriteEditorWorkspaceImpl({
                     width="100%"
                   />
                 </div>
+                {helperWarning ? <div className="text-sm text-[#b42318]">{helperWarning}</div> : null}
               </div>
               <div className="flex justify-end">
                 <button

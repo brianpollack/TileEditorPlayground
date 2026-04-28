@@ -118,6 +118,26 @@ export interface MapRecord {
   width: number;
 }
 
+export interface ZoneEventRecord {
+  enabled: boolean;
+  id: string;
+  inserted_at: string;
+  lua_script: string;
+  updated_at: string;
+  zone_event: string;
+  zone_name: string;
+}
+
+export interface CharacterEventRecord {
+  character_event: string;
+  character_name: string;
+  enabled: boolean;
+  id: string;
+  inserted_at: string;
+  lua_script: string;
+  updated_at: string;
+}
+
 export interface ItemRecord {
   base_value: number | null;
   character: string | null;

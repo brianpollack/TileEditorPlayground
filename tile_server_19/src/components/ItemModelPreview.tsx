@@ -13,6 +13,7 @@ import { emptyStateCardClass } from "./uiStyles";
 
 type PreviewStatus = "loading" | "ready" | "fallback";
 const SAVE_ITEM_IMAGE_PATH = "/__items/save-image";
+const VAX_PROXY_PATH_PREFIX = "/__vax-proxy";
 
 interface ViewMetrics {
   azimuthDegrees: number;
@@ -51,12 +52,27 @@ function resolveVaxAssetUrl(value: string, vaxServer: string) {
     return "";
   }
 
-  if (value.startsWith("data:") || value.startsWith("http://") || value.startsWith("https://")) {
+  if (value.startsWith("data:")) {
+    return value;
+  }
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    try {
+      const upstreamUrl = new URL(value);
+      const vaxUrl = new URL(vaxServer);
+
+      if (upstreamUrl.origin === vaxUrl.origin) {
+        return `${VAX_PROXY_PATH_PREFIX}${upstreamUrl.pathname}${upstreamUrl.search}`;
+      }
+    } catch {
+      return value;
+    }
+
     return value;
   }
 
   const normalizedPath = value.startsWith("/") ? value : `/${value}`;
-  return `${vaxServer}${normalizedPath}`;
+  return `${VAX_PROXY_PATH_PREFIX}${normalizedPath}`;
 }
 
 function appendAssetVersion(url: string, assetVersion: number) {
@@ -68,7 +84,7 @@ function appendAssetVersion(url: string, assetVersion: number) {
 }
 
 function buildModelCandidates(itemId: number, modelPath: string | null, vaxServer: string) {
-  const fallbackBaseUrl = `${vaxServer}/items/${itemId}/model`;
+  const fallbackBaseUrl = `${VAX_PROXY_PATH_PREFIX}/items/${itemId}/model`;
   const normalizedModelPath = modelPath?.trim() ?? "";
   const urls = new Set<string>();
 
@@ -102,7 +118,7 @@ function buildTextureCandidates(itemId: number, texturePaths: string[], vaxServe
     urls.add(resolveVaxAssetUrl(normalizedTexturePath, vaxServer));
   }
 
-  urls.add(`${vaxServer}/items/${itemId}/texture.png`);
+  urls.add(`${VAX_PROXY_PATH_PREFIX}/items/${itemId}/texture.png`);
 
   return Array.from(urls);
 }
@@ -141,6 +157,15 @@ async function loadTexture(
     }
 
     try {
+      const response = await fetch(textureUrl, {
+        method: "HEAD",
+        signal
+      });
+
+      if (!response.ok) {
+        continue;
+      }
+
       const texture = await textureLoader.loadAsync(textureUrl);
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.flipY = false;
@@ -164,6 +189,15 @@ async function loadModel(
     }
 
     try {
+      const response = await fetch(modelUrl, {
+        method: "HEAD",
+        signal
+      });
+
+      if (!response.ok) {
+        continue;
+      }
+
       const gltf = await gltfLoader.loadAsync(modelUrl);
       return { gltf, modelUrl };
     } catch {

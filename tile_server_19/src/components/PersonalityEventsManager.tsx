@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { Ace } from "ace-builds";
 import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-json";
 import "ace-builds/src-noconflict/mode-lua";
@@ -8,6 +9,12 @@ import "ace-builds/src-noconflict/mode-text";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
 
 import { useStudio } from "../app/StudioContext";
+import { useLuaAceSupport } from "../lib/luaApiHelper";
+import {
+  createLuaErrorAnnotations,
+  formatLuaScript,
+  validateLuaScript
+} from "../lib/luaEditor";
 import type { PersonalityEventRecord } from "../types";
 import { actionButtonClass } from "./buttonStyles";
 import { Panel } from "./Panel";
@@ -58,12 +65,21 @@ function parseEventDetails(value: string) {
 
 export function PersonalityEventsManager() {
   const { activePersonality, activePersonalitySlug } = useStudio();
+  const {
+    enableBasicAutocompletion,
+    enableLiveAutocompletion,
+    enableSnippets,
+    handleEditorLoad,
+    helperWarning
+  } = useLuaAceSupport();
   const [events, setEvents] = useState<PersonalityEventRecord[]>([]);
   const [activeEventId, setActiveEventId] = useState("");
   const [draft, setDraft] = useState<EventDraftState>(() => createEventDraft(null));
   const [isCreatingEvent, setCreatingEvent] = useState(false);
   const [isLoadingEvents, setLoadingEvents] = useState(false);
   const [isSavingEvent, setSavingEvent] = useState(false);
+  const [isFormattingLua, setFormattingLua] = useState(false);
+  const [luaAnnotations, setLuaAnnotations] = useState<Ace.Annotation[]>([]);
   const [status, setStatus] = useState("");
 
   const activeEvent = useMemo(
@@ -73,6 +89,7 @@ export function PersonalityEventsManager() {
 
   useEffect(() => {
     setDraft(createEventDraft(activeEvent));
+    setLuaAnnotations([]);
   }, [activeEvent?.id]);
 
   useEffect(() => {
@@ -80,6 +97,7 @@ export function PersonalityEventsManager() {
       setEvents([]);
       setActiveEventId("");
       setDraft(createEventDraft(null));
+      setLuaAnnotations([]);
       setStatus("");
       return;
     }
@@ -116,6 +134,7 @@ export function PersonalityEventsManager() {
       } catch (error) {
         setEvents([]);
         setActiveEventId("");
+        setLuaAnnotations([]);
         setStatus(error instanceof Error ? error.message : "Could not load personality events.");
       } finally {
         setLoadingEvents(false);
@@ -183,6 +202,15 @@ export function PersonalityEventsManager() {
       return;
     }
 
+    const validationResult = validateLuaScript(draft.luaScript);
+
+    if (!validationResult.ok) {
+      setLuaAnnotations(createLuaErrorAnnotations(validationResult));
+      setStatus(validationResult.error.message);
+      return;
+    }
+
+    setLuaAnnotations([]);
     setSavingEvent(true);
     setStatus("");
 
@@ -226,6 +254,35 @@ export function PersonalityEventsManager() {
     })();
   }
 
+  function handleFormatLua() {
+    const validationResult = validateLuaScript(draft.luaScript);
+
+    if (!validationResult.ok) {
+      setLuaAnnotations(createLuaErrorAnnotations(validationResult));
+      setStatus(validationResult.error.message);
+      return;
+    }
+
+    setFormattingLua(true);
+    setLuaAnnotations([]);
+    setStatus("");
+
+    void formatLuaScript(draft.luaScript)
+      .then((formattedScript) => {
+        setDraft((currentDraft) => ({
+          ...currentDraft,
+          luaScript: formattedScript
+        }));
+        setStatus("Lua formatted.");
+      })
+      .catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : "Could not format Lua script.");
+      })
+      .finally(() => {
+        setFormattingLua(false);
+      });
+  }
+
   return (
     <div className="min-h-0">
       <div className="grid min-h-0 gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
@@ -238,16 +295,16 @@ export function PersonalityEventsManager() {
                 onClick={handleCreateEvent}
                 type="button"
               >
-                {isCreatingEvent ? "Adding..." : "Add Event"}
+                {isCreatingEvent ? "Adding..." : "Add Tool"}
               </button>
             }
             className="h-full"
             description={
               activePersonality
-                ? `Events for ${activePersonality.name}`
-                : "Select a personality before editing events."
+                ? `LLM chat tools for ${activePersonality.name}`
+                : "Select a personality before editing LLM chat tools."
             }
-            title="Personality Events"
+            title="LLM Chat Tools"
           >
             <div className="flex flex-wrap gap-2">
               <button
@@ -283,9 +340,9 @@ export function PersonalityEventsManager() {
               ))}
             </div>
 
-            {isLoadingEvents ? <div className="text-sm theme-text-muted">Loading events...</div> : null}
+            {isLoadingEvents ? <div className="text-sm theme-text-muted">Loading LLM chat tools...</div> : null}
             {!isLoadingEvents && activePersonality && !events.length ? (
-              <div className={emptyStateCardClass}>No events yet.</div>
+              <div className={emptyStateCardClass}>No LLM chat tools yet.</div>
             ) : null}
           </Panel>
         </div>
@@ -295,28 +352,44 @@ export function PersonalityEventsManager() {
           description={
             activeEvent
               ? `${activeEvent.name}, ${activeEvent.event_type}`
-              : "Select or add an event for this personality."
+              : "Select or add an LLM chat tool for this personality."
           }
           footer={
             <div className="flex flex-wrap items-center justify-between gap-3">
               {status ? (
-                <div className={status === "Event saved." ? "text-sm theme-text-muted" : "text-sm text-[#b42318]"}>
+                <div
+                  className={
+                    status === "Event saved." || status === "Lua formatted."
+                      ? "text-sm theme-text-muted"
+                      : "text-sm text-[#b42318]"
+                  }
+                >
                   {status}
                 </div>
               ) : (
                 <div />
               )}
-              <button
-                className={actionButtonClass}
-                disabled={!activeEvent || isSavingEvent}
-                onClick={handleSaveEvent}
-                type="button"
-              >
-                {isSavingEvent ? "Saving..." : "Save Event"}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className={secondaryButtonClass}
+                  disabled={!activeEvent || isSavingEvent || isFormattingLua}
+                  onClick={handleFormatLua}
+                  type="button"
+                >
+                  {isFormattingLua ? "Formatting..." : "Format Lua"}
+                </button>
+                <button
+                  className={actionButtonClass}
+                  disabled={!activeEvent || isSavingEvent || isFormattingLua}
+                  onClick={handleSaveEvent}
+                  type="button"
+                >
+                  {isSavingEvent ? "Saving..." : "Save Tool"}
+                </button>
+              </div>
             </div>
           }
-          title={activeEvent ? activeEvent.name : "Event Editor"}
+          title={activeEvent ? activeEvent.name : "LLM Chat Tool Editor"}
         >
           {activeEvent ? (
             <div className="min-h-0 overflow-y-auto pr-1">
@@ -333,6 +406,7 @@ export function PersonalityEventsManager() {
                           ...currentDraft,
                           name: event.currentTarget.value
                         }));
+                        setLuaAnnotations([]);
                         if (status) {
                           setStatus("");
                         }
@@ -356,6 +430,7 @@ export function PersonalityEventsManager() {
                           ...currentDraft,
                           enabled: event.currentTarget.checked
                         }));
+                        setLuaAnnotations([]);
                       }}
                       type="checkbox"
                     />
@@ -384,6 +459,7 @@ export function PersonalityEventsManager() {
                       setOptions={{
                         showFoldWidgets: false,
                         tabSize: 2,
+                        useWorker: false,
                         useSoftTabs: true
                       }}
                       theme="tomorrow_night"
@@ -414,6 +490,7 @@ export function PersonalityEventsManager() {
                       setOptions={{
                         showFoldWidgets: false,
                         tabSize: 2,
+                        useWorker: false,
                         useSoftTabs: true
                       }}
                       theme="tomorrow_night"
@@ -429,6 +506,9 @@ export function PersonalityEventsManager() {
                   <div className="overflow-hidden border theme-border-panel">
                     <AceEditor
                       className="w-full"
+                      enableBasicAutocompletion={enableBasicAutocompletion}
+                      enableLiveAutocompletion={enableLiveAutocompletion}
+                      enableSnippets={enableSnippets}
                       fontSize={13}
                       height="320px"
                       mode="lua"
@@ -438,13 +518,17 @@ export function PersonalityEventsManager() {
                           ...currentDraft,
                           luaScript: value
                         }));
+                        setLuaAnnotations([]);
                         if (status) {
                           setStatus("");
                         }
                       }}
+                      annotations={luaAnnotations}
+                      onLoad={handleEditorLoad}
                       setOptions={{
                         showFoldWidgets: false,
                         tabSize: 2,
+                        useWorker: false,
                         useSoftTabs: true
                       }}
                       theme="tomorrow_night"
@@ -453,12 +537,13 @@ export function PersonalityEventsManager() {
                       wrapEnabled
                     />
                   </div>
+                  {helperWarning ? <div className="text-sm text-[#b42318]">{helperWarning}</div> : null}
                 </div>
               </div>
             </div>
           ) : (
             <div className="flex min-h-[20rem] items-center justify-center text-sm theme-text-muted">
-              Select an event to edit.
+              Select an LLM chat tool to edit.
             </div>
           )}
         </Panel>

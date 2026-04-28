@@ -928,6 +928,16 @@ export function PersonalityManager() {
                   }}
                   type="button"
                 >
+                  View / Edit LLM Chat Tools
+                </button>
+                <button
+                  className={secondaryButtonClass}
+                  disabled={!activePersonality}
+                  onClick={() => {
+                    window.location.hash = "#/character-events";
+                  }}
+                  type="button"
+                >
                   View / Edit Events
                 </button>
                 {randomizeStatus ? <div className="text-sm text-[#b42318]">{randomizeStatus}</div> : null}
