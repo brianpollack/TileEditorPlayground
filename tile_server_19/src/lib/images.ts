@@ -1,9 +1,27 @@
 export async function loadImageFromUrl(imageUrl: string) {
   const image = new Image();
+  const loadPromise = new Promise<void>((resolve, reject) => {
+    image.onload = () => {
+      resolve();
+    };
+    image.onerror = () => {
+      reject(new Error("Could not load image."));
+    };
+  });
 
   image.decoding = "async";
   image.src = imageUrl;
-  await image.decode();
+
+  if (typeof image.decode !== "function") {
+    await loadPromise;
+    return image;
+  }
+
+  try {
+    await Promise.race([image.decode(), loadPromise]);
+  } catch {
+    await loadPromise;
+  }
 
   return image;
 }

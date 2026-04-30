@@ -178,8 +178,9 @@ Persistence note:
 - the server recalculates them on save from the sprite PNG bytes
 - sprite reads also backfill them if older database rows are missing the new fields or have stale values
 - the sprite editor draws the current bounds as a light blue overlay so mount changes and sprite reloads stay visually aligned with the saved metadata
-- sprite metadata also now includes `on_activate` text plus `is_locked` and `casts_shadow` booleans
-- default sprite metadata values are `on_activate = ""`, `is_locked = false`, and `casts_shadow = true`
+- sprite metadata also includes `is_locked`, `casts_shadow`, and `mouseover_cursor` values
+- sprite Lua events are stored in `sprite_events`; legacy `on_activate` metadata is migrated to the `on_activate` event
+- default sprite metadata values are `is_locked = false`, `casts_shadow = true`, and `mouseover_cursor = ""`
 
 ## Persistence Model
 

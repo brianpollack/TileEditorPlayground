@@ -37,6 +37,7 @@ import {
   readPersonalityEventRecords,
   saveItemPreviewImage,
   saveSpriteRecord,
+  saveSpriteStateImage,
   updatePersonalityRecord,
   updatePersonalityEventRecord,
   updateRemoteItemRecord,
@@ -71,6 +72,7 @@ const UPDATE_PERSONALITY_EVENT_PATH = "/__personalities/events/update";
 const UPDATE_PERSONALITY_PATH = "/__personalities/update";
 const IMPORT_SPRITE_PATH = "/__tiles/import-sprite";
 const SAVE_SPRITE_PATH = "/__tiles/save-sprite";
+const SAVE_SPRITE_STATE_IMAGE_PATH = "/__tiles/save-sprite-state-image";
 const LUA_API_HELPER_SOURCE_URL = "https://vax.protovateai.com/lua_api_helper.json";
 const LUA_SCRIPTING_GUIDE_SOURCE_URL = "https://vax.protovateai.com/lua_scripting_guide.md";
 const VAX_PROXY_PATH_PREFIX = "/__vax-proxy";
@@ -949,6 +951,32 @@ export default async function handler(request: Request) {
       return Response.json(savedSprite);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Could not save sprite.";
+
+      return Response.json({ error: message }, { status: 400 });
+    }
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === SAVE_SPRITE_STATE_IMAGE_PATH) {
+    try {
+      const formData = await request.formData();
+      const replacementFile = formData.get("file");
+      const spritePath = formData.get("path");
+      const spriteFilename = formData.get("filename");
+      const stateId = formData.get("stateId");
+
+      if (!(replacementFile instanceof File)) {
+        throw new Error("Choose a PNG file to upload.");
+      }
+
+      if (typeof spritePath !== "string" || typeof spriteFilename !== "string" || typeof stateId !== "string") {
+        throw new Error("Sprite path, filename, and state are required.");
+      }
+
+      const savedState = await saveSpriteStateImage(spritePath, spriteFilename, stateId, replacementFile);
+
+      return Response.json(savedState);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Could not save sprite state image.";
 
       return Response.json({ error: message }, { status: 400 });
     }

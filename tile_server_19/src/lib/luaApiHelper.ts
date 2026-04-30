@@ -67,7 +67,7 @@ interface LuaApiHelperTable {
   writeback_rules?: string[];
 }
 
-export type LuaEventContext = "character" | "personality" | "zone";
+export type LuaEventContext = "character" | "personality" | "sprite" | "zone";
 
 export interface LuaEventGlobalHelpEntry {
   description: string;

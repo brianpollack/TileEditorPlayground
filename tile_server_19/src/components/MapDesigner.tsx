@@ -188,7 +188,7 @@ const BRUSH_OPTION_DEFINITIONS = [
 ] as const;
 const DEFAULT_MAP_BRUSH_OPTIONS = normalizeMapTileOptions(undefined);
 type MapAiTool = (typeof AI_TOOL_OPTIONS)[number]["id"];
-type MapSidebarTab = "ai" | "brushes" | "events" | "maps";
+type MapSidebarTab = "ai" | "brushes" | "events";
 
 interface MapAiSelection {
   bottomTileY: number;
@@ -832,8 +832,13 @@ function haveStringListsChanged(previousValues: string[], nextValues: string[]) 
   );
 }
 
-export function MapDesigner() {
-  const [activeSidebarTab, setActiveSidebarTab] = useState<MapSidebarTab>("maps");
+interface MapDesignerProps {
+  initialMode?: string;
+}
+
+export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
+  const [activeSidebarTab, setActiveSidebarTab] = useState<MapSidebarTab>("brushes");
+  const [isEditingSelectedMap, setIsEditingSelectedMap] = useState(() => initialMode.trim() === "map");
   const {
     activeMap,
     activeMapSlug,
@@ -1012,6 +1017,7 @@ export function MapDesigner() {
     [activeZoneEventName, zoneEventOptions]
   );
   const activeZoneEvent = activeZoneEventOption?.record ?? null;
+  const isEditingMap = isEditingSelectedMap && Boolean(activeMap);
 
   useEffect(() => {
     setHasMounted(true);
@@ -1022,6 +1028,14 @@ export function MapDesigner() {
       setMapStatus(`Editing ${activeMap.name} (${activeMap.width}x${activeMap.height}).`);
     }
   }, [activeMap]);
+
+  useEffect(() => {
+    if (!isEditingSelectedMap || activeMap) {
+      return;
+    }
+
+    setIsEditingSelectedMap(false);
+  }, [activeMap, isEditingSelectedMap]);
 
   useEffect(() => {
     setZoneEventDraft(createLuaEventDraft(activeZoneEvent));
@@ -1218,6 +1232,10 @@ export function MapDesigner() {
   }, [isAiModalOpen]);
 
   useEffect(() => {
+    if (!isEditingMap) {
+      return;
+    }
+
     const resizeObserver = new ResizeObserver(() => {
       setMapScalePercent((currentScale) => {
         if (currentScale !== null) {
@@ -1235,9 +1253,13 @@ export function MapDesigner() {
     return () => {
       resizeObserver.disconnect();
     };
-  }, [mapCanvasHeight, mapCanvasWidth]);
+  }, [activeSidebarTab, isEditingMap, mapCanvasHeight, mapCanvasWidth]);
 
   useEffect(() => {
+    if (!isEditingMap) {
+      return;
+    }
+
     if (mapScalePercent !== null) {
       return;
     }
@@ -1249,9 +1271,13 @@ export function MapDesigner() {
     }
 
     setMapScalePercent(getAutoFitMapScalePercent(mapFrame, mapCanvasWidth, mapCanvasHeight));
-  }, [mapCanvasHeight, mapCanvasWidth, mapScalePercent]);
+  }, [activeSidebarTab, isEditingMap, mapCanvasHeight, mapCanvasWidth, mapScalePercent]);
 
   useEffect(() => {
+    if (!isEditingMap) {
+      return;
+    }
+
     const mapFrame = mapFrameRef.current;
 
     if (!mapFrame) {
@@ -1271,9 +1297,13 @@ export function MapDesigner() {
     return () => {
       mapFrame.removeEventListener("scroll", handleScroll);
     };
-  }, [activeMapSlug]);
+  }, [activeMapSlug, activeSidebarTab, isEditingMap]);
 
   useEffect(() => {
+    if (!isEditingMap) {
+      return;
+    }
+
     const mapCanvas = mapCanvasRef.current;
     const mapFrame = mapFrameRef.current;
 
@@ -1298,7 +1328,7 @@ export function MapDesigner() {
 
     mapCanvas.style.width = `${nextCanvasWidth}px`;
     mapCanvas.style.height = `${nextCanvasHeight}px`;
-  }, [mapCanvasHeight, mapCanvasWidth, mapScalePercent]);
+  }, [activeSidebarTab, isEditingMap, mapCanvasHeight, mapCanvasWidth, mapScalePercent]);
 
   useEffect(() => {
     if (!activeMapSlug) {
@@ -1314,6 +1344,10 @@ export function MapDesigner() {
   }, [activeLayerIndex, activeMapSlug, isGridVisible, layerVisibilities, mapScalePercent]);
 
   useEffect(() => {
+    if (!isEditingMap) {
+      return;
+    }
+
     if (typeof window === "undefined") {
       return;
     }
@@ -1341,7 +1375,7 @@ export function MapDesigner() {
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeMapSlug, mapCanvasHeight, mapCanvasWidth, mapScalePercent]);
+  }, [activeMapSlug, activeSidebarTab, isEditingMap, mapCanvasHeight, mapCanvasWidth, mapScalePercent]);
 
   useEffect(() => {
     return () => {
@@ -1715,10 +1749,6 @@ export function MapDesigner() {
 
       drawPreviewBackground(context, MAP_PREVIEW_SIZE, MAP_PREVIEW_SIZE);
 
-      if (!areMapAssetsReady) {
-        return;
-      }
-
       const sourceCanvas = document.createElement("canvas");
       ensureCanvasSize(sourceCanvas, mapCanvasWidth, mapCanvasHeight);
       const sourceContext = sourceCanvas.getContext("2d");
@@ -1728,7 +1758,8 @@ export function MapDesigner() {
       }
 
       renderMapGrid(sourceContext, layers, opacityForLayer, {
-        showGrid: false
+        showGrid: false,
+        simplifiedFallback: !areMapAssetsReady
       });
 
       const scale = Math.min(MAP_PREVIEW_SIZE / mapCanvasWidth, MAP_PREVIEW_SIZE / mapCanvasHeight);
@@ -2082,13 +2113,9 @@ export function MapDesigner() {
       return;
     }
 
-    if (!areMapAssetsReady) {
-      context.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
-      return;
-    }
-
     renderMapGrid(context, draftLayers, (layerIndex) => layerVisibilities[layerIndex] ?? 1, {
-      showGrid: isGridVisible
+      showGrid: isGridVisible,
+      simplifiedFallback: !areMapAssetsReady
     });
   });
 
@@ -2131,27 +2158,41 @@ export function MapDesigner() {
     }
 
     let cancelled = false;
-
-    void Promise.all(nextAssetImageUrls.map((imageUrl) => imageCache.ensureImage(imageUrl))).finally(() => {
+    let pendingAssetCount = nextAssetImageUrls.length;
+    const finishAssetLoad = () => {
       if (cancelled || mapAssetLoadVersionRef.current !== loadVersion) {
         return;
       }
 
-      setMapAssetsReady(true);
+      pendingAssetCount -= 1;
       renderMapCanvas();
       renderPreviewCanvases();
+
+      if (pendingAssetCount <= 0) {
+        setMapAssetsReady(true);
+      }
+    };
+
+    nextAssetImageUrls.forEach((imageUrl) => {
+      void imageCache.ensureImage(imageUrl).then(finishAssetLoad, finishAssetLoad);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [imageCache, renderMapCanvas, renderPreviewCanvases, spriteThumbnailUrls, tileSlotUrls]);
+  }, [imageCache, isEditingMap, renderMapCanvas, renderPreviewCanvases, spriteThumbnailUrls, tileSlotUrls]);
 
   useEffect(() => {
+    if (!isEditingMap) {
+      return;
+    }
+
     renderMapCanvas();
   }, [
+    activeSidebarTab,
     areMapAssetsReady,
     draftLayers,
+    isEditingMap,
     isGridVisible,
     layerVisibilities,
     mapCanvasHeight,
@@ -2162,10 +2203,16 @@ export function MapDesigner() {
   ]);
 
   useEffect(() => {
+    if (!isEditingMap) {
+      return;
+    }
+
     renderPreviewCanvases();
   }, [
+    activeSidebarTab,
     areMapAssetsReady,
     draftLayers,
+    isEditingMap,
     layerVisibilities,
     mapCanvasHeight,
     mapCanvasWidth,
@@ -2175,6 +2222,10 @@ export function MapDesigner() {
   ]);
 
   useEffect(() => {
+    if (!isEditingMap) {
+      return;
+    }
+
     renderHoverCanvas();
   }, [
     activeAiTool,
@@ -2183,6 +2234,7 @@ export function MapDesigner() {
     aiSelection,
     aiSelectionDraft,
     hoverCell,
+    isEditingMap,
     mapCanvasHeight,
     mapCanvasWidth,
     maskedCells,
@@ -2501,6 +2553,8 @@ export function MapDesigner() {
           setNewMapWidth(String(MAP_DEFAULT_GRID_SIZE));
           setNewMapHeight(String(MAP_DEFAULT_GRID_SIZE));
           setActiveMapSlug(createdMap.slug);
+          setActiveSidebarTab("brushes");
+          setIsEditingSelectedMap(true);
           setMapStatus(`Created ${createdMap.name} (${createdMap.width}x${createdMap.height}).`);
         })
         .catch((error: unknown) => {
@@ -3029,14 +3083,369 @@ export function MapDesigner() {
     setBrushLibraryPath(selectedLayerFolder);
   }, [selectedLayerFolder]);
 
+  function handleOpenMapForEditing(mapSlug: string) {
+    setActiveMapSlug(mapSlug);
+    setActiveSidebarTab("brushes");
+    setIsEditingSelectedMap(true);
+  }
+
+  function handleBackToMapSelection() {
+    setActiveSidebarTab("brushes");
+    setIsEditingSelectedMap(false);
+  }
+
+  const eventEditorPanel = (
+    <Panel
+      className="xl:h-[calc(100vh-7rem)]"
+      description={
+        activeZoneEventOption
+          ? `${activeMap?.name ?? ""} • ${activeZoneEventOption.eventName}`
+          : activeMap
+            ? `Select a zone event for ${activeMap.name}.`
+            : "Choose a map before editing zone events."
+      }
+      footer={
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {zoneEventStatus ? (
+            <div
+              className={
+                zoneEventStatus === "Event saved." ||
+                zoneEventStatus === "Lua formatted."
+                  ? "text-sm theme-text-muted"
+                  : "text-sm text-[#b42318]"
+              }
+            >
+              {zoneEventStatus}
+            </div>
+          ) : (
+            <div />
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={secondaryButtonClass}
+              onClick={openLuaScriptingGuide}
+              type="button"
+            >
+              Scripting Guide
+            </button>
+            <button
+              className={secondaryButtonClass}
+              disabled={!activeZoneEventOption || isZoneEventSaving || isZoneEventFormatting}
+              onClick={handleFormatZoneEventLua}
+              type="button"
+            >
+              {isZoneEventFormatting ? "Formatting..." : "Format Lua"}
+            </button>
+            <button
+              className={actionButtonClass}
+              disabled={!activeZoneEventOption || isZoneEventSaving || isZoneEventFormatting}
+              onClick={handleSaveZoneEvent}
+              type="button"
+            >
+              {isZoneEventSaving ? "Saving..." : "Save Event"}
+            </button>
+          </div>
+        </div>
+      }
+      title={activeZoneEventOption ? activeZoneEventOption.eventName : "Event Editor"}
+    >
+      {activeZoneEventOption ? (
+        <div className="grid min-h-0 gap-4 overflow-y-auto pr-1">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
+            <div className="grid gap-1">
+              <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
+                Event Name
+              </span>
+              <div className="font-mono text-sm theme-text-primary">{activeZoneEventOption.eventName}</div>
+            </div>
+
+            <label className="flex items-end gap-2 pb-3 text-sm theme-text-muted">
+              <input
+                checked={zoneEventDraft.enabled}
+                onChange={(event) => {
+                  setZoneEventDraft((currentDraft) => ({
+                    ...currentDraft,
+                    enabled: event.currentTarget.checked
+                  }));
+                  setZoneEventLuaAnnotations([]);
+                  if (zoneEventStatus) {
+                    setZoneEventStatus("");
+                  }
+                }}
+                type="checkbox"
+              />
+              Enabled
+            </label>
+          </div>
+
+          <LuaEventDefinitionHelp eventDefinition={activeZoneEventOption.definition} />
+
+          <div className="grid gap-3">
+            <SectionEyebrow>Lua Script</SectionEyebrow>
+            <div className="overflow-hidden border theme-border-panel">
+              <AceEditor
+                className="w-full"
+                enableBasicAutocompletion={enableBasicAutocompletion}
+                enableLiveAutocompletion={enableLiveAutocompletion}
+                enableSnippets={enableSnippets}
+                fontSize={13}
+                height="640px"
+                mode="lua"
+                name={`map-zone-event-lua-${activeZoneEventOption.eventName}`}
+                onChange={(value) => {
+                  setZoneEventDraft((currentDraft) => ({
+                    ...currentDraft,
+                    luaScript: value
+                  }));
+                  setZoneEventLuaAnnotations([]);
+                  if (zoneEventStatus) {
+                    setZoneEventStatus("");
+                  }
+                }}
+                annotations={zoneEventLuaAnnotations}
+                onLoad={handleLuaEditorLoad}
+                setOptions={{
+                  showFoldWidgets: false,
+                  tabSize: 2,
+                  useWorker: false,
+                  useSoftTabs: true
+                }}
+                theme="tomorrow_night"
+                value={zoneEventDraft.luaScript}
+                width="100%"
+                wrapEnabled
+              />
+            </div>
+            {luaHelperWarning ? <div className="text-sm text-[#b42318]">{luaHelperWarning}</div> : null}
+            {!luaHelperWarning && zoneEventDefinitionWarning ? (
+              <div className="text-sm text-[#b42318]">{zoneEventDefinitionWarning}</div>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <div className="flex min-h-[20rem] items-center justify-center text-sm theme-text-muted">
+          Select an event to edit.
+        </div>
+      )}
+    </Panel>
+  );
+
+  const mapCanvasPanel = (
+    <Panel
+      actions={
+        <div className="grid gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              className={actionButtonClass}
+              disabled={!activeMap || !hasMapDraftChanges || Boolean(busyLabel)}
+              onClick={handleSaveMap}
+              type="button"
+            >
+              Save Map
+            </button>
+            <button
+              className={secondaryButtonClass}
+              disabled={!activeMap || Boolean(busyLabel)}
+              onClick={() => {
+                setResizeMapWidth(String(mapWidth));
+                setResizeMapHeight(String(mapHeight));
+                setIsResizeDialogOpen(true);
+              }}
+              type="button"
+            >
+              Resize
+            </button>
+          </div>
+          {saveConfirmationMessage ? (
+            <div className="text-xs font-medium theme-text-muted">
+              {saveConfirmationMessage}
+            </div>
+          ) : null}
+        </div>
+      }
+      description={canvasDescription}
+      footer={
+        <div className="flex flex-wrap items-center gap-3">
+          <div className={statusChipClass}>
+            {busyLabel ? `${busyLabel}...` : activeModeLabel}
+          </div>
+          {activeSidebarTab === "ai" ? (
+            <div className={statusChipClass}>Selection: {aiSelectionSizeLabel}</div>
+          ) : null}
+        </div>
+      }
+      title="Map Canvas"
+    >
+      <MapWorkspace
+        activeLayerIndex={activeLayerIndex}
+        activeModeLabel={activeModeLabel}
+        activeMapAboutPrompt={activeMapAboutPrompt}
+        activeSidebarTab={activeSidebarTab}
+        activeAiTool={activeAiTool}
+        activeBrushSlotNum={activeBrushTileSlotNum}
+        activeLayerTitle={activeLayerTitle}
+        activeOpacityValue={activeOpacityValue}
+        brushSlotOptions={availableBrushSlotOptions}
+        canZoomIn={currentScale > MAP_MIN_SCALE_PERCENT}
+        canZoomOut={currentScale < MAP_MAX_SCALE_PERCENT}
+        hoverCanvasRef={hoverCanvasRef}
+        isGridVisible={isGridVisible}
+        layerPreviewCanvasRefs={layerPreviewCanvasRefs}
+        layerVisibilities={layerVisibilities}
+        mapCanvasHeight={mapCanvasHeight}
+        mapCanvasRef={mapCanvasRef}
+        mapCanvasWidth={mapCanvasWidth}
+        mapCursorClassName={mapCursorClassName}
+        mapFrameRef={mapFrameRef}
+        onCanvasClick={() => {}}
+        onCanvasMouseDown={(event) => {
+          const nextCell = getMapCellFromPointerEvent(
+            event.currentTarget,
+            event.nativeEvent,
+            mapWidth,
+            mapHeight
+          );
+
+          if (!nextCell) {
+            return;
+          }
+
+          setHoverCell(nextCell);
+
+          if (activeSidebarTab === "ai") {
+            beginPaint();
+
+            if (activeAiTool === "select") {
+              setAiSelectionDraft({
+                anchorCell: nextCell,
+                focusCell: nextCell
+              });
+              return;
+            }
+
+            applyAiMaskCell(nextCell, activeAiTool);
+            return;
+          }
+
+          if (isBrushEyedropperActive) {
+            sampleBrushFromCell(nextCell);
+            return;
+          }
+
+          if (event.shiftKey && paintLineFromLastPlacement(nextCell)) {
+            return;
+          }
+
+          beginPaint();
+          paintCell(nextCell);
+          lastPaintedCellKeyRef.current = getMapCellKey(nextCell.tileX, nextCell.tileY);
+        }}
+        onCanvasMouseLeave={() => {
+          if (activeSidebarTab === "ai" && activeAiTool === "select" && drawingRef.current) {
+            return;
+          }
+
+          finishPaint();
+          setHoverCell(null);
+        }}
+        onCanvasMouseMove={handlePointerUpdate}
+        onCanvasMouseUp={() => {
+          if (activeSidebarTab === "ai" && activeAiTool === "select") {
+            return;
+          }
+
+          finishPaint();
+        }}
+        onChangeActiveMapAboutPrompt={(value) => {
+          if (!activeMap) {
+            return;
+          }
+
+          setMapAboutPromptDrafts((currentDrafts) => ({
+            ...currentDrafts,
+            [activeMap.slug]: value
+          }));
+        }}
+        onClearAllLayers={() => {
+          setMapDraftLayers(activeMapSlug, createEmptyMapLayers(mapWidth, mapHeight), mapWidth, mapHeight);
+          setMapStatus(`Cleared every layer from the current draft map (${mapWidth}x${mapHeight}).`);
+        }}
+        onClearLayer={(layerIndex) => {
+          clearLayer(layerIndex);
+          setMapStatus(`Cleared ${TILE_LIBRARY_LAYERS[layerIndex]?.description ?? `Layer ${layerIndex}`}.`);
+        }}
+        onSelectBrushSlot={(slotNum) => {
+          if (!activeBrushTile) {
+            return;
+          }
+
+          setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(activeBrushTile.slug, slotNum));
+        }}
+        onSelectLayer={setActiveLayerIndex}
+        onSetLayerVisibility={(layerIndex, visibility) => {
+          setLayerVisibilities((currentVisibilities) => {
+            const nextVisibilities = currentVisibilities.slice();
+            nextVisibilities[layerIndex] = visibility;
+            return nextVisibilities;
+          });
+        }}
+        onToggleGridVisibility={() => {
+          setGridVisible((currentValue) => !currentValue);
+        }}
+        onZoomActual={() => {
+          setMapScalePercent(100);
+        }}
+        onZoomIn={() => {
+          setMapScalePercent((value) =>
+            clampMapScalePercent(
+              (value ??
+                getAutoFitMapScalePercent(
+                  mapFrameRef.current,
+                  mapCanvasWidth,
+                  mapCanvasHeight
+                )) +
+                MAP_SCALE_STEP_PERCENT
+            )
+          );
+        }}
+        onZoomOut={() => {
+          setMapScalePercent((value) =>
+            clampMapScalePercent(
+              (value ??
+                getAutoFitMapScalePercent(
+                  mapFrameRef.current,
+                  mapCanvasWidth,
+                  mapCanvasHeight
+                )) -
+                MAP_SCALE_STEP_PERCENT
+            )
+          );
+        }}
+        previewCanvasRef={previewCanvasRef}
+        scalePercent={currentScale}
+        selectedBrushLabel={selectedBrushLabel}
+      />
+    </Panel>
+  );
+
+  const editingWorkspacePanel = activeSidebarTab === "events" ? eventEditorPanel : mapCanvasPanel;
+
   return (
     <div className="min-h-0">
-      <div className="grid min-h-0 gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
+      <div
+        className={`grid min-h-0 gap-4 ${
+          isEditingMap ? "xl:grid-cols-[20rem_minmax(0,1fr)]" : "xl:grid-cols-[minmax(20rem,28rem)]"
+        }`}
+      >
         <div className="min-h-0 xl:h-[calc(100vh-7rem)]">
           <Panel
             className="h-full"
             actions={
-              activeSidebarTab === "maps" ? (
+              isEditingMap ? (
+                <button className={secondaryButtonClass} onClick={handleBackToMapSelection} type="button">
+                  Back
+                </button>
+              ) : (
                 <button
                   className={actionButtonClass}
                   onClick={() => {
@@ -3046,61 +3455,12 @@ export function MapDesigner() {
                 >
                   Create
                 </button>
-              ) : undefined
+              )
             }
-            description={
-              activeSidebarTab === "maps"
-                ? "Choose an existing map or create a new one."
-                : activeSidebarTab === "events"
-                  ? activeMap
-                    ? `Zone events for ${activeMap.name}.`
-                    : "Choose a map before editing zone events."
-                : activeSidebarTab === "brushes"
-                  ? `Pick a tile or sprite from ${selectedLayer.index} - ${selectedLayer.description}, then paint it onto the active layer.`
-                  : "Build an AI mask on top of the current map, then drag a selection to generate the AI image and edit mask."
-            }
-            title="Map Tools"
+            description={isEditingMap ? (activeMap?.name ?? "") : "Choose an existing map or create a new one."}
+            title={isEditingMap ? "Editing Map" : "Map Tools"}
           >
-            <div className="panel-tabs">
-              <button
-                className={panelTabButtonClass(activeSidebarTab === "maps")}
-                onClick={() => {
-                  setActiveSidebarTab("maps");
-                }}
-                type="button"
-              >
-                Maps
-              </button>
-              <button
-                className={panelTabButtonClass(activeSidebarTab === "events")}
-                onClick={() => {
-                  setActiveSidebarTab("events");
-                }}
-                type="button"
-              >
-                Events
-              </button>
-              <button
-                className={panelTabButtonClass(activeSidebarTab === "brushes")}
-                onClick={() => {
-                  setActiveSidebarTab("brushes");
-                }}
-                type="button"
-              >
-                Brushes
-              </button>
-              <button
-                className={panelTabButtonClass(activeSidebarTab === "ai")}
-                onClick={() => {
-                  setActiveSidebarTab("ai");
-                }}
-                type="button"
-              >
-                AI
-              </button>
-            </div>
-
-            {activeSidebarTab === "maps" ? (
+            {!isEditingMap ? (
               <>
                 <div className="flex flex-col items-stretch gap-2">
                   <input
@@ -3120,7 +3480,7 @@ export function MapDesigner() {
                       className={assetListRowClass(hasMounted && mapRecord.slug === activeMapSlug)}
                       key={mapRecord.slug}
                       onClick={() => {
-                        setActiveMapSlug(mapRecord.slug);
+                        handleOpenMapForEditing(mapRecord.slug);
                       }}
                       type="button"
                     >
@@ -3137,680 +3497,384 @@ export function MapDesigner() {
                   <div className="text-sm theme-text-muted">No maps match that filter.</div>
                 ) : null}
               </>
-            ) : activeSidebarTab === "events" ? (
-              <div className="grid min-h-0 gap-3">
-                <div className="grid min-h-0 gap-2">
-                  <SectionEyebrow>Events</SectionEyebrow>
-                  <div className={scrollableAssetListClass}>
-                    {zoneEventOptions.map((eventOption) => {
-                      const isConfigured = Boolean(eventOption.record);
-                      const displayColor = isConfigured ? "#000000" : "#909090";
-
-                      return (
-                      <button
-                        className={assetListRowClass(eventOption.eventName === activeZoneEventName)}
-                        key={eventOption.eventName}
-                        onClick={() => {
-                          setActiveZoneEventName(eventOption.eventName);
-                          setZoneEventStatus("");
-                        }}
-                        type="button"
-                      >
-                        <div className={assetListMetaClass}>
-                          <span className={assetListTitleClass} style={{ color: displayColor }}>
-                            {eventOption.eventName}
-                          </span>
-                          <span className={assetListSubtitleClass} style={{ color: displayColor }}>
-                            {isConfigured
-                              ? eventOption.record?.enabled
-                                ? "Configured • Enabled"
-                                : "Configured • Disabled"
-                              : "Available • Not configured"}
-                          </span>
-                          <span className={assetListSubtitleClass} style={{ color: displayColor }}>
-                            {eventOption.description || "No helper description is available for this event."}
-                          </span>
-                        </div>
-                      </button>
-                      );
-                    })}
-                  </div>
+            ) : (
+              <>
+                <div className="panel-tabs">
+                  <button
+                    className={panelTabButtonClass(activeSidebarTab === "events")}
+                    onClick={() => {
+                      setActiveSidebarTab("events");
+                    }}
+                    type="button"
+                  >
+                    Events
+                  </button>
+                  <button
+                    className={panelTabButtonClass(activeSidebarTab === "brushes")}
+                    onClick={() => {
+                      setActiveSidebarTab("brushes");
+                    }}
+                    type="button"
+                  >
+                    Brushes
+                  </button>
+                  <button
+                    className={panelTabButtonClass(activeSidebarTab === "ai")}
+                    onClick={() => {
+                      setActiveSidebarTab("ai");
+                    }}
+                    type="button"
+                  >
+                    AI
+                  </button>
                 </div>
 
-                {isZoneEventsLoading ? (
-                  <div className="text-sm theme-text-muted">Loading zone events...</div>
-                ) : null}
-                {!isZoneEventsLoading && activeMap && !zoneEventOptions.length ? (
-                  <div className={emptyStateCardClass}>No events are available for {activeMap.name}.</div>
-                ) : null}
-                {zoneEventStatus && zoneEventStatus !== "Event saved." ? (
-                  <div className="text-sm text-[#b42318]">{zoneEventStatus}</div>
-                ) : null}
-              </div>
-            ) : activeSidebarTab === "brushes" ? (
-              <div className="grid min-h-0 gap-3">
-                <div className={`grid gap-2 ${activeBrushTile ? "" : "opacity-65"}`}>
-                  <SectionEyebrow>Brush Effects</SectionEyebrow>
-                  <div className="text-xs theme-text-muted">
-                    {activeBrushTile
-                      ? "Flip, rotate, multiply, and tint apply to tile brushes."
-                      : "Tile effects are disabled for sprite brushes."}
-                  </div>
-                  <div className={compactBrushEffectsClass}>
-                    {BRUSH_OPTION_DEFINITIONS.map((option) => (
-                      <label key={option.id}>
-                        <input
-                          checked={brushOptions[option.id]}
-                          disabled={!activeBrushTile}
-                          onChange={(event) => {
-                            const isChecked = event.currentTarget.checked;
+                {activeSidebarTab === "events" ? (
+                  <div className="grid min-h-0 gap-3">
+                    <div className="grid min-h-0 gap-2">
+                      <SectionEyebrow>Events</SectionEyebrow>
+                      <div className={scrollableAssetListClass}>
+                        {zoneEventOptions.map((eventOption) => {
+                          const isConfigured = Boolean(eventOption.record);
+                          const displayColor = isConfigured ? "#000000" : "#909090";
 
-                            setBrushOptions((currentOptions) =>
-                              normalizeMapTileOptions({
-                                ...currentOptions,
-                                [option.id]: isChecked
-                              })
-                            );
-                          }}
-                          type="checkbox"
-                        />
-                        <span>{option.label}</span>
-                        {option.id === "color" ? (
-                          <input
-                            disabled={!activeBrushTile}
-                            onChange={(event) => {
-                              const nextColorValue = event.currentTarget.value;
+                          return (
+                            <button
+                              className={assetListRowClass(eventOption.eventName === activeZoneEventName)}
+                              key={eventOption.eventName}
+                              onClick={() => {
+                                setActiveZoneEventName(eventOption.eventName);
+                                setZoneEventStatus("");
+                              }}
+                              type="button"
+                            >
+                              <div className={assetListMetaClass}>
+                                <span className={assetListTitleClass} style={{ color: displayColor }}>
+                                  {eventOption.eventName}
+                                </span>
+                                <span className={assetListSubtitleClass} style={{ color: displayColor }}>
+                                  {isConfigured
+                                    ? eventOption.record?.enabled
+                                      ? "Configured • Enabled"
+                                      : "Configured • Disabled"
+                                    : "Available • Not configured"}
+                                </span>
+                                <span className={assetListSubtitleClass} style={{ color: displayColor }}>
+                                  {eventOption.description || "No helper description is available for this event."}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
 
-                              setBrushOptions((currentOptions) =>
-                                normalizeMapTileOptions({
-                                  ...currentOptions,
-                                  colorValue: nextColorValue
-                                })
-                              );
-                            }}
-                            type="color"
-                            value={brushOptions.colorValue}
-                          />
-                        ) : null}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid min-h-0 gap-2">
-                  <SectionEyebrow>Brushes</SectionEyebrow>
-                  <div className="text-xs theme-text-muted">
-                    {formatTileLibraryPath(currentBrushLibraryPath)}
-                  </div>
-                  <div className={scrollableAssetListClass}>
-                    <button
-                      className={assetListRowClass(mapBrushAssetKey === "")}
-                      onClick={() => {
-                        setBrushEyedropperActive(false);
-                        setMapBrushAssetKey("");
-                      }}
-                      type="button"
-                    >
-                      <div className={`${assetListThumbClass} theme-bg-brand theme-text-inverse-soft`}>
-                        <FontAwesomeIcon className="h-5 w-5" icon={faEraser} title="Erase" />
-                      </div>
-                      <div className={assetListMetaClass}>
-                        <span className={assetListTitleClass}>Eraser</span>
-                        <span className={assetListSubtitleClass}>Clear painted cells</span>
-                      </div>
-                    </button>
-                    <button
-                      className={assetListRowClass(isBrushEyedropperActive)}
-                      onClick={() => {
-                        setBrushEyedropperActive(true);
-                        setMapStatus("Eyedropper ready. Click a map cell to sample its tile, sprite, and tile effects.");
-                      }}
-                      type="button"
-                    >
-                      <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
-                        <FontAwesomeIcon className="h-5 w-5" icon={faEyeDropper} title="Eyedropper" />
-                      </div>
-                      <div className={assetListMetaClass}>
-                        <span className={assetListTitleClass}>Eye Dropper</span>
-                        <span className={assetListSubtitleClass}>Sample the next clicked map cell</span>
-                      </div>
-                    </button>
-
-                    {!isAtBrushLayerRoot ? (
-                      <button
-                        className={`${assetListRowClass(false)} group theme-hover-border-accent theme-hover-bg-panel`}
-                        onClick={() => {
-                          setBrushLibraryPath(brushLibraryParentPath || selectedLayerFolder);
-                        }}
-                        type="button"
-                      >
-                        <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary transition group-hover:theme-text-accent`}>
-                          <FontAwesomeIcon className="h-4 w-4" icon={faFolderArrowUp} />
-                        </div>
-                        <div className={assetListMetaClass}>
-                          <span className={assetListTitleClass}>Back</span>
-                          <span className={assetListSubtitleClass}>
-                            {getTileLibrarySegmentLabel(brushLibraryParentPath || selectedLayerFolder)}
-                          </span>
-                        </div>
-                        <div className="ml-auto theme-text-muted transition group-hover:theme-text-accent">
-                          <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronRight} />
-                        </div>
-                      </button>
+                    {isZoneEventsLoading ? (
+                      <div className="text-sm theme-text-muted">Loading zone events...</div>
                     ) : null}
+                    {!isZoneEventsLoading && activeMap && !zoneEventOptions.length ? (
+                      <div className={emptyStateCardClass}>No events are available for {activeMap.name}.</div>
+                    ) : null}
+                    {zoneEventStatus && zoneEventStatus !== "Event saved." ? (
+                      <div className="text-sm text-[#b42318]">{zoneEventStatus}</div>
+                    ) : null}
+                  </div>
+                ) : activeSidebarTab === "brushes" ? (
+                  <div className="grid min-h-0 gap-3">
+                    <div className={`grid gap-2 ${activeBrushTile ? "" : "opacity-65"}`}>
+                      <SectionEyebrow>Brush Effects</SectionEyebrow>
+                      <div className="text-xs theme-text-muted">
+                        {activeBrushTile
+                          ? "Flip, rotate, multiply, and tint apply to tile brushes."
+                          : "Tile effects are disabled for sprite brushes."}
+                      </div>
+                      <div className={compactBrushEffectsClass}>
+                        {BRUSH_OPTION_DEFINITIONS.map((option) => (
+                          <label key={option.id}>
+                            <input
+                              checked={brushOptions[option.id]}
+                              disabled={!activeBrushTile}
+                              onChange={(event) => {
+                                const isChecked = event.currentTarget.checked;
 
-                    {visibleBrushFolders.length ? <div className={assetListEyebrowClass}>Folders</div> : null}
-                    {visibleBrushFolders.map((folderPath) => (
-                      <button
-                        className={assetListRowClass(false)}
-                        key={folderPath}
-                        onClick={() => {
-                          setBrushLibraryPath(folderPath);
-                        }}
-                        type="button"
-                      >
-                        <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
-                          <FontAwesomeIcon className="h-4 w-4" icon={faFolder} />
-                        </div>
-                        <div className={assetListMetaClass}>
-                          <span className={assetListTitleClass}>{getTileLibrarySegmentLabel(folderPath)}</span>
-                          <span className={assetListSubtitleClass}>Folder</span>
-                          <span className={assetListMonoClass}>{folderPath}</span>
-                        </div>
-                        <div className="ml-auto theme-text-muted">
-                          <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronRight} />
-                        </div>
-                      </button>
-                    ))}
+                                setBrushOptions((currentOptions) =>
+                                  normalizeMapTileOptions({
+                                    ...currentOptions,
+                                    [option.id]: isChecked
+                                  })
+                                );
+                              }}
+                              type="checkbox"
+                            />
+                            <span>{option.label}</span>
+                            {option.id === "color" ? (
+                              <input
+                                disabled={!activeBrushTile}
+                                onChange={(event) => {
+                                  const nextColorValue = event.currentTarget.value;
 
-                    {visibleBrushTiles.length ? <div className={assetListEyebrowClass}>Tiles</div> : null}
-                    {visibleBrushTiles.map((tileRecord) => {
-                      const mainSlot = tileMainSlotsBySlug.get(tileRecord.slug) ?? null;
+                                  setBrushOptions((currentOptions) =>
+                                    normalizeMapTileOptions({
+                                      ...currentOptions,
+                                      colorValue: nextColorValue
+                                    })
+                                  );
+                                }}
+                                type="color"
+                                value={brushOptions.colorValue}
+                              />
+                            ) : null}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
 
-                      return (
-                        <div className="relative" key={tileRecord.slug}>
-                          <button
-                            className={`${assetListRowClass(activeBrushTileSlug === tileRecord.slug)} pr-10`}
-                            onClick={() => {
-                              setBrushEyedropperActive(false);
-                              setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(tileRecord.slug, 0));
-                            }}
-                            type="button"
-                          >
-                            <CheckerboardFrame className={assetListCheckerThumbClass} size="md">
-                              {mainSlot?.pixels ? (
-                                <img
-                                  alt={tileRecord.name}
-                                  className="h-full w-full object-contain [image-rendering:pixelated]"
-                                  src={mainSlot.pixels}
-                                />
-                              ) : null}
-                            </CheckerboardFrame>
-                            <div className={assetListMetaClass}>
-                              <span className={assetListTitleClass}>{tileRecord.name}</span>
-                              <span className={assetListMonoClass}>{tileRecord.slug}</span>
-                            </div>
-                          </button>
-                          <button
-                            className={`${assetListActionButtonClass} absolute right-1 top-1/2 -translate-y-1/2`}
-                            onClick={() => {
-                              setActiveTileSlug(tileRecord.slug);
-                              openPaintEditor(tileRecord, "main");
-                            }}
-                            title={`Edit ${tileRecord.name} main slot`}
-                            type="button"
-                          >
-                            <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
-                          </button>
-                        </div>
-                      );
-                    })}
-
-                    {visibleBrushSprites.length ? <div className={assetListEyebrowClass}>Sprites</div> : null}
-                    {visibleBrushSprites.map((spriteRecord) => {
-                      const spriteKey = getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename);
-
-                      return (
+                    <div className="grid min-h-0 gap-2">
+                      <SectionEyebrow>Brushes</SectionEyebrow>
+                      <div className="text-xs theme-text-muted">
+                        {formatTileLibraryPath(currentBrushLibraryPath)}
+                      </div>
+                      <div className={scrollableAssetListClass}>
                         <button
-                          className={assetListRowClass(getSpriteBrushAssetKey(spriteKey) === mapBrushAssetKey)}
-                          key={spriteKey}
+                          className={assetListRowClass(mapBrushAssetKey === "")}
                           onClick={() => {
                             setBrushEyedropperActive(false);
-                            setMapBrushAssetKey(getSpriteBrushAssetKey(spriteKey));
+                            setMapBrushAssetKey("");
                           }}
                           type="button"
                         >
-                          <CheckerboardFrame className={assetListCheckerThumbClass} size="md">
-                            {spriteRecord.thumbnail ? (
-                              <img
-                                alt={spriteRecord.name}
-                                className="h-full w-full object-contain"
-                                src={spriteRecord.thumbnail}
-                              />
-                            ) : null}
-                          </CheckerboardFrame>
+                          <div className={`${assetListThumbClass} theme-bg-brand theme-text-inverse-soft`}>
+                            <FontAwesomeIcon className="h-5 w-5" icon={faEraser} title="Erase" />
+                          </div>
                           <div className={assetListMetaClass}>
-                            <span className={assetListTitleClass}>{spriteRecord.name}</span>
-                            <span className={assetListMonoClass}>{spriteRecord.filename}</span>
+                            <span className={assetListTitleClass}>Eraser</span>
+                            <span className={assetListSubtitleClass}>Clear painted cells</span>
                           </div>
                         </button>
-                      );
-                    })}
-                  </div>
-                  {!visibleBrushFolders.length && !visibleBrushTiles.length && !visibleBrushSprites.length ? (
-                    <div className={emptyStateCardClass}>
-                      No brush assets are available in {formatTileLibraryPath(currentBrushLibraryPath)} yet.
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ) : (
-              <div className="grid min-h-0 gap-3">
-                <div className="grid gap-2">
-                  {AI_TOOL_OPTIONS.map((toolOption) => {
-                    const isActive = activeAiTool === toolOption.id;
+                        <button
+                          className={assetListRowClass(isBrushEyedropperActive)}
+                          onClick={() => {
+                            setBrushEyedropperActive(true);
+                            setMapStatus("Eyedropper ready. Click a map cell to sample its tile, sprite, and tile effects.");
+                          }}
+                          type="button"
+                        >
+                          <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
+                            <FontAwesomeIcon className="h-5 w-5" icon={faEyeDropper} title="Eyedropper" />
+                          </div>
+                          <div className={assetListMetaClass}>
+                            <span className={assetListTitleClass}>Eye Dropper</span>
+                            <span className={assetListSubtitleClass}>Sample the next clicked map cell</span>
+                          </div>
+                        </button>
 
-                    return (
-                      <button
-                        className={assetListRowClass(isActive)}
-                        key={toolOption.id}
-                        onClick={() => {
-                          setActiveAiTool(toolOption.id);
-                          setMapStatus(
-                            toolOption.id === "select"
-                              ? "Drag across the map canvas to create the AI image and edit mask."
-                              : toolOption.id === "mask"
-                                ? "Click or drag on the map canvas to add squares to the AI mask."
-                                : "Click or drag on the map canvas to erase squares from the AI mask."
+                        {!isAtBrushLayerRoot ? (
+                          <button
+                            className={`${assetListRowClass(false)} group theme-hover-border-accent theme-hover-bg-panel`}
+                            onClick={() => {
+                              setBrushLibraryPath(brushLibraryParentPath || selectedLayerFolder);
+                            }}
+                            type="button"
+                          >
+                            <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary transition group-hover:theme-text-accent`}>
+                              <FontAwesomeIcon className="h-4 w-4" icon={faFolderArrowUp} />
+                            </div>
+                            <div className={assetListMetaClass}>
+                              <span className={assetListTitleClass}>Back</span>
+                              <span className={assetListSubtitleClass}>
+                                {getTileLibrarySegmentLabel(brushLibraryParentPath || selectedLayerFolder)}
+                              </span>
+                            </div>
+                            <div className="ml-auto theme-text-muted transition group-hover:theme-text-accent">
+                              <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronRight} />
+                            </div>
+                          </button>
+                        ) : null}
+
+                        {visibleBrushFolders.length ? <div className={assetListEyebrowClass}>Folders</div> : null}
+                        {visibleBrushFolders.map((folderPath) => (
+                          <button
+                            className={assetListRowClass(false)}
+                            key={folderPath}
+                            onClick={() => {
+                              setBrushLibraryPath(folderPath);
+                            }}
+                            type="button"
+                          >
+                            <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
+                              <FontAwesomeIcon className="h-4 w-4" icon={faFolder} />
+                            </div>
+                            <div className={assetListMetaClass}>
+                              <span className={assetListTitleClass}>{getTileLibrarySegmentLabel(folderPath)}</span>
+                              <span className={assetListSubtitleClass}>Folder</span>
+                              <span className={assetListMonoClass}>{folderPath}</span>
+                            </div>
+                            <div className="ml-auto theme-text-muted">
+                              <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronRight} />
+                            </div>
+                          </button>
+                        ))}
+
+                        {visibleBrushTiles.length ? <div className={assetListEyebrowClass}>Tiles</div> : null}
+                        {visibleBrushTiles.map((tileRecord) => {
+                          const mainSlot = tileMainSlotsBySlug.get(tileRecord.slug) ?? null;
+
+                          return (
+                            <div className="relative" key={tileRecord.slug}>
+                              <button
+                                className={`${assetListRowClass(activeBrushTileSlug === tileRecord.slug)} pr-10`}
+                                onClick={() => {
+                                  setBrushEyedropperActive(false);
+                                  setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(tileRecord.slug, 0));
+                                }}
+                                type="button"
+                              >
+                                <CheckerboardFrame className={assetListCheckerThumbClass} size="md">
+                                  {mainSlot?.pixels ? (
+                                    <img
+                                      alt={tileRecord.name}
+                                      className="h-full w-full object-contain [image-rendering:pixelated]"
+                                      src={mainSlot.pixels}
+                                    />
+                                  ) : null}
+                                </CheckerboardFrame>
+                                <div className={assetListMetaClass}>
+                                  <span className={assetListTitleClass}>{tileRecord.name}</span>
+                                  <span className={assetListMonoClass}>{tileRecord.slug}</span>
+                                </div>
+                              </button>
+                              <button
+                                className={`${assetListActionButtonClass} absolute right-1 top-1/2 -translate-y-1/2`}
+                                onClick={() => {
+                                  setActiveTileSlug(tileRecord.slug);
+                                  openPaintEditor(tileRecord, "main");
+                                }}
+                                title={`Edit ${tileRecord.name} main slot`}
+                                type="button"
+                              >
+                                <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
+                              </button>
+                            </div>
                           );
-                        }}
-                        type="button"
-                      >
-                        <div className={assetListMetaClass}>
-                          <span className={assetListTitleClass}>{toolOption.label}</span>
-                          <span className={assetListSubtitleClass}>{toolOption.description}</span>
+                        })}
+
+                        {visibleBrushSprites.length ? <div className={assetListEyebrowClass}>Sprites</div> : null}
+                        {visibleBrushSprites.map((spriteRecord) => {
+                          const spriteKey = getTileLibrarySpriteKey(spriteRecord.path, spriteRecord.filename);
+
+                          return (
+                            <button
+                              className={assetListRowClass(getSpriteBrushAssetKey(spriteKey) === mapBrushAssetKey)}
+                              key={spriteKey}
+                              onClick={() => {
+                                setBrushEyedropperActive(false);
+                                setMapBrushAssetKey(getSpriteBrushAssetKey(spriteKey));
+                              }}
+                              type="button"
+                            >
+                              <CheckerboardFrame className={assetListCheckerThumbClass} size="md">
+                                {spriteRecord.thumbnail ? (
+                                  <img
+                                    alt={spriteRecord.name}
+                                    className="h-full w-full object-contain"
+                                    src={spriteRecord.thumbnail}
+                                  />
+                                ) : null}
+                              </CheckerboardFrame>
+                              <div className={assetListMetaClass}>
+                                <span className={assetListTitleClass}>{spriteRecord.name}</span>
+                                <span className={assetListMonoClass}>{spriteRecord.filename}</span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {!visibleBrushFolders.length && !visibleBrushTiles.length && !visibleBrushSprites.length ? (
+                        <div className={emptyStateCardClass}>
+                          No brush assets are available in {formatTileLibraryPath(currentBrushLibraryPath)} yet.
                         </div>
-                      </button>
-                      );
-                  })}
-                </div>
-
-                <button
-                  className={actionButtonClass}
-                  onClick={() => {
-                    setActiveAiTool("select");
-                    finalizeAiSelection(
-                      { tileX: 0, tileY: 0 },
-                      { tileX: Math.max(0, mapWidth - 1), tileY: Math.max(0, mapHeight - 1) }
-                    );
-                  }}
-                  type="button"
-                >
-                  Select All
-                </button>
-
-                <div className={sectionCardClass}>
-                  <SectionEyebrow>Mask</SectionEyebrow>
-                  <div className="text-sm font-semibold theme-text-primary">
-                    {maskedCells.size} tiles masked
+                      ) : null}
+                    </div>
                   </div>
-                  <div className="text-xs leading-5 theme-text-muted">
-                    Masked tiles are shown as 80% black over the map, independent of the painted layers beneath them.
-                  </div>
-                </div>
+                ) : (
+                  <div className="grid min-h-0 gap-3">
+                    <div className="grid gap-2">
+                      {AI_TOOL_OPTIONS.map((toolOption) => {
+                        const isActive = activeAiTool === toolOption.id;
 
-                <div className={sectionCardClass}>
-                  <SectionEyebrow>Selection</SectionEyebrow>
-                  <div className="text-sm font-semibold theme-text-primary">{aiSelectionSizeLabel}</div>
-                  <div className="text-xs leading-5 theme-text-muted">
-                    The size label always uses the real tile size of {TILE_SIZE}px, not the current zoom level.
-                  </div>
-                </div>
+                        return (
+                          <button
+                            className={assetListRowClass(isActive)}
+                            key={toolOption.id}
+                            onClick={() => {
+                              setActiveAiTool(toolOption.id);
+                              setMapStatus(
+                                toolOption.id === "select"
+                                  ? "Drag across the map canvas to create the AI image and edit mask."
+                                  : toolOption.id === "mask"
+                                    ? "Click or drag on the map canvas to add squares to the AI mask."
+                                    : "Click or drag on the map canvas to erase squares from the AI mask."
+                              );
+                            }}
+                            type="button"
+                          >
+                            <div className={assetListMetaClass}>
+                              <span className={assetListTitleClass}>{toolOption.label}</span>
+                              <span className={assetListSubtitleClass}>{toolOption.description}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
 
-                <button
-                  className={actionButtonClass}
-                  disabled={!activeMap || Boolean(busyLabel)}
-                  onClick={handleExportTerrain}
-                  type="button"
-                >
-                  Export Terrain
-                </button>
-              </div>
+                    <button
+                      className={actionButtonClass}
+                      onClick={() => {
+                        setActiveAiTool("select");
+                        finalizeAiSelection(
+                          { tileX: 0, tileY: 0 },
+                          { tileX: Math.max(0, mapWidth - 1), tileY: Math.max(0, mapHeight - 1) }
+                        );
+                      }}
+                      type="button"
+                    >
+                      Select All
+                    </button>
+
+                    <div className={sectionCardClass}>
+                      <SectionEyebrow>Mask</SectionEyebrow>
+                      <div className="text-sm font-semibold theme-text-primary">
+                        {maskedCells.size} tiles masked
+                      </div>
+                      <div className="text-xs leading-5 theme-text-muted">
+                        Masked tiles are shown as 80% black over the map, independent of the painted layers beneath them.
+                      </div>
+                    </div>
+
+                    <div className={sectionCardClass}>
+                      <SectionEyebrow>Selection</SectionEyebrow>
+                      <div className="text-sm font-semibold theme-text-primary">{aiSelectionSizeLabel}</div>
+                      <div className="text-xs leading-5 theme-text-muted">
+                        The size label always uses the real tile size of {TILE_SIZE}px, not the current zoom level.
+                      </div>
+                    </div>
+
+                    <button
+                      className={actionButtonClass}
+                      disabled={!activeMap || Boolean(busyLabel)}
+                      onClick={handleExportTerrain}
+                      type="button"
+                    >
+                      Export Terrain
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </Panel>
         </div>
 
-        {activeSidebarTab === "events" ? (
-          <Panel
-            className="xl:h-[calc(100vh-7rem)]"
-            description={
-              activeZoneEventOption
-                ? `${activeMap?.name ?? ""} • ${activeZoneEventOption.eventName}`
-                : activeMap
-                  ? `Select a zone event for ${activeMap.name}.`
-                  : "Choose a map before editing zone events."
-            }
-            footer={
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                {zoneEventStatus ? (
-                  <div
-                    className={
-                      zoneEventStatus === "Event saved." ||
-                      zoneEventStatus === "Lua formatted."
-                        ? "text-sm theme-text-muted"
-                        : "text-sm text-[#b42318]"
-                    }
-                  >
-                    {zoneEventStatus}
-                  </div>
-                ) : (
-                  <div />
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    className={secondaryButtonClass}
-                    onClick={openLuaScriptingGuide}
-                    type="button"
-                  >
-                    Scripting Guide
-                  </button>
-                  <button
-                    className={secondaryButtonClass}
-                    disabled={!activeZoneEventOption || isZoneEventSaving || isZoneEventFormatting}
-                    onClick={handleFormatZoneEventLua}
-                    type="button"
-                  >
-                    {isZoneEventFormatting ? "Formatting..." : "Format Lua"}
-                  </button>
-                  <button
-                    className={actionButtonClass}
-                    disabled={!activeZoneEventOption || isZoneEventSaving || isZoneEventFormatting}
-                    onClick={handleSaveZoneEvent}
-                    type="button"
-                  >
-                    {isZoneEventSaving ? "Saving..." : "Save Event"}
-                  </button>
-                </div>
-              </div>
-            }
-            title={activeZoneEventOption ? activeZoneEventOption.eventName : "Event Editor"}
-          >
-            {activeZoneEventOption ? (
-              <div className="grid min-h-0 gap-4 overflow-y-auto pr-1">
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
-                  <div className="grid gap-1">
-                    <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
-                      Event Name
-                    </span>
-                    <div className="font-mono text-sm theme-text-primary">{activeZoneEventOption.eventName}</div>
-                  </div>
-
-                  <label className="flex items-end gap-2 pb-3 text-sm theme-text-muted">
-                    <input
-                      checked={zoneEventDraft.enabled}
-                      onChange={(event) => {
-                        setZoneEventDraft((currentDraft) => ({
-                          ...currentDraft,
-                          enabled: event.currentTarget.checked
-                        }));
-                        setZoneEventLuaAnnotations([]);
-                        if (zoneEventStatus) {
-                          setZoneEventStatus("");
-                        }
-                      }}
-                      type="checkbox"
-                    />
-                    Enabled
-                  </label>
-                </div>
-
-                <LuaEventDefinitionHelp eventDefinition={activeZoneEventOption.definition} />
-
-                <div className="grid gap-3">
-                  <SectionEyebrow>Lua Script</SectionEyebrow>
-                  <div className="overflow-hidden border theme-border-panel">
-                    <AceEditor
-                      className="w-full"
-                      enableBasicAutocompletion={enableBasicAutocompletion}
-                      enableLiveAutocompletion={enableLiveAutocompletion}
-                      enableSnippets={enableSnippets}
-                      fontSize={13}
-                      height="640px"
-                      mode="lua"
-                      name={`map-zone-event-lua-${activeZoneEventOption.eventName}`}
-                      onChange={(value) => {
-                        setZoneEventDraft((currentDraft) => ({
-                          ...currentDraft,
-                          luaScript: value
-                        }));
-                        setZoneEventLuaAnnotations([]);
-                        if (zoneEventStatus) {
-                          setZoneEventStatus("");
-                        }
-                      }}
-                      annotations={zoneEventLuaAnnotations}
-                      onLoad={handleLuaEditorLoad}
-                      setOptions={{
-                        showFoldWidgets: false,
-                        tabSize: 2,
-                        useWorker: false,
-                        useSoftTabs: true
-                      }}
-                      theme="tomorrow_night"
-                      value={zoneEventDraft.luaScript}
-                      width="100%"
-                      wrapEnabled
-                    />
-                  </div>
-                  {luaHelperWarning ? <div className="text-sm text-[#b42318]">{luaHelperWarning}</div> : null}
-                  {!luaHelperWarning && zoneEventDefinitionWarning ? (
-                    <div className="text-sm text-[#b42318]">{zoneEventDefinitionWarning}</div>
-                  ) : null}
-                </div>
-              </div>
-            ) : (
-              <div className="flex min-h-[20rem] items-center justify-center text-sm theme-text-muted">
-                Select an event to edit.
-              </div>
-            )}
-          </Panel>
-        ) : (
-          <Panel
-              actions={
-                <div className="grid gap-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      className={actionButtonClass}
-                      disabled={!activeMap || !hasMapDraftChanges || Boolean(busyLabel)}
-                      onClick={handleSaveMap}
-                      type="button"
-                    >
-                      Save Map
-                    </button>
-                    <button
-                      className={secondaryButtonClass}
-                      disabled={!activeMap || Boolean(busyLabel)}
-                      onClick={() => {
-                        setResizeMapWidth(String(mapWidth));
-                        setResizeMapHeight(String(mapHeight));
-                        setIsResizeDialogOpen(true);
-                      }}
-                      type="button"
-                    >
-                      Resize
-                    </button>
-                  </div>
-                  {saveConfirmationMessage ? (
-                    <div className="text-xs font-medium theme-text-muted">
-                      {saveConfirmationMessage}
-                    </div>
-                  ) : null}
-                </div>
-              }
-              description={canvasDescription}
-              footer={
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className={statusChipClass}>
-                    {busyLabel ? `${busyLabel}...` : activeModeLabel}
-                  </div>
-                  {activeSidebarTab === "ai" ? (
-                    <div className={statusChipClass}>Selection: {aiSelectionSizeLabel}</div>
-                  ) : null}
-                </div>
-              }
-              title="Map Canvas"
-            >
-              <MapWorkspace
-                activeLayerIndex={activeLayerIndex}
-                activeModeLabel={activeModeLabel}
-                activeMapAboutPrompt={activeMapAboutPrompt}
-                activeSidebarTab={activeSidebarTab}
-                activeAiTool={activeAiTool}
-                activeBrushSlotNum={activeBrushTileSlotNum}
-                activeLayerTitle={activeLayerTitle}
-                activeOpacityValue={activeOpacityValue}
-                brushSlotOptions={availableBrushSlotOptions}
-                canZoomIn={currentScale > MAP_MIN_SCALE_PERCENT}
-                canZoomOut={currentScale < MAP_MAX_SCALE_PERCENT}
-                hoverCanvasRef={hoverCanvasRef}
-                isGridVisible={isGridVisible}
-                layerPreviewCanvasRefs={layerPreviewCanvasRefs}
-                layerVisibilities={layerVisibilities}
-                mapCanvasHeight={mapCanvasHeight}
-                mapCanvasRef={mapCanvasRef}
-                mapCanvasWidth={mapCanvasWidth}
-                mapCursorClassName={mapCursorClassName}
-                mapFrameRef={mapFrameRef}
-                onCanvasClick={() => {}}
-                onCanvasMouseDown={(event) => {
-                  const nextCell = getMapCellFromPointerEvent(
-                    event.currentTarget,
-                    event.nativeEvent,
-                    mapWidth,
-                    mapHeight
-                  );
-
-                  if (!nextCell) {
-                    return;
-                  }
-
-                  setHoverCell(nextCell);
-
-                  if (activeSidebarTab === "ai") {
-                    beginPaint();
-
-                    if (activeAiTool === "select") {
-                      setAiSelectionDraft({
-                        anchorCell: nextCell,
-                        focusCell: nextCell
-                      });
-                      return;
-                    }
-
-                    applyAiMaskCell(nextCell, activeAiTool);
-                    return;
-                  }
-
-                  if (isBrushEyedropperActive) {
-                    sampleBrushFromCell(nextCell);
-                    return;
-                  }
-
-                  if (event.shiftKey && paintLineFromLastPlacement(nextCell)) {
-                    return;
-                  }
-
-                  beginPaint();
-                  paintCell(nextCell);
-                  lastPaintedCellKeyRef.current = getMapCellKey(nextCell.tileX, nextCell.tileY);
-                }}
-                onCanvasMouseLeave={() => {
-                  if (activeSidebarTab === "ai" && activeAiTool === "select" && drawingRef.current) {
-                    return;
-                  }
-
-                  finishPaint();
-                  setHoverCell(null);
-                }}
-                onCanvasMouseMove={handlePointerUpdate}
-                onCanvasMouseUp={() => {
-                  if (activeSidebarTab === "ai" && activeAiTool === "select") {
-                    return;
-                  }
-
-                  finishPaint();
-                }}
-                onChangeActiveMapAboutPrompt={(value) => {
-                  if (!activeMap) {
-                    return;
-                  }
-
-                  setMapAboutPromptDrafts((currentDrafts) => ({
-                    ...currentDrafts,
-                    [activeMap.slug]: value
-                  }));
-                }}
-                onClearAllLayers={() => {
-                  setMapDraftLayers(activeMapSlug, createEmptyMapLayers(mapWidth, mapHeight), mapWidth, mapHeight);
-                  setMapStatus(`Cleared every layer from the current draft map (${mapWidth}x${mapHeight}).`);
-                }}
-                onClearLayer={(layerIndex) => {
-                  clearLayer(layerIndex);
-                  setMapStatus(`Cleared ${TILE_LIBRARY_LAYERS[layerIndex]?.description ?? `Layer ${layerIndex}`}.`);
-                }}
-                onSelectBrushSlot={(slotNum) => {
-                  if (!activeBrushTile) {
-                    return;
-                  }
-
-                  setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(activeBrushTile.slug, slotNum));
-                }}
-                onSelectLayer={setActiveLayerIndex}
-                onSetLayerVisibility={(layerIndex, visibility) => {
-                  setLayerVisibilities((currentVisibilities) => {
-                    const nextVisibilities = currentVisibilities.slice();
-                    nextVisibilities[layerIndex] = visibility;
-                    return nextVisibilities;
-                  });
-                }}
-                onToggleGridVisibility={() => {
-                  setGridVisible((currentValue) => !currentValue);
-                }}
-                onZoomActual={() => {
-                  setMapScalePercent(100);
-                }}
-                onZoomIn={() => {
-                  setMapScalePercent((value) =>
-                    clampMapScalePercent(
-                      (value ??
-                        getAutoFitMapScalePercent(
-                          mapFrameRef.current,
-                          mapCanvasWidth,
-                          mapCanvasHeight
-                        )) +
-                        MAP_SCALE_STEP_PERCENT
-                    )
-                  );
-                }}
-                onZoomOut={() => {
-                  setMapScalePercent((value) =>
-                    clampMapScalePercent(
-                      (value ??
-                        getAutoFitMapScalePercent(
-                          mapFrameRef.current,
-                          mapCanvasWidth,
-                          mapCanvasHeight
-                        )) -
-                        MAP_SCALE_STEP_PERCENT
-                    )
-                  );
-                }}
-                previewCanvasRef={previewCanvasRef}
-                scalePercent={currentScale}
-                selectedBrushLabel={selectedBrushLabel}
-              />
-            </Panel>
-        )}
+        {isEditingMap ? editingWorkspacePanel : null}
       </div>
 
       {isAiModalOpen && aiSelection ? (

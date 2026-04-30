@@ -59,7 +59,10 @@ import type {
   MapTileOptions,
   PersonalityEventRecord,
   PersonalityRecord,
+  CursorAssetRecord,
+  SpriteEventRecord,
   SpriteRecord,
+  SpriteStateRecord,
   SlotRecord,
   TileRecord,
   ZoneEventRecord
@@ -79,6 +82,7 @@ const CLIPBOARD_DB_PATH = path.join(TEMP_DIR, "clipboard-slots.json");
 const TILE_DB_PATH = path.join(DATA_DIR, "all_tiles.json");
 const LEGACY_TILE_DB_PATH = path.join(WORKSPACE_ROOT, "tile_server", "all_tiles.json");
 const EXPORTS_DIR = path.join(APP_ROOT, "exports");
+const PUBLIC_CURSORS_DIR = path.join(APP_ROOT, "public", "cursors");
 const IMAGE_EXTENSIONS = new Set([".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 const SPRITE_IMAGE_EXTENSION = ".png";
 const THUMBNAIL_TILE_SIZE = 16;
@@ -106,7 +110,7 @@ interface StoredMapRecord {
   width?: number;
 }
 
-type StoredSpriteRecord = Omit<SpriteRecord, "path" | "thumbnail">;
+type StoredSpriteRecord = Omit<SpriteRecord, "id" | "path" | "thumbnail">;
 
 type AssetType = "folder" | "sprite" | "tile";
 
@@ -301,6 +305,27 @@ interface StoredCharacterEventRow {
   id: number | string;
   inserted_at: Date | string;
   lua_script: string | null;
+  updated_at: Date | string;
+}
+
+interface StoredSpriteEventRow {
+  enabled: boolean | null;
+  event_id: string;
+  id: number | string;
+  inserted_at: Date | string;
+  lua_script: string | null;
+  sprite_id: string;
+  updated_at: Date | string;
+}
+
+interface StoredSpriteStateRow {
+  file_name: string;
+  id: string;
+  image_data: Buffer;
+  inserted_at: Date | string;
+  sprite_id: string;
+  state_id: string;
+  state_metadata: unknown;
   updated_at: Date | string;
 }
 
@@ -885,6 +910,7 @@ async function mapRowToSpriteRecord(
   if (!row.image_data) {
     return {
       ...spriteRecord,
+      id: row.id,
       thumbnail: ""
     };
   }
@@ -906,6 +932,7 @@ async function mapRowToSpriteRecord(
 
   return {
     ...nextSpriteRecord,
+    id: row.id,
     thumbnail: bufferToPngDataUrl(row.image_data)
   };
 }
@@ -1136,6 +1163,40 @@ function mapRowToCharacterEventRecord(row: StoredCharacterEventRow): CharacterEv
   };
 }
 
+function mapRowToSpriteEventRecord(row: StoredSpriteEventRow): SpriteEventRecord {
+  return {
+    enabled: row.enabled !== false,
+    event_id:
+      typeof row.event_id === "string" && row.event_id.trim()
+        ? row.event_id.trim()
+        : `event_${row.id}`,
+    id: String(row.id),
+    inserted_at: serializeStoredTimestamp(row.inserted_at),
+    lua_script: typeof row.lua_script === "string" ? row.lua_script : "",
+    sprite_id: row.sprite_id,
+    updated_at: serializeStoredTimestamp(row.updated_at)
+  };
+}
+
+function mapRowToSpriteStateRecord(row: StoredSpriteStateRow): SpriteStateRecord {
+  return {
+    file_name: row.file_name,
+    id: row.id,
+    inserted_at: serializeStoredTimestamp(row.inserted_at),
+    sprite_id: row.sprite_id,
+    state_id:
+      typeof row.state_id === "string" && row.state_id.trim()
+        ? row.state_id.trim()
+        : `state_${row.id}`,
+    state_metadata:
+      row.state_metadata && typeof row.state_metadata === "object"
+        ? (row.state_metadata as Record<string, unknown>)
+        : {},
+    thumbnail: bufferToPngDataUrl(row.image_data),
+    updated_at: serializeStoredTimestamp(row.updated_at)
+  };
+}
+
 async function importLegacyAssetLibrary() {
   const db = await getDatabase();
   const legacyFolderPaths = new Set<string>(TILE_LIBRARY_LAYERS.map((layer) => layer.folder));
@@ -1305,6 +1366,7 @@ function createInitialSpriteRecord(relativePath: string, fileName: string, image
       bounding_y: -defaultMount.mount_y,
       casts_shadow: true,
       filename: fileName,
+      id: "",
       image_h: height,
       image_w: width,
       impassible: false,
@@ -1313,6 +1375,7 @@ function createInitialSpriteRecord(relativePath: string, fileName: string, image
       item_id: 0,
       mount_x: defaultMount.mount_x,
       mount_y: defaultMount.mount_y,
+      mouseover_cursor: "",
       name: path.parse(fileName).name,
       on_activate: "",
       offset_x: 0,
@@ -1338,6 +1401,10 @@ function normalizeSpriteRecord(record: SpriteRecord): SpriteRecord {
   const defaultMount = getDefaultSpriteMount(imageWidth, imageHeight);
   const mountX = normalizeFiniteNumber(record.mount_x, defaultMount.mount_x);
   const mountY = normalizeFiniteNumber(record.mount_y, defaultMount.mount_y);
+  const mouseoverCursor =
+    typeof record.mouseover_cursor === "string"
+      ? path.posix.basename(record.mouseover_cursor.trim())
+      : "";
 
   return {
     bounding_h: Math.max(0, normalizeFiniteNumber(record.bounding_h, imageHeight)),
@@ -1346,6 +1413,7 @@ function normalizeSpriteRecord(record: SpriteRecord): SpriteRecord {
     bounding_y: normalizeFiniteNumber(record.bounding_y, -mountY),
     casts_shadow: typeof record.casts_shadow === "boolean" ? record.casts_shadow : true,
     filename: normalizedFilename,
+    id: typeof record.id === "string" ? record.id.trim() : "",
     image_h: imageHeight,
     image_w: imageWidth,
     impassible: Boolean(record.impassible),
@@ -1354,6 +1422,7 @@ function normalizeSpriteRecord(record: SpriteRecord): SpriteRecord {
     item_id: Math.max(0, Math.round(normalizeFiniteNumber(record.item_id, 0))),
     mount_x: mountX,
     mount_y: mountY,
+    mouseover_cursor: mouseoverCursor,
     name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : path.parse(normalizedFilename).name,
     on_activate: typeof record.on_activate === "string" ? record.on_activate : "",
     offset_x: normalizeFiniteNumber(record.offset_x, 0),
@@ -1386,6 +1455,7 @@ function parseSpriteRecord(relativePath: string, jsonFileName: string, candidate
       bounding_y: normalizeFiniteNumber(record.bounding_y, -defaultMount.mount_y),
       casts_shadow: typeof record.casts_shadow === "boolean" ? record.casts_shadow : true,
       filename,
+      id: "",
       image_h: fallbackImageHeight,
       image_w: fallbackImageWidth,
       impassible: Boolean(record.impassible),
@@ -1394,6 +1464,7 @@ function parseSpriteRecord(relativePath: string, jsonFileName: string, candidate
       item_id: normalizeFiniteNumber(record.item_id, 0),
       mount_x: normalizeFiniteNumber(record.mount_x, defaultMount.mount_x),
       mount_y: normalizeFiniteNumber(record.mount_y, defaultMount.mount_y),
+      mouseover_cursor: typeof record.mouseover_cursor === "string" ? record.mouseover_cursor : "",
       name: typeof record.name === "string" ? record.name : path.parse(filename).name,
       on_activate: typeof record.on_activate === "string" ? record.on_activate : "",
       offset_x: normalizeFiniteNumber(record.offset_x, 0),
@@ -1426,6 +1497,7 @@ function serializeStoredSpriteRecord(spriteRecord: SpriteRecord): StoredSpriteRe
     item_id: normalized.item_id,
     mount_x: normalized.mount_x,
     mount_y: normalized.mount_y,
+    mouseover_cursor: normalized.mouseover_cursor,
     name: normalized.name,
     on_activate: normalized.on_activate,
     offset_x: normalized.offset_x,
@@ -1544,6 +1616,76 @@ async function collectSpriteRecordsForDirectory(
       continue;
     }
   }
+}
+
+function getCursorAssetLabel(relativePath: string) {
+  const parsedPath = path.posix.parse(relativePath);
+  const variantPath = parsedPath.dir
+    .split("/")
+    .filter((segment) => segment && segment !== "PNG" && segment !== "Vector")
+    .join(" / ");
+  const cursorName = parsedPath.name
+    .split("_")
+    .filter(Boolean)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+
+  return variantPath ? `${cursorName} (${variantPath})` : cursorName;
+}
+
+function getCursorAssetSortPriority(asset: CursorAssetRecord) {
+  if (asset.url.startsWith("/cursors/PNG/Basic/Default/")) {
+    return 0;
+  }
+
+  if (asset.url.startsWith("/cursors/PNG/Outline/Default/")) {
+    return 1;
+  }
+
+  if (asset.url.startsWith("/cursors/PNG/Basic/Double/")) {
+    return 2;
+  }
+
+  if (asset.url.startsWith("/cursors/PNG/")) {
+    return 3;
+  }
+
+  if (asset.url.startsWith("/cursors/Vector/")) {
+    return 4;
+  }
+
+  return 5;
+}
+
+async function collectCursorAssetRecords(directoryPath: string, relativePath = ""): Promise<CursorAssetRecord[]> {
+  const entries = await readdir(directoryPath, { withFileTypes: true });
+  const cursorAssets: CursorAssetRecord[] = [];
+
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) {
+      continue;
+    }
+
+    const nextRelativePath = relativePath ? path.posix.join(relativePath, entry.name) : entry.name;
+    const nextDirectoryPath = path.join(directoryPath, entry.name);
+
+    if (entry.isDirectory()) {
+      cursorAssets.push(...await collectCursorAssetRecords(nextDirectoryPath, nextRelativePath));
+      continue;
+    }
+
+    if (!entry.isFile() || ![".png", ".svg"].includes(path.extname(entry.name).toLowerCase())) {
+      continue;
+    }
+
+    cursorAssets.push({
+      fileName: path.posix.basename(nextRelativePath),
+      label: getCursorAssetLabel(nextRelativePath),
+      url: `/cursors/${nextRelativePath}`
+    });
+  }
+
+  return cursorAssets;
 }
 
 function isTileRecord(candidate: unknown): candidate is TileRecord {
@@ -2277,6 +2419,24 @@ export async function readSpriteRecords() {
     .filter((spriteRecord): spriteRecord is SpriteRecord => spriteRecord !== null);
 }
 
+export async function readCursorAssetRecords(): Promise<CursorAssetRecord[]> {
+  if (!existsSync(PUBLIC_CURSORS_DIR)) {
+    return [];
+  }
+
+  const cursorAssets = await collectCursorAssetRecords(PUBLIC_CURSORS_DIR);
+
+  return cursorAssets.sort((left, right) => {
+    const priorityComparison = getCursorAssetSortPriority(left) - getCursorAssetSortPriority(right);
+
+    if (priorityComparison !== 0) {
+      return priorityComparison;
+    }
+
+    return left.label.localeCompare(right.label) || left.url.localeCompare(right.url);
+  });
+}
+
 export async function readPersonalityRecords() {
   await ensureAssetDatabaseReady();
   const db = await getDatabase();
@@ -2382,6 +2542,43 @@ function normalizeCharacterName(value: unknown) {
   return normalizedName;
 }
 
+function normalizeSpriteEventId(value: unknown) {
+  const numericId = typeof value === "number" ? value : Number(String(value ?? "").trim());
+
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    throw new Error("Valid event id is required.");
+  }
+
+  return numericId;
+}
+
+function normalizeSpriteEventName(value: unknown) {
+  const normalizedName = normalizeOptionalText(value);
+
+  if (!normalizedName) {
+    throw new Error("Event name is required.");
+  }
+
+  return normalizedName;
+}
+
+function normalizeSpriteStateId(value: unknown) {
+  const normalizedName = normalizeUnderscoreName(String(value ?? "")).toLowerCase();
+
+  if (!normalizedName) {
+    throw new Error("State name is required.");
+  }
+
+  return normalizedName;
+}
+
+function createSpriteStateFileName(spriteFilename: string, stateId: string) {
+  const normalizedStateId = normalizeSpriteStateId(stateId);
+  const spriteStem = path.parse(sanitizeSpriteFilename(spriteFilename)).name;
+
+  return sanitizeSpriteFilename(`${spriteStem}_${normalizedStateId}${SPRITE_IMAGE_EXTENSION}`);
+}
+
 function normalizePersonalityToolEventDetails(value: unknown, eventName: string) {
   const details = normalizePersonalityEventDetails(value);
 
@@ -2430,6 +2627,44 @@ async function assertCharacterEventsTableExists(db: Awaited<ReturnType<typeof ge
   if (!hasCharacterEventsTable) {
     throw new Error("character_events table not found.");
   }
+}
+
+async function readSpriteAssetId(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  spritePath: string,
+  spriteFilename: string
+) {
+  const spriteRow = await readSpriteAssetRow(db, spritePath, spriteFilename);
+
+  return spriteRow.id;
+}
+
+async function readSpriteAssetRow(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  spritePath: string,
+  spriteFilename: string
+) {
+  const normalizedPath = normalizeTileLibraryPath(spritePath);
+  const normalizedFilename = sanitizeSpriteFilename(spriteFilename);
+
+  if (!normalizedPath) {
+    throw new Error("Sprite path is required.");
+  }
+
+  const spriteRow = await db<StoredAssetRow>("map_tiles")
+    .select("*")
+    .first()
+    .where({
+      asset_key: getSpriteAssetKey(normalizedPath, normalizedFilename),
+      asset_type: "sprite",
+      deleted: false
+    });
+
+  if (!spriteRow) {
+    throw new Error("Sprite not found.");
+  }
+
+  return spriteRow;
 }
 
 export async function readZoneEventRecords(zoneName: string): Promise<ZoneEventRecord[]> {
@@ -2622,6 +2857,265 @@ export async function updateCharacterEventRecord(
   }
 
   return mapRowToCharacterEventRecord(updatedEvent);
+}
+
+async function upsertDefaultSpriteState(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  spriteRow: Pick<StoredAssetRow, "file_name" | "id" | "image_data">
+) {
+  if (!spriteRow.file_name || !spriteRow.image_data?.length) {
+    return null;
+  }
+
+  const timestamp = new Date();
+  const [stateRow] = await db<StoredSpriteStateRow>("sprite_states")
+    .insert({
+      file_name: spriteRow.file_name,
+      id: randomUUID(),
+      image_data: spriteRow.image_data,
+      inserted_at: timestamp,
+      sprite_id: spriteRow.id,
+      state_id: "default",
+      state_metadata: JSON.stringify({}),
+      updated_at: timestamp
+    })
+    .onConflict(["sprite_id", "state_id"])
+    .merge({
+      file_name: spriteRow.file_name,
+      image_data: spriteRow.image_data,
+      updated_at: timestamp
+    })
+    .returning("*");
+
+  return stateRow ?? null;
+}
+
+async function ensureDefaultSpriteState(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  spriteRow: StoredAssetRow
+) {
+  const existingDefaultState = await db<StoredSpriteStateRow>("sprite_states")
+    .select("*")
+    .first()
+    .where({ sprite_id: spriteRow.id, state_id: "default" });
+
+  if (existingDefaultState) {
+    return existingDefaultState;
+  }
+
+  return upsertDefaultSpriteState(db, spriteRow);
+}
+
+export async function readSpriteStateRecords(spritePath: string, spriteFilename: string): Promise<SpriteStateRecord[]> {
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const spriteRow = await readSpriteAssetRow(db, spritePath, spriteFilename);
+
+  await ensureDefaultSpriteState(db, spriteRow);
+
+  const rows = await db<StoredSpriteStateRow>("sprite_states")
+    .select("*")
+    .where({ sprite_id: spriteRow.id })
+    .orderByRaw("case when state_id = 'default' then 0 else 1 end asc")
+    .orderBy("state_id", "asc");
+
+  return rows.map(mapRowToSpriteStateRecord);
+}
+
+export async function createSpriteStateRecord(
+  spritePath: string,
+  spriteFilename: string,
+  stateId: string,
+  sourceStateId = "default"
+) {
+  await ensureAssetDatabaseReady();
+  const normalizedStateId = normalizeSpriteStateId(stateId);
+
+  if (normalizedStateId === "default") {
+    throw new Error("The default state already exists.");
+  }
+
+  const db = await getDatabase();
+  const spriteRow = await readSpriteAssetRow(db, spritePath, spriteFilename);
+  const existingState = await db<StoredSpriteStateRow>("sprite_states")
+    .select("id")
+    .first()
+    .where({ sprite_id: spriteRow.id, state_id: normalizedStateId });
+
+  if (existingState) {
+    throw new Error(`State ${normalizedStateId} already exists for this sprite.`);
+  }
+
+  await ensureDefaultSpriteState(db, spriteRow);
+
+  const normalizedSourceStateId = normalizeSpriteStateId(sourceStateId || "default");
+  const sourceState = await db<StoredSpriteStateRow>("sprite_states")
+    .select("*")
+    .first()
+    .where({ sprite_id: spriteRow.id, state_id: normalizedSourceStateId });
+  const sourceImageData = sourceState?.image_data ?? spriteRow.image_data;
+
+  if (!sourceImageData?.length) {
+    throw new Error("Sprite image is missing in the database.");
+  }
+
+  const timestamp = new Date();
+  const [createdState] = await db<StoredSpriteStateRow>("sprite_states")
+    .insert({
+      file_name: createSpriteStateFileName(spriteFilename, normalizedStateId),
+      id: randomUUID(),
+      image_data: sourceImageData,
+      inserted_at: timestamp,
+      sprite_id: spriteRow.id,
+      state_id: normalizedStateId,
+      state_metadata: JSON.stringify({}),
+      updated_at: timestamp
+    })
+    .returning("*");
+
+  if (!createdState) {
+    throw new Error("Could not create sprite state.");
+  }
+
+  return mapRowToSpriteStateRecord(createdState);
+}
+
+export async function saveSpriteStateImage(
+  spritePath: string,
+  spriteFilename: string,
+  stateId: string,
+  replacementFile: File
+) {
+  await ensureAssetDatabaseReady();
+  const normalizedStateId = normalizeSpriteStateId(stateId);
+  const normalizedFileName = sanitizeSpriteFilename(replacementFile.name);
+  const imageBuffer = Buffer.from(await replacementFile.arrayBuffer());
+  const db = await getDatabase();
+  const spriteRow = await readSpriteAssetRow(db, spritePath, spriteFilename);
+  const timestamp = new Date();
+  const [stateRow] = await db<StoredSpriteStateRow>("sprite_states")
+    .insert({
+      file_name: normalizedFileName,
+      id: randomUUID(),
+      image_data: imageBuffer,
+      inserted_at: timestamp,
+      sprite_id: spriteRow.id,
+      state_id: normalizedStateId,
+      state_metadata: JSON.stringify({}),
+      updated_at: timestamp
+    })
+    .onConflict(["sprite_id", "state_id"])
+    .merge({
+      file_name: normalizedFileName,
+      image_data: imageBuffer,
+      updated_at: timestamp
+    })
+    .returning("*");
+
+  if (!stateRow) {
+    throw new Error("Could not save sprite state image.");
+  }
+
+  if (normalizedStateId === "default") {
+    await db<StoredAssetRow>("map_tiles")
+      .where({ id: spriteRow.id })
+      .update({
+        file_name: spriteFilename,
+        image_data: imageBuffer,
+        updated_at: timestamp
+      });
+  }
+
+  return mapRowToSpriteStateRecord(stateRow);
+}
+
+export async function readSpriteEventRecords(spritePath: string, spriteFilename: string): Promise<SpriteEventRecord[]> {
+  await ensureAssetDatabaseReady();
+  const db = await getDatabase();
+  const spriteId = await readSpriteAssetId(db, spritePath, spriteFilename);
+
+  const rows = await db<StoredSpriteEventRow>("sprite_events")
+    .select("*")
+    .where({ sprite_id: spriteId })
+    .orderBy([
+      { column: "enabled", order: "desc" },
+      { column: "event_id", order: "asc" },
+      { column: "id", order: "asc" }
+    ]);
+
+  return rows.map(mapRowToSpriteEventRecord);
+}
+
+export async function createSpriteEventRecord(spritePath: string, spriteFilename: string, eventId: string) {
+  await ensureAssetDatabaseReady();
+  const normalizedEventId = normalizeSpriteEventName(eventId);
+  const db = await getDatabase();
+  const spriteId = await readSpriteAssetId(db, spritePath, spriteFilename);
+  const existingEvent = await db<StoredSpriteEventRow>("sprite_events")
+    .select("id")
+    .first()
+    .where({ event_id: normalizedEventId, sprite_id: spriteId });
+
+  if (existingEvent) {
+    throw new Error(`Event ${normalizedEventId} already exists for this sprite.`);
+  }
+
+  const timestamp = new Date();
+  const [createdEvent] = await db<StoredSpriteEventRow>("sprite_events")
+    .insert({
+      enabled: true,
+      event_id: normalizedEventId,
+      inserted_at: timestamp,
+      lua_script: "return \"\"",
+      sprite_id: spriteId,
+      updated_at: timestamp
+    })
+    .returning("*");
+
+  if (!createdEvent) {
+    throw new Error("Could not create sprite event.");
+  }
+
+  return mapRowToSpriteEventRecord(createdEvent);
+}
+
+export async function updateSpriteEventRecord(
+  spritePath: string,
+  spriteFilename: string,
+  fields: Partial<SpriteEventRecord> & { id?: string | number }
+) {
+  await ensureAssetDatabaseReady();
+  const eventRecordId = normalizeSpriteEventId(fields.id);
+  const normalizedEventId = normalizeSpriteEventName(fields.event_id);
+  const luaScript = typeof fields.lua_script === "string" ? fields.lua_script : "";
+  const enabled = fields.enabled !== false;
+  const db = await getDatabase();
+  const spriteId = await readSpriteAssetId(db, spritePath, spriteFilename);
+  const conflictingEvent = await db<StoredSpriteEventRow>("sprite_events")
+    .select("id")
+    .first()
+    .where({ event_id: normalizedEventId, sprite_id: spriteId })
+    .whereNot({ id: eventRecordId });
+
+  if (conflictingEvent) {
+    throw new Error(`Event ${normalizedEventId} already exists for this sprite.`);
+  }
+
+  const [updatedEvent] = await db<StoredSpriteEventRow>("sprite_events")
+    .where({ id: eventRecordId, sprite_id: spriteId })
+    .update({
+      enabled,
+      event_id: normalizedEventId,
+      lua_script: luaScript,
+      updated_at: new Date()
+    })
+    .returning("*");
+
+  if (!updatedEvent) {
+    throw new Error("Sprite event not found.");
+  }
+
+  return mapRowToSpriteEventRecord(updatedEvent);
 }
 
 export async function readPersonalityEventRecords(characterSlug: string): Promise<PersonalityEventRecord[]> {
@@ -4489,8 +4983,15 @@ export async function importSpriteFile(file: File, spritePath: string) {
     thumbnail: createSpriteThumbnailDataUrl(fileBuffer, spriteFilename)
   };
   await upsertSpriteAsset(db, spriteRecord, fileBuffer);
+  const createdSprite = await db<StoredAssetRow>("map_tiles")
+    .select("id")
+    .first()
+    .where({ asset_key: getSpriteAssetKey(normalizedPath, spriteFilename), deleted: false });
 
-  return spriteRecord;
+  return {
+    ...spriteRecord,
+    id: createdSprite?.id ?? spriteRecord.id
+  };
 }
 
 export async function importTileFile(file: File, tilePath: string) {
@@ -4585,9 +5086,22 @@ export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: Fi
   nextSprite = applySpriteImageMetrics(nextSprite, thumbnailBuffer);
 
   await upsertSpriteAsset(db, nextSprite, thumbnailBuffer);
+  const savedSpriteRow = await db<StoredAssetRow>("map_tiles")
+    .select("*")
+    .first()
+    .where({ asset_key: getSpriteAssetKey(normalizedPath, nextSprite.filename), deleted: false });
+
+  if (savedSpriteRow) {
+    await upsertDefaultSpriteState(db, {
+      ...savedSpriteRow,
+      file_name: nextSprite.filename,
+      image_data: thumbnailBuffer
+    });
+  }
 
   return {
     ...nextSprite,
+    id: existingSprite?.id ?? nextSprite.id,
     thumbnail: createSpriteThumbnailDataUrl(thumbnailBuffer, nextSprite.filename)
   };
 }

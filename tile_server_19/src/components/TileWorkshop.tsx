@@ -13,6 +13,10 @@ import {
   loadProjectImageAction,
   saveTileAction
 } from "../actions/tileActions";
+import {
+  createSpriteStateAction,
+  readSpriteStatesAction
+} from "../actions/spriteStateActions";
 import { useStudio } from "../app/StudioContext";
 import { EMPTY_TILE_LABEL, PREVIEW_SIZE, TILE_SIZE } from "../lib/constants";
 import {
@@ -41,11 +45,28 @@ import { useImageCache } from "../lib/useImageCache";
 import { SpriteEditorWorkspace } from "./SpriteEditorWorkspace";
 import { TileEditorWorkspace } from "./TileEditorWorkspace";
 import { TileLibraryPanel } from "./TileLibraryPanel";
-import type { LoadedImagePayload, SelectedRegion, SpriteRecord } from "../types";
+import type { LoadedImagePayload, SelectedRegion, SpriteRecord, SpriteStateRecord } from "../types";
 
 const SAVE_SPRITE_PATH = "/__tiles/save-sprite";
+const SAVE_SPRITE_STATE_IMAGE_PATH = "/__tiles/save-sprite-state-image";
 const SPRITE_GRID_MARGIN_TILES = 1;
 type SpriteCanvasLayout = ReturnType<typeof getSpriteCanvasLayout>;
+
+function sortSpriteStates(spriteStates: SpriteStateRecord[]) {
+  return spriteStates
+    .slice()
+    .sort((left, right) => {
+      if (left.state_id === "default") {
+        return -1;
+      }
+
+      if (right.state_id === "default") {
+        return 1;
+      }
+
+      return left.state_id.localeCompare(right.state_id);
+    });
+}
 
 function truncateMountValue(value: number) {
   return Number.isFinite(value) ? Math.trunc(value) : 0;
@@ -186,7 +207,6 @@ export function TileWorkshop() {
   const [selection, setSelection] = useState<SelectedRegion | null>(null);
   const [tileImpassible, setTileImpassible] = useState(true);
   const [spriteDraft, setSpriteDraft] = useState<SpriteRecord | null>(null);
-  const [spriteOnActivateDraft, setSpriteOnActivateDraft] = useState("");
   const [spriteImage, setSpriteImage] = useState<HTMLImageElement | null>(null);
   const [spriteImageUrl, setSpriteImageUrl] = useState<string | null>(null);
   const [spriteMoveDraftMount, setSpriteMoveDraftMount] = useState<{ mount_x: number; mount_y: number } | null>(null);
@@ -195,6 +215,8 @@ export function TileWorkshop() {
   const [isSpriteSaving, setSpriteSaving] = useState(false);
   const [spriteStatus, setSpriteStatus] = useState("");
   const [spriteReplacementFile, setSpriteReplacementFile] = useState<File | null>(null);
+  const [activeSpriteStateId, setActiveSpriteStateId] = useState("default");
+  const [spriteStates, setSpriteStates] = useState<SpriteStateRecord[]>([]);
   const [slotPendingClear, setSlotPendingClear] = useState<SlotKey | null>(null);
   const [isPending, startTransition] = useTransition();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -206,7 +228,8 @@ export function TileWorkshop() {
   const spriteFrozenLayoutRef = useRef<SpriteCanvasLayout | null>(null);
   const spriteMoveMountRef = useRef<{ mount_x: number; mount_y: number } | null>(null);
   const spriteDraftRef = useRef<SpriteRecord | null>(null);
-  const spriteOnActivateDraftRef = useRef("");
+  const spriteImageRef = useRef<HTMLImageElement | null>(null);
+  const spriteImageUrlRef = useRef<string | null>(null);
   const spriteReplacementFileRef = useRef<File | null>(null);
   const skipNextImpassibleAutosaveRef = useRef(false);
   const isSpriteSavingRef = useRef(false);
@@ -234,17 +257,21 @@ export function TileWorkshop() {
 
   useEffect(() => {
     return () => {
-      revokeObjectUrl(spriteImageUrl);
+      revokeObjectUrl(spriteImageUrlRef.current);
     };
-  }, [spriteImageUrl]);
+  }, []);
 
   useEffect(() => {
     spriteDraftRef.current = spriteDraft;
   }, [spriteDraft]);
 
   useEffect(() => {
-    spriteOnActivateDraftRef.current = spriteOnActivateDraft;
-  }, [spriteOnActivateDraft]);
+    spriteImageRef.current = spriteImage;
+  }, [spriteImage]);
+
+  useEffect(() => {
+    spriteImageUrlRef.current = spriteImageUrl;
+  }, [spriteImageUrl]);
 
   useEffect(() => {
     spriteReplacementFileRef.current = spriteReplacementFile;
@@ -425,9 +452,10 @@ export function TileWorkshop() {
   useEffect(() => {
     if (!activeSprite) {
       setSpriteDraft(null);
-      setSpriteOnActivateDraft("");
       setSpriteImage(null);
       setSpriteImageUrl(null);
+      setActiveSpriteStateId("default");
+      setSpriteStates([]);
       setSpriteMoveDraftMount(null);
       setSpriteMoveToolActive(false);
       setSpriteMoveDragging(false);
@@ -446,7 +474,10 @@ export function TileWorkshop() {
     let isCancelled = false;
 
     setSpriteDraft(normalizeSpriteMount(activeSprite));
-    setSpriteOnActivateDraft(activeSprite.on_activate);
+    setSpriteImage(null);
+    setSpriteImageUrl(null);
+    setActiveSpriteStateId("default");
+    setSpriteStates([]);
     setSpriteMoveDraftMount(null);
     setSpriteMoveDragging(false);
     spriteDragPositionRef.current = null;
@@ -459,16 +490,71 @@ export function TileWorkshop() {
     setSpriteStatus("");
     setSpriteReplacementFile(null);
 
-    void loadImageFromUrl(activeSprite.thumbnail)
+    void readSpriteStatesAction({
+      filename: activeSprite.filename,
+      path: activeSprite.path
+    })
+      .then((nextStates) => {
+        if (isCancelled) {
+          return;
+        }
+
+        setSpriteStates(sortSpriteStates(nextStates));
+      })
+      .catch((error: unknown) => {
+        if (!isCancelled) {
+          setSpriteStatus(error instanceof Error ? error.message : "Could not load sprite states.");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeSprite?.filename, activeSprite?.path]);
+
+  useEffect(() => {
+    if (!activeSprite || !spriteDraft) {
+      return;
+    }
+
+    if (activeSpriteStateId === "default" && spriteReplacementFile) {
+      return;
+    }
+
+    const activeSpriteState =
+      activeSpriteStateId === "default"
+        ? null
+        : spriteStates.find((spriteState) => spriteState.state_id === activeSpriteStateId) ?? null;
+    const nextImageUrl =
+      activeSpriteStateId === "default"
+        ? spriteDraft.thumbnail || activeSprite.thumbnail
+        : activeSpriteState?.thumbnail ?? "";
+
+    if (!nextImageUrl) {
+      setSpriteImage(null);
+      setSpriteImageUrl(null);
+      return;
+    }
+
+    if (spriteImageUrlRef.current === nextImageUrl && spriteImageRef.current) {
+      return;
+    }
+
+    let isCancelled = false;
+    const previousSpriteImageUrl = spriteImageUrlRef.current;
+
+    void loadImageFromUrl(nextImageUrl)
       .then((nextImage) => {
         if (isCancelled) {
           return;
         }
 
-        revokeObjectUrl(spriteImageUrl);
+        if (previousSpriteImageUrl !== nextImageUrl) {
+          revokeObjectUrl(previousSpriteImageUrl);
+        }
 
         setSpriteImage(nextImage);
-        setSpriteImageUrl(activeSprite.thumbnail);
+        setSpriteImageUrl(nextImageUrl);
       })
       .catch(() => {
         if (!isCancelled) {
@@ -479,7 +565,13 @@ export function TileWorkshop() {
     return () => {
       isCancelled = true;
     };
-  }, [activeSprite]);
+  }, [
+    activeSprite?.thumbnail,
+    activeSpriteStateId,
+    spriteDraft?.thumbnail,
+    spriteReplacementFile,
+    spriteStates
+  ]);
 
   const renderSpriteCanvas = useEffectEvent(() => {
     const spriteCanvas = spriteCanvasRef.current;
@@ -668,6 +760,56 @@ export function TileWorkshop() {
   async function loadSelectedSpriteFile(file: File) {
     if (file.type !== "image/png" && !file.name.toLowerCase().endsWith(".png")) {
       setSpriteStatus("Sprite replacement images currently require a PNG file.");
+      return;
+    }
+
+    if (activeSpriteStateId !== "default") {
+      if (!spriteDraft) {
+        return;
+      }
+
+      const objectUrl = URL.createObjectURL(file);
+
+      try {
+        const nextImage = await loadImageFromUrl(objectUrl);
+        revokeObjectUrl(spriteImageUrl);
+        setSpriteImage(nextImage);
+        setSpriteImageUrl(objectUrl);
+        setSpriteSaving(true);
+        setSpriteStatus(`Saving ${activeSpriteStateId} state image...`);
+
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("filename", spriteDraft.filename);
+        formData.append("path", spriteDraft.path);
+        formData.append("stateId", activeSpriteStateId);
+
+        const response = await fetch(SAVE_SPRITE_STATE_IMAGE_PATH, {
+          body: formData,
+          method: "POST"
+        });
+        const responseBody = (await response.json()) as Partial<SpriteStateRecord> & { error?: string };
+
+        if (!response.ok || responseBody.error || typeof responseBody.state_id !== "string") {
+          setSpriteStatus(responseBody.error ?? "Could not save sprite state image.");
+          return;
+        }
+
+        const savedState = responseBody as SpriteStateRecord;
+        setSpriteStates((currentStates) =>
+          sortSpriteStates([
+            ...currentStates.filter((spriteState) => spriteState.state_id !== savedState.state_id),
+            savedState
+          ])
+        );
+        setSpriteStatus(`Saved ${savedState.state_id} state image.`);
+      } catch {
+        URL.revokeObjectURL(objectUrl);
+        setSpriteStatus("Could not save sprite state image.");
+      } finally {
+        setSpriteSaving(false);
+      }
+
       return;
     }
 
@@ -901,19 +1043,12 @@ export function TileWorkshop() {
     }
   }
 
-  const persistSprite = useEffectEvent(async (announceSaving: boolean, includeOnActivateDraft = false) => {
+  const persistSprite = useEffectEvent(async (announceSaving: boolean) => {
     const currentSpriteDraft = spriteDraftRef.current;
 
     if (!currentSpriteDraft) {
       return;
     }
-
-    const spriteToSave = includeOnActivateDraft
-      ? {
-          ...currentSpriteDraft,
-          on_activate: spriteOnActivateDraftRef.current
-        }
-      : currentSpriteDraft;
 
     if (isSpriteSavingRef.current) {
       pendingSpriteSaveRef.current = true;
@@ -929,7 +1064,7 @@ export function TileWorkshop() {
 
     try {
       const formData = new FormData();
-      formData.append("sprite", JSON.stringify(spriteToSave));
+      formData.append("sprite", JSON.stringify(currentSpriteDraft));
 
       if (spriteReplacementFileRef.current) {
         formData.append("file", spriteReplacementFileRef.current);
@@ -949,7 +1084,6 @@ export function TileWorkshop() {
       const savedSprite = responseBody as SpriteRecord;
       upsertSprite(savedSprite);
       setSpriteDraft(savedSprite);
-      setSpriteOnActivateDraft(savedSprite.on_activate);
       setSpriteReplacementFile(null);
       lastSavedSpriteSnapshotRef.current = getSpriteSaveSnapshot(savedSprite);
       setSpriteStatus(`Saved ${savedSprite.filename}.`);
@@ -989,7 +1123,7 @@ export function TileWorkshop() {
   }, [isSpriteMoveDragging, persistSprite, spriteDraft, spriteReplacementFile]);
 
   function handleSaveSprite() {
-    void persistSprite(true, true);
+    void persistSprite(true);
   }
 
   function handleAutoLayout() {
@@ -1009,6 +1143,31 @@ export function TileWorkshop() {
     void persistSprite(true, false);
   }
 
+  async function handleCreateSpriteState(stateName: string) {
+    const currentSprite = spriteDraftRef.current;
+
+    if (!currentSprite) {
+      throw new Error("Choose a sprite before creating a state.");
+    }
+
+    const createdState = await createSpriteStateAction({
+      filename: currentSprite.filename,
+      path: currentSprite.path,
+      sourceStateId: activeSpriteStateId,
+      stateId: stateName
+    });
+
+    setSpriteStates((currentStates) =>
+      sortSpriteStates([
+        ...currentStates.filter((spriteState) => spriteState.state_id !== createdState.state_id),
+        createdState
+      ])
+    );
+    setActiveSpriteStateId(createdState.state_id);
+    setSpriteReplacementFile(null);
+    setSpriteStatus(`Created ${createdState.state_id} state.`);
+  }
+
   return (
     <div className="min-h-0">
       <div className="grid min-h-0 gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
@@ -1018,20 +1177,28 @@ export function TileWorkshop() {
         <div className="min-h-0">
           {activeSprite ? (
             <SpriteEditorWorkspace
+              activeSpriteStateId={activeSpriteStateId}
               fileInputRef={spriteFileInputRef}
               isMoveToolActive={isSpriteMoveToolActive}
               isMoveToolDragging={isSpriteMoveDragging}
               isSaving={isSpriteSaving}
-              onActivateValue={spriteOnActivateDraft}
               onAutoLayout={handleAutoLayout}
               onBrowseImage={() => {
                 spriteFileInputRef.current?.click();
               }}
+              onCreateSpriteState={handleCreateSpriteState}
+              onEditEvents={() => {
+                window.location.hash = "#/sprite-events";
+              }}
               onFileSelected={(file) => {
                 void loadSelectedSpriteFile(file);
               }}
-              onOnActivateChange={setSpriteOnActivateDraft}
               onSaveSprite={handleSaveSprite}
+              onSelectSpriteState={(stateId) => {
+                setActiveSpriteStateId(stateId);
+                setSpriteReplacementFile(null);
+                setSpriteStatus("");
+              }}
               onSourceCanvasMouseDown={handleSpriteCanvasMouseDown}
               onSourceCanvasMouseLeave={stopSpriteCanvasDrag}
               onSourceCanvasMouseMove={handleSpriteCanvasMouseMove}
@@ -1078,6 +1245,7 @@ export function TileWorkshop() {
               sourceCanvasRef={spriteCanvasRef}
               sourceImage={spriteImage}
               spriteRecord={spriteDraft}
+              spriteStates={spriteStates}
               statusMessage={spriteStatus}
             />
           ) : (

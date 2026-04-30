@@ -11,6 +11,7 @@ import { MapDesigner } from "../components/MapDesigner";
 import { PaintMode } from "../components/PaintMode";
 import { PersonalityEventsManager } from "../components/PersonalityEventsManager";
 import { PersonalityManager } from "../components/PersonalityManager";
+import { SpriteEventsManager } from "../components/SpriteEventsManager";
 import { TileWorkshop } from "../components/TileWorkshop";
 import { MAP_LAYER_COUNT, SLOT_LAYER_COUNT } from "../lib/constants";
 import { loadImageFromUrl, revokeObjectUrl } from "../lib/images";
@@ -42,6 +43,7 @@ import type {
 type StudioView =
   | "tile-workshop"
   | "sprite-editor"
+  | "sprite-events"
   | "map-designer"
   | "character-events"
   | "item-manager"
@@ -155,6 +157,10 @@ function getInitialActiveView(
     return "sprite-editor";
   }
 
+  if (normalizedMode === "sprite_events" && hasInitialSpriteSelection) {
+    return "sprite-events";
+  }
+
   if (normalizedMode === "tile") {
     return "tile-workshop";
   }
@@ -199,6 +205,10 @@ function getSerializedMode(activeView: StudioViewId, paintEditors: PaintEditorSe
     return "sprite";
   }
 
+  if (activeView === "sprite-events") {
+    return "sprite_events";
+  }
+
   if (activeView === "tile-workshop") {
     return "tile";
   }
@@ -241,6 +251,10 @@ function getDocumentTitle(activeView: StudioViewId, paintEditors: PaintEditorSes
 
   if (activeView === "sprite-editor") {
     return "Sprite Editor";
+  }
+
+  if (activeView === "sprite-events") {
+    return "Sprite Events";
   }
 
   if (activeView === "map-designer") {
@@ -426,6 +440,13 @@ function getViewFromHash(hash: string): StudioView {
     return "sprite-editor";
   }
 
+  if (
+    normalizedHash === "#/sprite-events" ||
+    normalizedHash === "#sprite-events"
+  ) {
+    return "sprite-events";
+  }
+
   return "tile-workshop";
 }
 
@@ -452,6 +473,10 @@ function getHashForView(view: StudioView) {
 
   if (view === "sprite-editor") {
     return "#/sprite";
+  }
+
+  if (view === "sprite-events") {
+    return "#/sprite-events";
   }
 
   return "#/tile";
@@ -1002,6 +1027,8 @@ export function TileServerApp({
         ? "personality-manager"
         : currentView === "map-designer"
         ? "map-designer"
+        : currentView === "sprite-events"
+        ? "sprite-events"
         : currentView === "sprite-editor"
           ? "sprite-editor"
           : "tile-workshop"
@@ -1619,6 +1646,7 @@ export function TileServerApp({
     if (
       activeView !== "tile-workshop" &&
       activeView !== "sprite-editor" &&
+      activeView !== "sprite-events" &&
       activeView !== "map-designer" &&
       activeView !== "item-manager" &&
       activeView !== "personality-events" &&
@@ -1631,7 +1659,7 @@ export function TileServerApp({
   }, [activeView, paintEditors]);
 
   useEffect(() => {
-    if (activeView === "sprite-editor" && !activeSpriteKey) {
+    if ((activeView === "sprite-editor" || activeView === "sprite-events") && !activeSpriteKey) {
       setActiveView("tile-workshop");
     }
   }, [activeSpriteKey, activeView]);
@@ -1650,7 +1678,7 @@ export function TileServerApp({
     const syncViewFromHash = () => {
       const nextView = getViewFromHash(window.location.hash);
 
-      if (nextView === "sprite-editor" && !activeSpriteKey) {
+      if ((nextView === "sprite-editor" || nextView === "sprite-events") && !activeSpriteKey) {
         setActiveView("tile-workshop");
         return;
       }
@@ -1836,6 +1864,7 @@ export function TileServerApp({
   const isEditorNavActive =
     activeView === "tile-workshop" ||
     activeView === "sprite-editor" ||
+    activeView === "sprite-events" ||
     paintEditors.some((editor) => editor.id === activeView);
 
   return (
@@ -2203,7 +2232,7 @@ export function TileServerApp({
               ) : null}
               {activeView === "map-designer" ? (
                 <div className="block h-full">
-                  <MapDesigner />
+                  <MapDesigner initialMode={initialMode} />
                 </div>
               ) : null}
               {activeView === "item-manager" ? (
@@ -2224,6 +2253,11 @@ export function TileServerApp({
               {activeView === "character-events" ? (
                 <div className="block h-full">
                   <CharacterEventsManager />
+                </div>
+              ) : null}
+              {activeView === "sprite-events" ? (
+                <div className="block h-full">
+                  <SpriteEventsManager />
                 </div>
               ) : null}
               {paintEditors

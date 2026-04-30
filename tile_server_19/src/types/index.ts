@@ -87,6 +87,7 @@ export interface SpriteRecord {
   bounding_y: number;
   casts_shadow: boolean;
   filename: string;
+  id: string;
   image_h: number;
   image_w: number;
   impassible: boolean;
@@ -95,6 +96,7 @@ export interface SpriteRecord {
   item_id: number;
   mount_x: number;
   mount_y: number;
+  mouseover_cursor: string;
   name: string;
   on_activate: string;
   offset_x: number;
@@ -103,6 +105,23 @@ export interface SpriteRecord {
   thumbnail: string;
   tile_h: number;
   tile_w: number;
+}
+
+export interface SpriteStateRecord {
+  file_name: string;
+  id: string;
+  inserted_at: string;
+  sprite_id: string;
+  state_id: string;
+  state_metadata: Record<string, unknown>;
+  thumbnail: string;
+  updated_at: string;
+}
+
+export interface CursorAssetRecord {
+  fileName: string;
+  label: string;
+  url: string;
 }
 
 export interface MapRecord {
@@ -135,6 +154,16 @@ export interface CharacterEventRecord {
   id: string;
   inserted_at: string;
   lua_script: string;
+  updated_at: string;
+}
+
+export interface SpriteEventRecord {
+  enabled: boolean;
+  event_id: string;
+  id: string;
+  inserted_at: string;
+  lua_script: string;
+  sprite_id: string;
   updated_at: string;
 }
 

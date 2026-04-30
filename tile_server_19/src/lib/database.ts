@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,8 @@ const MAPS_TABLE_NAME = "map_maps";
 const MAP_ASSETS_TABLE_NAME = "map_map_assets";
 const PERSONALITIES_TABLE_NAME = "personalities";
 const PERSONALITY_EVENTS_TABLE_NAME = "personality_events";
+const SPRITE_EVENTS_TABLE_NAME = "sprite_events";
+const SPRITE_STATES_TABLE_NAME = "sprite_states";
 
 let cachedConnectionString: string | null | undefined;
 let databaseInstance: Knex | null = null;
@@ -377,6 +380,132 @@ export async function ensureDatabaseSchema(db: Knex) {
     });
   }
 
+  const hasSpriteEventsTable = await db.schema.hasTable(SPRITE_EVENTS_TABLE_NAME);
+
+  if (!hasSpriteEventsTable) {
+    await db.schema.createTable(SPRITE_EVENTS_TABLE_NAME, (table) => {
+      table.bigIncrements("id").primary();
+      table.uuid("sprite_id").notNullable().references("id").inTable(DATABASE_TABLE_NAME).onDelete("CASCADE");
+      table.text("event_id").notNullable();
+      table.text("lua_script").notNullable();
+      table.boolean("enabled").notNullable().defaultTo(true);
+      table.timestamp("inserted_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+      table.timestamp("updated_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+      table.unique(["sprite_id", "event_id"]);
+    });
+  }
+
+  await db.raw(
+    "create unique index if not exists sprite_events_sprite_event_idx on sprite_events (sprite_id, event_id)"
+  );
+
+  const hasSpriteStatesTable = await db.schema.hasTable(SPRITE_STATES_TABLE_NAME);
+
+  if (!hasSpriteStatesTable) {
+    await db.schema.createTable(SPRITE_STATES_TABLE_NAME, (table) => {
+      table.uuid("id").primary();
+      table.uuid("sprite_id").notNullable().references("id").inTable(DATABASE_TABLE_NAME).onDelete("CASCADE");
+      table.text("state_id").notNullable();
+      table.text("file_name").notNullable();
+      table.binary("image_data").notNullable();
+      table.jsonb("state_metadata").notNullable().defaultTo(db.raw("'{}'::jsonb"));
+      table.timestamp("inserted_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+      table.timestamp("updated_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+      table.unique(["sprite_id", "state_id"]);
+    });
+  }
+
+  await db.raw(
+    "create unique index if not exists sprite_states_sprite_state_idx on sprite_states (sprite_id, state_id)"
+  );
+
+  const existingDefaultSpriteStates = await db(SPRITE_STATES_TABLE_NAME)
+    .select("sprite_id")
+    .where({ state_id: "default" });
+  const spriteIdsWithDefaultState = new Set(
+    existingDefaultSpriteStates
+      .map((row: { sprite_id?: unknown }) => (typeof row.sprite_id === "string" ? row.sprite_id : ""))
+      .filter(Boolean)
+  );
+  const missingDefaultSpriteStateQuery = db(DATABASE_TABLE_NAME)
+    .select("id", "file_name", "image_data", "created_at", "updated_at")
+    .where({ asset_type: "sprite", deleted: false })
+    .whereNotNull("file_name")
+    .whereNotNull("image_data");
+
+  if (spriteIdsWithDefaultState.size > 0) {
+    missingDefaultSpriteStateQuery.whereNotIn("id", Array.from(spriteIdsWithDefaultState));
+  }
+
+  const spritesMissingDefaultState = await missingDefaultSpriteStateQuery;
+
+  for (const spriteRow of spritesMissingDefaultState as Array<{
+    created_at?: Date | string;
+    file_name: string;
+    id: string;
+    image_data: Buffer;
+    updated_at?: Date | string;
+  }>) {
+    await db(SPRITE_STATES_TABLE_NAME)
+      .insert({
+        file_name: spriteRow.file_name,
+        id: randomUUID(),
+        image_data: spriteRow.image_data,
+        inserted_at: spriteRow.created_at ?? db.fn.now(),
+        sprite_id: spriteRow.id,
+        state_id: "default",
+        state_metadata: JSON.stringify({}),
+        updated_at: spriteRow.updated_at ?? db.fn.now()
+      })
+      .onConflict(["sprite_id", "state_id"])
+      .ignore();
+  }
+
+  await db.raw(`
+    update map_tiles
+    set
+      sprite_metadata = jsonb_set(sprite_metadata, '{mouseover_cursor}', '""'::jsonb, true),
+      updated_at = updated_at
+    where asset_type = 'sprite'
+      and sprite_metadata is not null
+      and jsonb_typeof(sprite_metadata) = 'object'
+      and not jsonb_exists(sprite_metadata, 'mouseover_cursor')
+  `);
+
+  await db.raw(`
+    update map_tiles
+    set
+      sprite_metadata = jsonb_set(
+        sprite_metadata,
+        '{mouseover_cursor}',
+        to_jsonb(regexp_replace(sprite_metadata ->> 'mouseover_cursor', '^.*/', '')),
+        true
+      ),
+      updated_at = updated_at
+    where asset_type = 'sprite'
+      and sprite_metadata is not null
+      and jsonb_typeof(sprite_metadata) = 'object'
+      and jsonb_typeof(sprite_metadata -> 'mouseover_cursor') = 'string'
+      and sprite_metadata ->> 'mouseover_cursor' like '%/%'
+  `);
+
+  await db.raw(`
+    insert into sprite_events (sprite_id, event_id, lua_script, enabled, inserted_at, updated_at)
+    select
+      id,
+      'on_activate',
+      sprite_metadata ->> 'on_activate',
+      true,
+      created_at,
+      updated_at
+    from map_tiles
+    where asset_type = 'sprite'
+      and sprite_metadata is not null
+      and jsonb_typeof(sprite_metadata) = 'object'
+      and coalesce(sprite_metadata ->> 'on_activate', '') <> ''
+    on conflict (sprite_id, event_id) do nothing
+  `);
+
   await db.raw(
     "create index if not exists map_maps_deleted_updated_idx on map_maps (deleted, updated_at desc)"
   );
@@ -397,5 +526,8 @@ export async function ensureDatabaseSchema(db: Knex) {
   );
   await db.raw(
     "create index if not exists personality_events_personality_idx on personality_events (personality_id, updated_at desc)"
+  );
+  await db.raw(
+    "create index if not exists sprite_events_sprite_idx on sprite_events (sprite_id, updated_at desc)"
   );
 }
