@@ -87,6 +87,7 @@ Important: `pixels` is the flattened composite, but Paint Mode also preserves th
 Maps are stored as `MapRecord` objects.
 
 - `layers`: fixed-length array of 9 map layers, each a 2D array of tile placements
+- `special`: 2D numeric grid for editor-only special codes; `0` means nothing special and `1` means impassible
 - `cells`: flattened composite view derived from the visible layer stack for compatibility
 - `width`, `height`: normalized dimensions
 - `name`, `slug`
@@ -95,6 +96,7 @@ Maps are stored as `MapRecord` objects.
 Persisted maps are now stored in Postgres:
 
 - `map_maps` stores one row per map
+- `special_grid` on `map_maps` stores the Special grid as JSON
 - `map_map_assets` stores one row per occupied map cell per layer
 - `slotNum` on tile placements identifies which tile slot/variant was painted
 - legacy `data/maps/*.json` files are only used for one-time import when the database has no maps yet

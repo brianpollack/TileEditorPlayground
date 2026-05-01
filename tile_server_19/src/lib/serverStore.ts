@@ -21,6 +21,7 @@ import {
 import {
   createEmptyMapCells,
   createEmptyMapLayers,
+  createEmptyMapSpecialGrid,
   createMapSpritePlacement,
   createMapTilePlacement,
   flattenMapLayers,
@@ -29,6 +30,7 @@ import {
   isMapTilePlacement,
   normalizeMapLayers,
   normalizeMapDimension,
+  normalizeMapSpecialGrid,
   normalizeMapTileOptions,
   serializeMapTileOptionsKey
 } from "./map";
@@ -104,6 +106,7 @@ interface StoredMapRecord {
   height?: number;
   layers?: StoredMapCell[][][];
   name?: string;
+  special?: number[][];
   slug?: string;
   tileMap?: Record<string, StoredMapTileReference>;
   updatedAt?: string;
@@ -142,6 +145,7 @@ interface StoredMapRow {
   mini_map: Buffer | null;
   name: string;
   slug: string;
+  special_grid: unknown;
   updated_at: Date | string;
   width: number;
 }
@@ -1721,6 +1725,7 @@ function normalizeMapRecord(record: MapRecord): MapRecord {
   const width = normalizeMapDimension(record.width ?? dimensions.width);
   const height = normalizeMapDimension(record.height ?? dimensions.height);
   const layers = normalizeMapLayers(record.layers, width, height, record.cells);
+  const special = normalizeMapSpecialGrid(record.special, width, height);
 
   return {
     aboutPrompt: typeof record.aboutPrompt === "string" ? record.aboutPrompt.trim() : "",
@@ -1730,6 +1735,7 @@ function normalizeMapRecord(record: MapRecord): MapRecord {
     layers,
     miniMap: typeof record.miniMap === "string" ? record.miniMap.trim() : "",
     name: record.name.trim(),
+    special,
     slug: record.slug.trim(),
     updatedAt: record.updatedAt || new Date().toISOString(),
     width
@@ -1911,6 +1917,23 @@ function decodeStoredMapLayers(
   );
 }
 
+function decodeStoredMapSpecialGrid(value: unknown) {
+  if (Array.isArray(value)) {
+    return value as number[][];
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed) ? parsed as number[][] : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
 function parseStoredMapRecord(record: StoredMapRecord): MapRecord {
   const tileMap = record.tileMap && typeof record.tileMap === "object" ? record.tileMap : {};
 
@@ -1922,6 +1945,7 @@ function parseStoredMapRecord(record: StoredMapRecord): MapRecord {
     layers: decodeStoredMapLayers(record.layers, tileMap),
     miniMap: "",
     name: typeof record.name === "string" ? record.name : "",
+    special: normalizeMapSpecialGrid(decodeStoredMapSpecialGrid(record.special), record.width, record.height),
     slug: typeof record.slug === "string" ? record.slug : "",
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
     width: record.width ?? MAP_DEFAULT_GRID_SIZE
@@ -1983,6 +2007,7 @@ function buildStoredMapRecord(
     height: normalized.height,
     layers: storedLayers,
     name: normalized.name,
+    special: normalized.special,
     slug: normalized.slug,
     tileMap,
     updatedAt: normalized.updatedAt,
@@ -2036,6 +2061,7 @@ async function ensureStarterMap() {
     layers: createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE),
     miniMap: "",
     name: "Starter Camp",
+    special: createEmptyMapSpecialGrid(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE),
     slug: "starter-camp",
     updatedAt: new Date().toISOString(),
     width: MAP_DEFAULT_GRID_SIZE
@@ -2123,6 +2149,7 @@ async function upsertMapRecordToDatabase(mapRecord: MapRecord) {
         is_instance: normalizedMap.isInstance,
         mini_map: miniMapBuffer,
         name: normalizedMap.name,
+        special_grid: JSON.stringify(normalizedMap.special),
         slug: normalizedMap.slug,
         updated_at: normalizedMap.updatedAt || now,
         width: normalizedMap.width
@@ -2135,6 +2162,7 @@ async function upsertMapRecordToDatabase(mapRecord: MapRecord) {
         is_instance: normalizedMap.isInstance,
         mini_map: miniMapBuffer,
         name: normalizedMap.name,
+        special_grid: JSON.stringify(normalizedMap.special),
         updated_at: normalizedMap.updatedAt || now,
         width: normalizedMap.width
       })
@@ -2239,6 +2267,7 @@ async function importLegacyMapLibrary() {
     layers: createEmptyMapLayers(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE),
     miniMap: "",
     name: "Starter Camp",
+    special: createEmptyMapSpecialGrid(MAP_DEFAULT_GRID_SIZE, MAP_DEFAULT_GRID_SIZE),
     slug: "starter-camp",
     updatedAt: new Date().toISOString(),
     width: MAP_DEFAULT_GRID_SIZE
@@ -5241,6 +5270,7 @@ export async function readMapRecords() {
         "deleted",
         "mini_map",
         "is_instance",
+        "special_grid",
         "created_at",
         "updated_at"
       ])
@@ -5319,6 +5349,7 @@ export async function readMapRecords() {
       layers,
       miniMap: bufferToPngDataUrl(storedMap.mini_map),
       name: storedMap.name,
+      special: normalizeMapSpecialGrid(decodeStoredMapSpecialGrid(storedMap.special_grid), storedMap.width, storedMap.height),
       slug: storedMap.slug,
       updatedAt: serializeStoredTimestamp(storedMap.updated_at),
       width: storedMap.width
@@ -5473,6 +5504,7 @@ export function createMapRecord(
     layers: createEmptyMapLayers(normalizedWidth, normalizedHeight),
     miniMap: "",
     name,
+    special: createEmptyMapSpecialGrid(normalizedWidth, normalizedHeight),
     slug,
     updatedAt: new Date().toISOString(),
     width: normalizedWidth
@@ -5507,12 +5539,14 @@ export function normalizeMapPayload(
   aboutPrompt = "",
   isInstance = false,
   width?: number,
-  height?: number
+  height?: number,
+  special?: number[][]
 ): MapRecord {
   const dimensions = getMapLayerDimensions(layers);
   const normalizedWidth = normalizeMapDimension(width ?? dimensions.width);
   const normalizedHeight = normalizeMapDimension(height ?? dimensions.height);
   const normalizedLayers = normalizeMapLayers(layers, normalizedWidth, normalizedHeight);
+  const normalizedSpecial = normalizeMapSpecialGrid(special, normalizedWidth, normalizedHeight);
 
   return {
     aboutPrompt: aboutPrompt.trim(),
@@ -5522,6 +5556,7 @@ export function normalizeMapPayload(
     layers: normalizedLayers,
     miniMap: miniMap.trim(),
     name: name.trim(),
+    special: normalizedSpecial,
     slug: slug.trim(),
     updatedAt: new Date().toISOString(),
     width: normalizedWidth

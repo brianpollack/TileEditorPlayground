@@ -45,6 +45,8 @@ import {
   MAP_LAYER_COUNT,
   MAP_MAX_SCALE_PERCENT,
   MAP_MIN_SCALE_PERCENT,
+  MAP_SPECIAL_IMPASSIBLE,
+  MAP_SPECIAL_LAYER_INDEX,
   MAP_SCALE_STEP_PERCENT,
   TILE_SIZE
 } from "../lib/constants";
@@ -56,6 +58,7 @@ import {
   clampMapScalePercent,
   createEmptyMapCells,
   createEmptyMapLayers,
+  createEmptyMapSpecialGrid,
   createMapSpritePlacement,
   createMapTilePlacement,
   describeMapTileOptions,
@@ -67,10 +70,13 @@ import {
   getMapLayerDimensions,
   isMapSpritePlacement,
   isMapTilePlacement,
+  isMapSpecialImpassible,
   normalizeMapLayers,
   normalizeMapDimension,
+  normalizeMapSpecialGrid,
   normalizeMapTileOptions,
   resizeMapLayersExpandingEdges,
+  resizeMapSpecialGridExpandingEdges,
   serializeMapTileOptionsKey
 } from "../lib/map";
 import {
@@ -189,6 +195,7 @@ const BRUSH_OPTION_DEFINITIONS = [
 const DEFAULT_MAP_BRUSH_OPTIONS = normalizeMapTileOptions(undefined);
 type MapAiTool = (typeof AI_TOOL_OPTIONS)[number]["id"];
 type MapSidebarTab = "ai" | "brushes" | "events";
+type MapSpecialTool = "eraser" | "impassible";
 
 interface MapAiSelection {
   bottomTileY: number;
@@ -226,6 +233,7 @@ interface MapWorkspaceProps {
   activeBrushSlotNum: number;
   activeLayerTitle: string;
   activeOpacityValue: number;
+  activeSpecialTool: MapSpecialTool;
   brushSlotOptions: Array<{
     label: string;
     previewUrl: string;
@@ -252,6 +260,7 @@ interface MapWorkspaceProps {
   onClearLayer(layerIndex: number): void;
   onSelectBrushSlot(slotNum: number): void;
   onSelectLayer(layerIndex: number): void;
+  onSelectSpecialTool(tool: MapSpecialTool): void;
   onSetLayerVisibility(layerIndex: number, visibility: number): void;
   onToggleGridVisibility(): void;
   onZoomActual(): void;
@@ -271,6 +280,7 @@ const MapWorkspace = memo(function MapWorkspace({
   activeBrushSlotNum,
   activeLayerTitle,
   activeOpacityValue,
+  activeSpecialTool,
   brushSlotOptions,
   canZoomIn,
   canZoomOut,
@@ -293,6 +303,7 @@ const MapWorkspace = memo(function MapWorkspace({
   onClearLayer,
   onSelectBrushSlot,
   onSelectLayer,
+  onSelectSpecialTool,
   onSetLayerVisibility,
   onToggleGridVisibility,
   onZoomActual,
@@ -303,7 +314,7 @@ const MapWorkspace = memo(function MapWorkspace({
   selectedBrushLabel
 }: MapWorkspaceProps) {
   return (
-    <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_16rem]">
+    <div className="map-workspace">
       <div className="grid min-h-0 content-start gap-3">
         <div
           className={`${canvasViewportClass} h-[clamp(28rem,70vh,58rem)] p-4`}
@@ -389,7 +400,47 @@ const MapWorkspace = memo(function MapWorkspace({
           />
         </div>
 
-        {activeSidebarTab === "brushes" && brushSlotOptions.length ? (
+        <div className={sectionCardClass}>
+          <SectionEyebrow>Active Layer</SectionEyebrow>
+          <div className="text-sm font-semibold theme-text-primary">{activeLayerTitle}</div>
+          <div className="text-xs theme-text-muted">
+            Opacity {Math.round(activeOpacityValue * 100)}% • {activeModeLabel}
+          </div>
+          {activeSidebarTab === "ai" ? (
+            <div className="text-xs theme-text-muted">
+              AI tool: {AI_TOOL_OPTIONS.find((option) => option.id === activeAiTool)?.label ?? "Mask"}
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            {activeLayerIndex === MAP_SPECIAL_LAYER_INDEX ? (
+              <>
+                <button
+                  className={visibilityOptionButtonClass(activeSpecialTool === "eraser")}
+                  onClick={() => {
+                    onSelectSpecialTool("eraser");
+                  }}
+                  type="button"
+                >
+                  Eraser
+                </button>
+                <button
+                  className={visibilityOptionButtonClass(activeSpecialTool === "impassible")}
+                  onClick={() => {
+                    onSelectSpecialTool("impassible");
+                  }}
+                  type="button"
+                >
+                  Impassible
+                </button>
+              </>
+            ) : null}
+            <button className={actionButtonClass} onClick={onClearAllLayers} type="button">
+              Clear Map
+            </button>
+          </div>
+        </div>
+
+        {activeSidebarTab === "brushes" && activeLayerIndex !== MAP_SPECIAL_LAYER_INDEX && brushSlotOptions.length ? (
           <div className={`${sectionCardClass} grid gap-3`}>
             <SectionEyebrow>Tile Variant</SectionEyebrow>
             <div className="flex flex-wrap gap-2">
@@ -425,8 +476,8 @@ const MapWorkspace = memo(function MapWorkspace({
         ) : null}
       </div>
 
-      <div className="grid content-start gap-4">
-        <div className={sectionCardClass}>
+      <div className="map-workspace__layers">
+        <div className={`map-workspace__preview ${sectionCardClass}`}>
           <SectionEyebrow>Preview</SectionEyebrow>
           <canvas
             className={`${smoothPreviewCanvasClass} h-32 w-32`}
@@ -506,21 +557,31 @@ const MapWorkspace = memo(function MapWorkspace({
           );
         })}
 
-        <div className={sectionCardClass}>
-          <SectionEyebrow>Active Layer</SectionEyebrow>
-          <div className="text-sm font-semibold theme-text-primary">{activeLayerTitle}</div>
-          <div className="text-xs theme-text-muted">
-            Opacity {Math.round(activeOpacityValue * 100)}% • {activeModeLabel}
-          </div>
-          {activeSidebarTab === "ai" ? (
-            <div className="text-xs theme-text-muted">
-              AI tool: {AI_TOOL_OPTIONS.find((option) => option.id === activeAiTool)?.label ?? "Mask"}
-            </div>
-          ) : null}
-          <div className="flex flex-wrap gap-2">
-            <button className={actionButtonClass} onClick={onClearAllLayers} type="button">
-              Clear Map
+        <div className={selectablePanelClass(activeLayerIndex === MAP_SPECIAL_LAYER_INDEX)}>
+          <div className="flex items-center justify-between gap-2">
+            <button
+              className="text-left text-xs font-extrabold uppercase tracking-[0.12em] theme-text-primary"
+              onClick={() => {
+                onSelectLayer(MAP_SPECIAL_LAYER_INDEX);
+              }}
+              type="button"
+            >
+              {MAP_SPECIAL_LAYER_INDEX} - Special
             </button>
+            <button
+              className={iconButtonClass}
+              onClick={() => {
+                onClearLayer(MAP_SPECIAL_LAYER_INDEX);
+              }}
+              title="Clear Special"
+              type="button"
+            >
+              <FontAwesomeIcon className="h-3.5 w-3.5" icon={faTrashCan} />
+            </button>
+          </div>
+          <div className="grid gap-1 text-xs theme-text-muted">
+            <span>0 nothing special</span>
+            <span>1 impassible</span>
           </div>
         </div>
       </div>
@@ -844,6 +905,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     activeMapSlug,
     getMapDesignerUiState,
     getMapDraftLayers,
+    getMapDraftSpecial,
     getTileDraftSlots,
     mapBrushAssetKey,
     maps,
@@ -852,6 +914,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setActiveTileSlug,
     setMapDesignerUiState,
     setMapDraftLayers,
+    setMapDraftSpecial,
     setMapBrushAssetKey,
     sprites,
     tileLibraryFolders,
@@ -879,6 +942,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [hasMounted, setHasMounted] = useState(false);
   const [mapQuery, setMapQuery] = useState("");
   const [activeAiTool, setActiveAiTool] = useState<MapAiTool>("mask");
+  const [activeSpecialTool, setActiveSpecialTool] = useState<MapSpecialTool>("impassible");
   const [maskedCells, setMaskedCells] = useState<Set<string>>(() => new Set());
   const [aiSelection, setAiSelection] = useState<MapAiSelection | null>(null);
   const [aiSelectionDraft, setAiSelectionDraft] = useState<{
@@ -966,20 +1030,33 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     activeMap?.width,
     activeMap?.height
   );
+  const draftSpecial = getMapDraftSpecial(
+    activeMapSlug,
+    activeMap?.special,
+    activeMap?.width,
+    activeMap?.height
+  );
   const activeMapAboutPrompt = activeMap
     ? (mapAboutPromptDrafts[activeMap.slug] ?? activeMap.aboutPrompt ?? "")
     : "";
   const { height: mapHeight, width: mapWidth } = getMapLayerDimensions(draftLayers, activeMap?.cells);
+  const normalizedDraftSpecial = normalizeMapSpecialGrid(draftSpecial, mapWidth, mapHeight);
   const savedLayers = activeMap
     ? normalizeMapLayers(activeMap.layers, activeMap.width, activeMap.height, activeMap.cells)
+    : null;
+  const savedSpecial = activeMap
+    ? normalizeMapSpecialGrid(activeMap.special, activeMap.width, activeMap.height)
     : null;
   const hasMapLayerDraftChanges = savedLayers
     ? JSON.stringify(draftLayers) !== JSON.stringify(savedLayers)
     : false;
+  const hasMapSpecialDraftChanges = savedSpecial
+    ? JSON.stringify(normalizedDraftSpecial) !== JSON.stringify(savedSpecial)
+    : false;
   const hasMapAboutPromptDraftChanges = activeMap
     ? activeMapAboutPrompt !== (activeMap.aboutPrompt ?? "")
     : false;
-  const hasMapDraftChanges = hasMapLayerDraftChanges || hasMapAboutPromptDraftChanges;
+  const hasMapDraftChanges = hasMapLayerDraftChanges || hasMapSpecialDraftChanges || hasMapAboutPromptDraftChanges;
   const mapCanvasWidth = getMapCanvasWidth(mapWidth);
   const mapCanvasHeight = getMapCanvasHeight(mapHeight);
   const tilesBySlug = new Map(tiles.map((tileRecord) => [tileRecord.slug, tileRecord]));
@@ -1158,11 +1235,17 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   }, [activeMapSlug]);
 
   useEffect(() => {
-    if (activeLayerIndex < MAP_LAYER_COUNT) {
+    if (activeLayerIndex <= MAP_SPECIAL_LAYER_INDEX) {
       return;
     }
 
     setActiveLayerIndex(0);
+  }, [activeLayerIndex]);
+
+  useEffect(() => {
+    if (activeLayerIndex === MAP_SPECIAL_LAYER_INDEX) {
+      setBrushEyedropperActive(false);
+    }
   }, [activeLayerIndex]);
 
   useEffect(() => {
@@ -1578,6 +1661,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         offsetX?: number;
         offsetY?: number;
         showGrid?: boolean;
+        specialGrid?: number[][];
         simplifiedFallback?: boolean;
         tileDrawSize?: number;
         width?: number;
@@ -1591,12 +1675,25 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       const clearCanvas = options?.clearCanvas ?? true;
       const renderWidth = options?.width ?? mapWidth;
       const renderHeight = options?.height ?? mapHeight;
+      const specialGrid = options?.specialGrid
+        ? normalizeMapSpecialGrid(options.specialGrid, renderWidth, renderHeight)
+        : null;
 
       if (clearCanvas) {
         context.clearRect(0, 0, context.canvas.width, context.canvas.height);
       }
 
       const impassibleCellKeys = showGrid ? new Set<string>() : null;
+
+      if (impassibleCellKeys && specialGrid) {
+        for (let tileY = 0; tileY < renderHeight; tileY += 1) {
+          for (let tileX = 0; tileX < renderWidth; tileX += 1) {
+            if (isMapSpecialImpassible(specialGrid[tileY]?.[tileX])) {
+              impassibleCellKeys.add(getMapCellKey(tileX, tileY));
+            }
+          }
+        }
+      }
 
       for (let tileY = 0; tileY < renderHeight; tileY += 1) {
         for (let tileX = 0; tileX < renderWidth; tileX += 1) {
@@ -1686,6 +1783,11 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
           const drawY = offsetY + tileY * tileDrawSize;
 
           if (showGrid) {
+            if (specialGrid && isMapSpecialImpassible(specialGrid[tileY]?.[tileX])) {
+              context.fillStyle = "rgba(255, 0, 0, 0.1)";
+              context.fillRect(drawX, drawY, tileDrawSize, tileDrawSize);
+            }
+
             context.strokeStyle = "rgba(20, 33, 39, 0.12)";
             context.lineWidth = 1;
             context.strokeRect(drawX + 0.5, drawY + 0.5, tileDrawSize - 1, tileDrawSize - 1);
@@ -1705,7 +1807,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
             context.strokeStyle = "#f1c97b";
             context.lineWidth = 5;
 
-            if (activeBrushSprite) {
+            if (activeLayerIndex !== MAP_SPECIAL_LAYER_INDEX && activeBrushSprite) {
               const outlineRect = getSpriteBrushOutlineRect(
                 activeBrushSprite,
                 tileX,
@@ -2080,7 +2182,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     context.strokeStyle = "#f1c97b";
     context.lineWidth = 5;
 
-    if (activeBrushSprite) {
+    if (activeLayerIndex !== MAP_SPECIAL_LAYER_INDEX && activeBrushSprite) {
       const outlineRect = getSpriteBrushOutlineRect(
         activeBrushSprite,
         hoverCell.tileX,
@@ -2115,6 +2217,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
     renderMapGrid(context, draftLayers, (layerIndex) => layerVisibilities[layerIndex] ?? 1, {
       showGrid: isGridVisible,
+      specialGrid: normalizedDraftSpecial,
       simplifiedFallback: !areMapAssetsReady
     });
   });
@@ -2192,6 +2295,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     activeSidebarTab,
     areMapAssetsReady,
     draftLayers,
+    normalizedDraftSpecial,
     isEditingMap,
     isGridVisible,
     layerVisibilities,
@@ -2324,8 +2428,29 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         : null;
   }
 
+  function paintSpecialCell(nextCell: TileCell) {
+    if (!activeMapSlug) {
+      return;
+    }
+
+    const nextSpecial = normalizedDraftSpecial.map((row) => row.slice());
+    const nextRow = nextSpecial[nextCell.tileY];
+
+    if (!nextRow) {
+      return;
+    }
+
+    nextRow[nextCell.tileX] = activeSpecialTool === "impassible" ? MAP_SPECIAL_IMPASSIBLE : 0;
+    setMapDraftSpecial(activeMapSlug, nextSpecial, mapWidth, mapHeight);
+  }
+
   function paintCell(nextCell: TileCell, placementOverride?: MapAssetPlacement | null) {
     if (!activeMapSlug) {
+      return;
+    }
+
+    if (activeLayerIndex === MAP_SPECIAL_LAYER_INDEX) {
+      paintSpecialCell(nextCell);
       return;
     }
 
@@ -2350,6 +2475,10 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   }
 
   function paintLineFromLastPlacement(targetCell: TileCell) {
+    if (activeLayerIndex === MAP_SPECIAL_LAYER_INDEX) {
+      return false;
+    }
+
     if (!activeMapSlug || !lastPlacedPlacementRef.current) {
       return false;
     }
@@ -2384,6 +2513,19 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   }
 
   function sampleBrushFromCell(nextCell: TileCell) {
+    if (activeLayerIndex === MAP_SPECIAL_LAYER_INDEX) {
+      const isImpassible = isMapSpecialImpassible(normalizedDraftSpecial[nextCell.tileY]?.[nextCell.tileX]);
+
+      setActiveSpecialTool(isImpassible ? "impassible" : "eraser");
+      setMapStatus(
+        isImpassible
+          ? `Sampled Special impassible at ${nextCell.tileX},${nextCell.tileY}.`
+          : `Sampled empty Special cell at ${nextCell.tileX},${nextCell.tileY}.`
+      );
+      setBrushEyedropperActive(false);
+      return;
+    }
+
     const sampledPlacement = draftLayers[activeLayerIndex]?.[nextCell.tileY]?.[nextCell.tileX] ?? null;
 
     if (isMapTilePlacement(sampledPlacement)) {
@@ -2407,6 +2549,11 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
   function clearLayer(layerIndex: number) {
     if (!activeMapSlug) {
+      return;
+    }
+
+    if (layerIndex === MAP_SPECIAL_LAYER_INDEX) {
+      setMapDraftSpecial(activeMapSlug, createEmptyMapSpecialGrid(mapWidth, mapHeight), mapWidth, mapHeight);
       return;
     }
 
@@ -2548,6 +2695,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         .then((createdMap) => {
           upsertMap(createdMap);
           setMapDraftLayers(createdMap.slug, createdMap.layers, createdMap.width, createdMap.height);
+          setMapDraftSpecial(createdMap.slug, createdMap.special, createdMap.width, createdMap.height);
           setIsCreateDialogOpen(false);
           setNewMapName("");
           setNewMapWidth(String(MAP_DEFAULT_GRID_SIZE));
@@ -2587,10 +2735,18 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     }
 
     let nextLayers: typeof draftLayers;
+    let nextSpecial: typeof normalizedDraftSpecial;
 
     try {
       nextLayers = resizeMapLayersExpandingEdges(
         draftLayers,
+        mapWidth,
+        mapHeight,
+        nextWidth,
+        nextHeight
+      );
+      nextSpecial = resizeMapSpecialGridExpandingEdges(
+        normalizedDraftSpecial,
         mapWidth,
         mapHeight,
         nextWidth,
@@ -2621,12 +2777,14 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
             layers: nextLayers,
             miniMap,
             name: activeMap.name,
+            special: nextSpecial,
             slug: activeMap.slug,
             width: nextWidth
           })
             .then((savedMap) => {
               upsertMap(savedMap);
               setMapDraftLayers(savedMap.slug, savedMap.layers, savedMap.width, savedMap.height);
+              setMapDraftSpecial(savedMap.slug, savedMap.special, savedMap.width, savedMap.height);
               setMapAboutPromptDrafts((currentDrafts) => ({
                 ...currentDrafts,
                 [savedMap.slug]: savedMap.aboutPrompt
@@ -2679,12 +2837,14 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
             layers: draftLayers,
             miniMap,
             name: activeMap.name,
+            special: normalizedDraftSpecial,
             slug: activeMap.slug,
             width: mapWidth
           })
             .then((savedMap) => {
               upsertMap(savedMap);
               setMapDraftLayers(savedMap.slug, savedMap.layers, savedMap.width, savedMap.height);
+              setMapDraftSpecial(savedMap.slug, savedMap.special, savedMap.width, savedMap.height);
               setMapAboutPromptDrafts((currentDrafts) => ({
                 ...currentDrafts,
                 [savedMap.slug]: savedMap.aboutPrompt
@@ -2966,6 +3126,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
   const currentScale =
     mapScalePercent ?? mapScalePercentRef.current ?? MAP_MIN_SCALE_PERCENT;
+  const isSpecialLayerActive = activeLayerIndex === MAP_SPECIAL_LAYER_INDEX;
   const selectedLayer = TILE_LIBRARY_LAYERS[activeLayerIndex] ?? TILE_LIBRARY_LAYERS[0];
   const selectedLayerFolder = selectedLayer?.folder ?? "";
   const normalizedBrushLibraryPath = normalizeTileLibraryPath(brushLibraryPath);
@@ -2980,8 +3141,10 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const activeBrushTile = tiles.find((tileRecord) => tileRecord.slug === activeBrushTileSlug) ?? null;
   const activeBrushSprite = spritesByKey.get(activeBrushSpriteKey) ?? null;
   const aiSelectedModelCount = aiSelectedModelIds.length;
-  const activeLayerTitle = `${activeLayerIndex} - ${TILE_LIBRARY_LAYERS[activeLayerIndex]?.description ?? "Layer"}`;
-  const activeOpacityValue = layerVisibilities[activeLayerIndex] ?? 1;
+  const activeLayerTitle = isSpecialLayerActive
+    ? `${MAP_SPECIAL_LAYER_INDEX} - Special`
+    : `${activeLayerIndex} - ${TILE_LIBRARY_LAYERS[activeLayerIndex]?.description ?? "Layer"}`;
+  const activeOpacityValue = isSpecialLayerActive ? 1 : (layerVisibilities[activeLayerIndex] ?? 1);
   const activeBrushTileSlots = activeBrushTile ? tileSlotsBySlug.get(activeBrushTile.slug) ?? [] : [];
   const availableBrushSlotOptions = activeBrushTileSlots.flatMap((slotRecord, slotNum) =>
     slotRecord?.pixels
@@ -2999,11 +3162,14 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     : activeBrushSprite
       ? `${activeBrushSprite.name} • Sprite`
       : "Eraser";
+  const selectedSpecialLabel = activeSpecialTool === "impassible" ? "Impassible" : "Eraser";
   const aiSelectionSizeLabel = formatAiSelectionSize(aiSelection);
   const aiModeLabel = `AI: ${AI_TOOL_OPTIONS.find((option) => option.id === activeAiTool)?.label ?? "Mask"}`;
   const activeModeLabel =
     activeSidebarTab === "ai"
       ? aiModeLabel
+      : isSpecialLayerActive
+        ? `Special: ${selectedSpecialLabel}`
       : isBrushEyedropperActive
         ? "Brush: eyedropper"
       : activeBrushTile || activeBrushSprite
@@ -3012,6 +3178,8 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const canvasDescription =
     activeSidebarTab === "ai"
       ? `Use ${AI_TOOL_OPTIONS.find((option) => option.id === activeAiTool)?.label ?? "Mask"} on the ${mapWidth}x${mapHeight} map canvas. The scale controls only change the viewing size.`
+      : isSpecialLayerActive
+        ? `Paint Special codes on the ${mapWidth}x${mapHeight} map canvas. Special display colors are editor-only.`
       : isBrushEyedropperActive
         ? `Click a cell on the ${mapWidth}x${mapHeight} layered map canvas to sample its brush and return to painting.`
       : `Paint directly on the ${mapWidth}x${mapHeight} layered map canvas. The scale controls only change the viewing size.`;
@@ -3232,6 +3400,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
   const mapCanvasPanel = (
     <Panel
+      className="map-canvas-panel"
       actions={
         <div className="grid gap-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -3285,6 +3454,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         activeBrushSlotNum={activeBrushTileSlotNum}
         activeLayerTitle={activeLayerTitle}
         activeOpacityValue={activeOpacityValue}
+        activeSpecialTool={activeSpecialTool}
         brushSlotOptions={availableBrushSlotOptions}
         canZoomIn={currentScale > MAP_MIN_SCALE_PERCENT}
         canZoomOut={currentScale < MAP_MAX_SCALE_PERCENT}
@@ -3368,11 +3538,16 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         }}
         onClearAllLayers={() => {
           setMapDraftLayers(activeMapSlug, createEmptyMapLayers(mapWidth, mapHeight), mapWidth, mapHeight);
+          setMapDraftSpecial(activeMapSlug, createEmptyMapSpecialGrid(mapWidth, mapHeight), mapWidth, mapHeight);
           setMapStatus(`Cleared every layer from the current draft map (${mapWidth}x${mapHeight}).`);
         }}
         onClearLayer={(layerIndex) => {
           clearLayer(layerIndex);
-          setMapStatus(`Cleared ${TILE_LIBRARY_LAYERS[layerIndex]?.description ?? `Layer ${layerIndex}`}.`);
+          setMapStatus(
+            layerIndex === MAP_SPECIAL_LAYER_INDEX
+              ? "Cleared Special."
+              : `Cleared ${TILE_LIBRARY_LAYERS[layerIndex]?.description ?? `Layer ${layerIndex}`}.`
+          );
         }}
         onSelectBrushSlot={(slotNum) => {
           if (!activeBrushTile) {
@@ -3382,6 +3557,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
           setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(activeBrushTile.slug, slotNum));
         }}
         onSelectLayer={setActiveLayerIndex}
+        onSelectSpecialTool={setActiveSpecialTool}
         onSetLayerVisibility={(layerIndex, visibility) => {
           setLayerVisibilities((currentVisibilities) => {
             const nextVisibilities = currentVisibilities.slice();
@@ -3578,6 +3754,42 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                     {zoneEventStatus && zoneEventStatus !== "Event saved." ? (
                       <div className="text-sm text-[#b42318]">{zoneEventStatus}</div>
                     ) : null}
+                  </div>
+                ) : activeSidebarTab === "brushes" && isSpecialLayerActive ? (
+                  <div className="grid min-h-0 gap-3">
+                    <SectionEyebrow>Special Tools</SectionEyebrow>
+                    <div className={scrollableAssetListClass}>
+                      <button
+                        className={assetListRowClass(activeSpecialTool === "eraser")}
+                        onClick={() => {
+                          setActiveSpecialTool("eraser");
+                        }}
+                        type="button"
+                      >
+                        <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
+                          <FontAwesomeIcon className="h-5 w-5" icon={faEraser} title="Eraser" />
+                        </div>
+                        <div className={assetListMetaClass}>
+                          <span className={assetListTitleClass}>Eraser</span>
+                          <span className={assetListSubtitleClass}>Set Special cells back to 0</span>
+                        </div>
+                      </button>
+                      <button
+                        className={assetListRowClass(activeSpecialTool === "impassible")}
+                        onClick={() => {
+                          setActiveSpecialTool("impassible");
+                        }}
+                        type="button"
+                      >
+                        <div className={`${assetListThumbClass} theme-bg-accent-soft theme-text-accent`}>
+                          <span className="text-sm font-extrabold">1</span>
+                        </div>
+                        <div className={assetListMetaClass}>
+                          <span className={assetListTitleClass}>Impassible</span>
+                          <span className={assetListSubtitleClass}>Mark Special cells as code 1</span>
+                        </div>
+                      </button>
+                    </div>
                   </div>
                 ) : activeSidebarTab === "brushes" ? (
                   <div className="grid min-h-0 gap-3">

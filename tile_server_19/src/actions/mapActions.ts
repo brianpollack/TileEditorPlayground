@@ -15,7 +15,7 @@ import {
 } from "../lib/serverStore";
 import { normalizeMapDimension } from "../lib/map";
 import { normalizeUnderscoreName } from "../lib/naming";
-import type { MapLayerStack } from "../types";
+import type { MapLayerStack, MapSpecialGrid } from "../types";
 
 export async function createMapAction(name: string, width: number, height: number) {
   const nextName = normalizeUnderscoreName(name);
@@ -44,6 +44,7 @@ export async function saveMapAction(input: {
   layers: MapLayerStack;
   miniMap: string;
   name: string;
+  special: MapSpecialGrid;
   slug: string;
   width: number;
 }) {
@@ -55,7 +56,8 @@ export async function saveMapAction(input: {
     input.aboutPrompt,
     input.isInstance ?? false,
     input.width,
-    input.height
+    input.height,
+    input.special
   );
 
   await writeMapRecord(nextMap);
@@ -72,6 +74,7 @@ export async function resizeMapAction(input: {
   layers: MapLayerStack;
   miniMap: string;
   name: string;
+  special: MapSpecialGrid;
   slug: string;
   width: number;
 }) {
@@ -103,7 +106,8 @@ export async function resizeMapAction(input: {
     input.aboutPrompt,
     input.isInstance ?? false,
     nextWidth,
-    nextHeight
+    nextHeight,
+    input.special
   );
 
   await writeMapRecord(nextMap);

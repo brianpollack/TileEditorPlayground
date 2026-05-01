@@ -15,7 +15,7 @@ import { SpriteEventsManager } from "../components/SpriteEventsManager";
 import { TileWorkshop } from "../components/TileWorkshop";
 import { MAP_LAYER_COUNT, SLOT_LAYER_COUNT } from "../lib/constants";
 import { loadImageFromUrl, revokeObjectUrl } from "../lib/images";
-import { clampMapScalePercent, normalizeMapLayers } from "../lib/map";
+import { clampMapScalePercent, normalizeMapLayers, normalizeMapSpecialGrid } from "../lib/map";
 import { describeSlot, getSlotIndex, normalizeSlotRecords, type SlotKey } from "../lib/slots";
 import {
   getTileLibraryAncestorPaths,
@@ -28,6 +28,7 @@ import type {
   ItemRecord,
   LoadedImagePayload,
   MapLayerStack,
+  MapSpecialGrid,
   MapDesignerUiState,
   MapRecord,
   PaintLayerIndex,
@@ -817,7 +818,7 @@ function normalizeMapDesignerUiState(
     activeLayerIndex:
       typeof mapDesignerUiState?.activeLayerIndex === "number" &&
       Number.isFinite(mapDesignerUiState.activeLayerIndex)
-        ? Math.max(0, Math.min(MAP_LAYER_COUNT - 1, Math.round(mapDesignerUiState.activeLayerIndex)))
+        ? Math.max(0, Math.min(MAP_LAYER_COUNT, Math.round(mapDesignerUiState.activeLayerIndex)))
         : 0,
     isGridVisible:
       typeof mapDesignerUiState?.isGridVisible === "boolean"
@@ -937,6 +938,14 @@ export function TileServerApp({
       maps.map((mapRecord) => [
         mapRecord.slug,
         normalizeMapLayers(mapRecord.layers, mapRecord.width, mapRecord.height, mapRecord.cells)
+      ])
+    )
+  );
+  const [draftSpecialByMapSlug, setDraftSpecialByMapSlug] = useState<Record<string, MapSpecialGrid>>(() =>
+    Object.fromEntries(
+      maps.map((mapRecord) => [
+        mapRecord.slug,
+        normalizeMapSpecialGrid(mapRecord.special, mapRecord.width, mapRecord.height)
       ])
     )
   );
@@ -1063,6 +1072,19 @@ export function TileServerApp({
     return draftLayersByMapSlug[mapSlug] ?? normalizeMapLayers(fallbackLayers, width, height);
   }
 
+  function getMapDraftSpecial(
+    mapSlug: string,
+    fallbackSpecial: MapSpecialGrid | undefined,
+    width?: number,
+    height?: number
+  ): MapSpecialGrid {
+    if (!mapSlug) {
+      return normalizeMapSpecialGrid(fallbackSpecial, width, height);
+    }
+
+    return draftSpecialByMapSlug[mapSlug] ?? normalizeMapSpecialGrid(fallbackSpecial, width, height);
+  }
+
   function getMapDesignerUiState(mapSlug: string) {
     if (!mapSlug) {
       return normalizeMapDesignerUiState(undefined);
@@ -1111,6 +1133,17 @@ export function TileServerApp({
     setDraftLayersByMapSlug((currentDrafts) => ({
       ...currentDrafts,
       [mapSlug]: normalizeMapLayers(layers, width, height)
+    }));
+  }
+
+  function setMapDraftSpecial(mapSlug: string, special: MapSpecialGrid, width?: number, height?: number) {
+    if (!mapSlug) {
+      return;
+    }
+
+    setDraftSpecialByMapSlug((currentDrafts) => ({
+      ...currentDrafts,
+      [mapSlug]: normalizeMapSpecialGrid(special, width, height)
     }));
   }
 
@@ -1405,6 +1438,7 @@ export function TileServerApp({
         clipboardSlots: Array<ClipboardSlotRecord | null>;
         draftLayersByMapSlug: Record<string, MapLayerStack>;
         draftCellsByMapSlug: Record<string, string[][]>;
+        draftSpecialByMapSlug: Record<string, MapSpecialGrid>;
         isClipboardManagerOpen: boolean;
         isSidebarExpanded: boolean;
         mapDesignerUiStateByMapSlug: Record<string, Partial<MapDesignerUiState>>;
@@ -1484,6 +1518,26 @@ export function TileServerApp({
                 mapRecord.width,
                 mapRecord.height,
                 storedCells
+              );
+            }
+          }
+
+          return nextDrafts;
+        });
+      }
+
+      if (parsedState.draftSpecialByMapSlug && typeof parsedState.draftSpecialByMapSlug === "object") {
+        setDraftSpecialByMapSlug((currentDrafts) => {
+          const nextDrafts = { ...currentDrafts };
+
+          for (const mapRecord of mapRecords) {
+            const storedSpecial = parsedState.draftSpecialByMapSlug?.[mapRecord.slug];
+
+            if (storedSpecial) {
+              nextDrafts[mapRecord.slug] = normalizeMapSpecialGrid(
+                storedSpecial,
+                mapRecord.width,
+                mapRecord.height
               );
             }
           }
@@ -1633,6 +1687,20 @@ export function TileServerApp({
   }, [mapRecords]);
 
   useEffect(() => {
+    setDraftSpecialByMapSlug((currentDrafts) => {
+      const nextDrafts: Record<string, MapSpecialGrid> = {};
+
+      for (const mapRecord of mapRecords) {
+        nextDrafts[mapRecord.slug] =
+          currentDrafts[mapRecord.slug] ??
+          normalizeMapSpecialGrid(mapRecord.special, mapRecord.width, mapRecord.height);
+      }
+
+      return nextDrafts;
+    });
+  }, [mapRecords]);
+
+  useEffect(() => {
     setActiveMapSlug((currentSlug) => {
       if (mapRecords.some((mapRecord) => mapRecord.slug === currentSlug)) {
         return currentSlug;
@@ -1729,6 +1797,7 @@ export function TileServerApp({
       activePersonalitySlug,
       clipboardSlots: clipboardSlotsState,
       draftLayersByMapSlug,
+      draftSpecialByMapSlug,
       isClipboardManagerOpen,
       isSidebarExpanded,
       mapDesignerUiStateByMapSlug,
@@ -1744,6 +1813,7 @@ export function TileServerApp({
     activePersonalitySlug,
     clipboardSlotsState,
     draftLayersByMapSlug,
+    draftSpecialByMapSlug,
     isClipboardManagerOpen,
     isSidebarExpanded,
     isStudioStateRestored,
@@ -1901,6 +1971,7 @@ export function TileServerApp({
         clipboardSlots: clipboardSlotsState,
         getMapDesignerUiState,
         getMapDraftLayers,
+        getMapDraftSpecial,
         getPaintEditorUiState,
         getTileDraftSlots,
         initialImagePath,
@@ -1943,6 +2014,7 @@ export function TileServerApp({
         setPaintEditorUiState,
         setSelectedClipboardSlotIndex,
         setMapDraftLayers,
+        setMapDraftSpecial,
         setActiveSpriteKey: handleSetActiveSpriteKey,
         setActiveTileSlug: handleSetActiveTileSlug,
         setMapBrushAssetKey,

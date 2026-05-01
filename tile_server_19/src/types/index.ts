@@ -69,6 +69,7 @@ export type MapAssetPlacement = MapTilePlacement | MapSpritePlacement;
 export type MapLayerCell = MapAssetPlacement | null;
 export type MapLayerGrid = MapLayerCell[][];
 export type MapLayerStack = MapLayerGrid[];
+export type MapSpecialGrid = number[][];
 
 export interface TileRecord {
   impassible: boolean;
@@ -132,6 +133,7 @@ export interface MapRecord {
   layers: MapLayerStack;
   miniMap: string;
   name: string;
+  special: MapSpecialGrid;
   slug: string;
   updatedAt: string;
   width: number;

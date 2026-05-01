@@ -1,5 +1,6 @@
 import {
   MAP_DEFAULT_GRID_SIZE,
+  MAP_SPECIAL_IMPASSIBLE,
   MAP_LAYER_COUNT,
   MAP_MAX_SCALE_PERCENT,
   MAP_MIN_SCALE_PERCENT,
@@ -11,6 +12,7 @@ import type {
   MapLayerCell,
   MapLayerGrid,
   MapLayerStack,
+  MapSpecialGrid,
   MapSpritePlacement,
   MapTileOptions,
   MapTilePlacement,
@@ -218,6 +220,98 @@ export function createEmptyMapCells(
 
 export function createEmptyMapLayers(width = MAP_DEFAULT_GRID_SIZE, height = MAP_DEFAULT_GRID_SIZE): MapLayerStack {
   return Array.from({ length: MAP_LAYER_COUNT }, () => createEmptyMapCells(width, height));
+}
+
+export function createEmptyMapSpecialGrid(
+  width = MAP_DEFAULT_GRID_SIZE,
+  height = MAP_DEFAULT_GRID_SIZE
+): MapSpecialGrid {
+  const normalizedWidth = normalizeMapDimension(width);
+  const normalizedHeight = normalizeMapDimension(height);
+
+  return Array.from({ length: normalizedHeight }, () =>
+    Array.from({ length: normalizedWidth }, () => 0)
+  );
+}
+
+function normalizeMapSpecialCode(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.round(value));
+}
+
+export function normalizeMapSpecialGrid(
+  special: Array<Array<number | null | undefined>> | undefined,
+  width?: number,
+  height?: number
+): MapSpecialGrid {
+  const normalizedWidth = normalizeMapDimension(width);
+  const normalizedHeight = normalizeMapDimension(height);
+  const safeRows = Array.isArray(special) ? special.slice(0, normalizedHeight) : [];
+
+  while (safeRows.length < normalizedHeight) {
+    safeRows.push([]);
+  }
+
+  return safeRows.map((row) => {
+    const safeRow = Array.isArray(row) ? row.slice(0, normalizedWidth) : [];
+
+    while (safeRow.length < normalizedWidth) {
+      safeRow.push(0);
+    }
+
+    return safeRow.map((value) => normalizeMapSpecialCode(value));
+  });
+}
+
+export function resizeMapSpecialGridExpandingEdges(
+  special: Array<Array<number | null | undefined>> | undefined,
+  currentWidth: number,
+  currentHeight: number,
+  nextWidth: number,
+  nextHeight: number
+): MapSpecialGrid {
+  const normalizedCurrentWidth = normalizeMapDimension(currentWidth);
+  const normalizedCurrentHeight = normalizeMapDimension(currentHeight);
+  const normalizedNextWidth = normalizeMapDimension(nextWidth);
+  const normalizedNextHeight = normalizeMapDimension(nextHeight);
+
+  if (normalizedNextWidth < normalizedCurrentWidth || normalizedNextHeight < normalizedCurrentHeight) {
+    throw new Error("Reducing map size is not supported yet.");
+  }
+
+  const normalizedSpecial = normalizeMapSpecialGrid(
+    special,
+    normalizedCurrentWidth,
+    normalizedCurrentHeight
+  );
+
+  const expandedRows = normalizedSpecial.map((row) => {
+    const safeRow = row.slice(0, normalizedCurrentWidth);
+    const fillCell = safeRow.at(-1) ?? 0;
+
+    while (safeRow.length < normalizedNextWidth) {
+      safeRow.push(fillCell);
+    }
+
+    return safeRow.map((cell) => normalizeMapSpecialCode(cell));
+  });
+
+  const expandedLastRow =
+    expandedRows.at(-1)?.map((cell) => normalizeMapSpecialCode(cell)) ??
+    Array.from({ length: normalizedNextWidth }, () => 0);
+
+  while (expandedRows.length < normalizedNextHeight) {
+    expandedRows.push(expandedLastRow.map((cell) => normalizeMapSpecialCode(cell)));
+  }
+
+  return expandedRows;
+}
+
+export function isMapSpecialImpassible(value: unknown) {
+  return normalizeMapSpecialCode(value) === MAP_SPECIAL_IMPASSIBLE;
 }
 
 export function resizeMapLayersExpandingEdges(

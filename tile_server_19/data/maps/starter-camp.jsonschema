@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "starter-camp.jsonschema",
   "title": "Tile Server 19 Map File",
-  "description": "Compact persisted map format with a shared tileMap lookup and 9 ordered layer grids. Files store numeric tile ids on the grid and resolve them through tileMap entries that capture both the tile path and any saved render options.",
+  "description": "Compact persisted map format with a shared tileMap lookup, 9 ordered layer grids, and an editor-only Special grid. Files store numeric tile ids on the layer grids and resolve them through tileMap entries that capture both the tile path and any saved render options.",
   "$comment": "JSON Schema does not support ordinary source comments inside JSON, so descriptions and $comment fields are used here as inline documentation.",
   "type": "object",
   "additionalProperties": false,
@@ -129,9 +129,23 @@
         }
       ],
       "items": false
+    },
+    "special": {
+      "type": "array",
+      "description": "Editor-only Special grid. Each cell stores a numeric code: 0 means nothing special, 1 means impassible. Special display colors are not part of exports, previews, or AI renders.",
+      "items": {
+        "$ref": "#/$defs/specialRow"
+      }
     }
   },
   "$defs": {
+    "specialRow": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
     "layerGrid": {
       "type": "array",
       "description": "A single map layer grid. Each row is an array of tile ids. Every non-zero id must exist as a key in tileMap.",

@@ -192,6 +192,7 @@ export async function ensureDatabaseSchema(db: Knex) {
       table.boolean("deleted").notNullable().defaultTo(false);
       table.binary("mini_map");
       table.boolean("is_instance").notNullable().defaultTo(false);
+      table.jsonb("special_grid").notNullable().defaultTo(db.raw("'[]'::jsonb"));
       table.timestamp("created_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
       table.timestamp("updated_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
     });
@@ -226,6 +227,14 @@ export async function ensureDatabaseSchema(db: Knex) {
   if (!hasMapIsInstanceColumn) {
     await db.schema.alterTable(MAPS_TABLE_NAME, (table) => {
       table.boolean("is_instance").notNullable().defaultTo(false);
+    });
+  }
+
+  const hasMapSpecialGridColumn = await db.schema.hasColumn(MAPS_TABLE_NAME, "special_grid");
+
+  if (!hasMapSpecialGridColumn) {
+    await db.schema.alterTable(MAPS_TABLE_NAME, (table) => {
+      table.jsonb("special_grid").notNullable().defaultTo(db.raw("'[]'::jsonb"));
     });
   }
 

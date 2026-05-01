@@ -8,6 +8,7 @@ import type {
   ItemRecord,
   LoadedImagePayload,
   MapLayerStack,
+  MapSpecialGrid,
   MapDesignerUiState,
   MapRecord,
   PaintEditorUiState,
@@ -41,6 +42,7 @@ export interface StudioContextValue {
     width?: number,
     height?: number
   ): MapLayerStack;
+  getMapDraftSpecial(mapSlug: string, fallbackSpecial: MapSpecialGrid | undefined, width?: number, height?: number): MapSpecialGrid;
   getPaintEditorUiState(sessionId: string): PaintEditorUiState;
   getTileDraftSlots(tileSlug: string, fallbackSlots: Array<SlotRecord | null> | undefined): Array<SlotRecord | null>;
   initialImagePath: string;
@@ -65,6 +67,7 @@ export interface StudioContextValue {
   setPaintEditorUiState(sessionId: string, nextState: Partial<PaintEditorUiState>): void;
   setSelectedClipboardSlotIndex(index: number | null): void;
   setMapDraftLayers(mapSlug: string, layers: MapLayerStack, width?: number, height?: number): void;
+  setMapDraftSpecial(mapSlug: string, special: MapSpecialGrid, width?: number, height?: number): void;
   setActiveSpriteKey(spriteKey: string): void;
   setActiveTileSlug(tileSlug: string): void;
   setMapBrushAssetKey(assetKey: string): void;
