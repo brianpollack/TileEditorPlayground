@@ -18,6 +18,10 @@ import {
   readSpriteStatesAction
 } from "../actions/spriteStateActions";
 import { useStudio } from "../app/StudioContext";
+import {
+  SAVE_SPRITE_PATH,
+  SAVE_SPRITE_STATE_IMAGE_PATH
+} from "../lib/apiRoutes";
 import { EMPTY_TILE_LABEL, PREVIEW_SIZE, TILE_SIZE } from "../lib/constants";
 import {
   loadImageFromUrl,
@@ -47,8 +51,6 @@ import { TileEditorWorkspace } from "./TileEditorWorkspace";
 import { TileLibraryPanel } from "./TileLibraryPanel";
 import type { LoadedImagePayload, SelectedRegion, SpriteRecord, SpriteStateRecord } from "../types";
 
-const SAVE_SPRITE_PATH = "/__tiles/save-sprite";
-const SAVE_SPRITE_STATE_IMAGE_PATH = "/__tiles/save-sprite-state-image";
 const SPRITE_GRID_MARGIN_TILES = 1;
 type SpriteCanvasLayout = ReturnType<typeof getSpriteCanvasLayout>;
 

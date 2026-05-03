@@ -13,6 +13,7 @@ import { PersonalityEventsManager } from "../components/PersonalityEventsManager
 import { PersonalityManager } from "../components/PersonalityManager";
 import { SpriteEventsManager } from "../components/SpriteEventsManager";
 import { TileWorkshop } from "../components/TileWorkshop";
+import { CLIPBOARD_SAVE_PATH } from "../lib/apiRoutes";
 import { MAP_LAYER_COUNT, SLOT_LAYER_COUNT } from "../lib/constants";
 import { loadImageFromUrl, revokeObjectUrl } from "../lib/images";
 import { clampMapScalePercent, normalizeMapLayers, normalizeMapSpecialGrid } from "../lib/map";
@@ -52,7 +53,6 @@ type StudioView =
   | "personality-manager";
 type StudioViewId = StudioView | PaintEditorSession["id"];
 const CLIPBOARD_SLOT_COUNT = 10;
-const CLIPBOARD_SAVE_PATH = "/__clipboard/save";
 const DEFAULT_PAINT_COLOR = "#142127";
 const DEFAULT_PAINT_LAYER_INDEX = 1;
 const DEFAULT_PAINT_TOOL: PaintToolId = "pencil";

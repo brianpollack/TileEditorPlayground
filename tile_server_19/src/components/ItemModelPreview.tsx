@@ -7,12 +7,12 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
+import { SAVE_ITEM_IMAGE_PATH } from "../lib/apiRoutes";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { emptyStateCardClass } from "./uiStyles";
 
 type PreviewStatus = "loading" | "ready" | "fallback";
-const SAVE_ITEM_IMAGE_PATH = "/__items/save-image";
 const VAX_PROXY_PATH_PREFIX = "/__vax-proxy";
 
 interface ViewMetrics {

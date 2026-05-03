@@ -10,6 +10,11 @@ import "ace-builds/src-noconflict/mode-text";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
 
 import { useStudio } from "../app/StudioContext";
+import {
+  CREATE_PERSONALITY_EVENT_PATH,
+  LIST_PERSONALITY_EVENTS_PATH,
+  UPDATE_PERSONALITY_EVENT_PATH
+} from "../lib/apiRoutes";
 import { useLuaAceSupport } from "../lib/luaApiHelper";
 import {
   createLuaErrorAnnotations,
@@ -33,10 +38,6 @@ import {
   statusChipClass,
   textInputClass
 } from "./uiStyles";
-
-const CREATE_PERSONALITY_EVENT_PATH = "/__personalities/events/create";
-const LIST_PERSONALITY_EVENTS_PATH = "/__personalities/events/list";
-const UPDATE_PERSONALITY_EVENT_PATH = "/__personalities/events/update";
 
 interface EventDraftState {
   enabled: boolean;

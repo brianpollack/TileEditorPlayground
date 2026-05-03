@@ -4,6 +4,13 @@ import { useDeferredValue, useEffect, useRef, useState, useTransition } from "re
 
 import { createTileFolderAction } from "../actions/tileActions";
 import { useStudio } from "../app/StudioContext";
+import {
+  CREATE_TILE_PATH,
+  DELETE_ASSET_PATH,
+  DUPLICATE_TILE_PATH,
+  IMPORT_SPRITE_PATH,
+  IMPORT_TILE_PATH
+} from "../lib/apiRoutes";
 import { normalizeUnderscoreName } from "../lib/naming";
 import { normalizeSlotRecords } from "../lib/slots";
 import {
@@ -40,12 +47,6 @@ import {
   textInputClass
 } from "./uiStyles";
 import type { SpriteRecord, TileRecord } from "../types";
-
-const CREATE_TILE_PATH = "/__tiles/create";
-const DUPLICATE_TILE_PATH = "/__tiles/duplicate";
-const DELETE_ASSET_PATH = "/__tiles/delete-asset";
-const IMPORT_TILE_PATH = "/__tiles/import-tile";
-const IMPORT_SPRITE_PATH = "/__tiles/import-sprite";
 
 interface TileLibraryFolderEntry {
   assetCount: number;

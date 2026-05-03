@@ -4,6 +4,16 @@ import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 
 import { useStudio } from "../app/StudioContext";
+import {
+  CREATE_ITEM_PATH,
+  DELETE_ITEM_PATH,
+  ITEM_LOOKUPS_PATH,
+  MOVE_ITEM_PATH,
+  UPDATE_ITEM_PATH,
+  UPLOAD_ITEM_IMAGE_PATH,
+  UPLOAD_ITEM_MODEL_PATH,
+  UPLOAD_ITEM_TEXTURE_PATH
+} from "../lib/apiRoutes";
 import type { ItemRecord } from "../types";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { FileDropTarget } from "./FileDropTarget";
@@ -28,14 +38,6 @@ import {
 } from "./uiStyles";
 
 const flatSectionClass = "grid";
-const CREATE_ITEM_PATH = "/__items/create";
-const DELETE_ITEM_PATH = "/__items/delete";
-const ITEM_LOOKUPS_PATH = "/__items/lookups";
-const MOVE_ITEM_PATH = "/__items/move";
-const UPLOAD_ITEM_IMAGE_PATH = "/__items/upload-image";
-const UPLOAD_ITEM_MODEL_PATH = "/__items/upload-model";
-const UPLOAD_ITEM_TEXTURE_PATH = "/__items/upload-texture";
-const UPDATE_ITEM_PATH = "/__items/update";
 const ITEM_CATEGORY_OPTIONS = [
   { itemType: "backpack", label: "Backpack" },
   { itemType: "body_mounted", label: "Body Mounted" },

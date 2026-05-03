@@ -17,6 +17,33 @@ import "prismjs/components/prism-sql.js";
 import "prismjs/components/prism-typescript.js";
 
 import AppDocument from "../app/AppDocument";
+import {
+  CREATE_ITEM_PATH,
+  CREATE_PERSONALITY_EVENT_PATH,
+  CREATE_PERSONALITY_PATH,
+  CREATE_TILE_PATH,
+  DELETE_ASSET_PATH,
+  DELETE_ITEM_PATH,
+  DUPLICATE_TILE_PATH,
+  IMPORT_SPRITE_PATH,
+  IMPORT_TILE_PATH,
+  ITEM_LOOKUPS_PATH,
+  LIST_PERSONALITY_EVENTS_PATH,
+  MOVE_ITEM_PATH,
+  PERSONALITY_PROFILE_IMAGE_PATH_PREFIX,
+  PREPARE_RANDOM_PERSONALITY_PROMPT_PATH,
+  RANDOMIZE_PERSONALITY_PATH,
+  SAVE_ITEM_IMAGE_PATH,
+  SAVE_SPRITE_PATH,
+  SAVE_SPRITE_STATE_IMAGE_PATH,
+  UPDATE_ITEM_PATH,
+  UPDATE_PERSONALITY_EVENT_PATH,
+  UPDATE_PERSONALITY_PATH,
+  UPLOAD_ITEM_IMAGE_PATH,
+  UPLOAD_ITEM_MODEL_PATH,
+  UPLOAD_ITEM_TEXTURE_PATH,
+  UPLOAD_PERSONALITY_PROFILE_PATH
+} from "../lib/apiRoutes";
 import { escapeHtml } from "../lib/escapeHtml";
 import { LUA_API_HELPER_PATH, LUA_SCRIPTING_GUIDE_PATH } from "../lib/luaPaths";
 import {
@@ -48,31 +75,6 @@ import {
 } from "../lib/serverStore";
 import type { ItemRecord, PersonalityEventRecord, PersonalityRecord, SpriteRecord } from "../types";
 
-const CREATE_TILE_PATH = "/__tiles/create";
-const DUPLICATE_TILE_PATH = "/__tiles/duplicate";
-const DELETE_ASSET_PATH = "/__tiles/delete-asset";
-const IMPORT_TILE_PATH = "/__tiles/import-tile";
-const CREATE_ITEM_PATH = "/__items/create";
-const DELETE_ITEM_PATH = "/__items/delete";
-const ITEM_LOOKUPS_PATH = "/__items/lookups";
-const MOVE_ITEM_PATH = "/__items/move";
-const SAVE_ITEM_IMAGE_PATH = "/__items/save-image";
-const UPDATE_ITEM_PATH = "/__items/update";
-const UPLOAD_ITEM_IMAGE_PATH = "/__items/upload-image";
-const UPLOAD_ITEM_MODEL_PATH = "/__items/upload-model";
-const UPLOAD_ITEM_TEXTURE_PATH = "/__items/upload-texture";
-const CREATE_PERSONALITY_PATH = "/__personalities/create";
-const CREATE_PERSONALITY_EVENT_PATH = "/__personalities/events/create";
-const LIST_PERSONALITY_EVENTS_PATH = "/__personalities/events/list";
-const PREPARE_RANDOM_PERSONALITY_PROMPT_PATH = "/__personalities/randomize-prompt";
-const RANDOMIZE_PERSONALITY_PATH = "/__personalities/randomize";
-const PERSONALITY_PROFILE_IMAGE_PATH_PREFIX = "/__personalities/profile/";
-const UPLOAD_PERSONALITY_PROFILE_PATH = "/__personalities/upload-profile";
-const UPDATE_PERSONALITY_EVENT_PATH = "/__personalities/events/update";
-const UPDATE_PERSONALITY_PATH = "/__personalities/update";
-const IMPORT_SPRITE_PATH = "/__tiles/import-sprite";
-const SAVE_SPRITE_PATH = "/__tiles/save-sprite";
-const SAVE_SPRITE_STATE_IMAGE_PATH = "/__tiles/save-sprite-state-image";
 const LUA_API_HELPER_SOURCE_URL = "https://vax.protovateai.com/lua_api_helper.json";
 const LUA_SCRIPTING_GUIDE_SOURCE_URL = "https://vax.protovateai.com/lua_scripting_guide.md";
 const VAX_PROXY_PATH_PREFIX = "/__vax-proxy";

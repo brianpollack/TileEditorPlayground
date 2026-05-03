@@ -6,6 +6,13 @@ import "ace-builds/src-noconflict/mode-markdown";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
 
 import { useStudio } from "../app/StudioContext";
+import {
+  CREATE_PERSONALITY_PATH,
+  PREPARE_RANDOM_PERSONALITY_PROMPT_PATH,
+  RANDOMIZE_PERSONALITY_PATH,
+  UPDATE_PERSONALITY_PATH,
+  UPLOAD_PERSONALITY_PROFILE_PATH
+} from "../lib/apiRoutes";
 import type { PersonalityRecord } from "../types";
 import { actionButtonClass } from "./buttonStyles";
 import { CheckerboardFrame } from "./CheckerboardFrame";
@@ -29,11 +36,6 @@ import {
   visibilityOptionButtonClass
 } from "./uiStyles";
 
-const CREATE_PERSONALITY_PATH = "/__personalities/create";
-const PREPARE_RANDOM_PERSONALITY_PROMPT_PATH = "/__personalities/randomize-prompt";
-const RANDOMIZE_PERSONALITY_PATH = "/__personalities/randomize";
-const UPLOAD_PERSONALITY_PROFILE_PATH = "/__personalities/upload-profile";
-const UPDATE_PERSONALITY_PATH = "/__personalities/update";
 const AceEditor = (
   (AceEditorImport as unknown as { default?: ComponentType<IAceEditorProps> }).default ?? AceEditorImport
 ) as ComponentType<IAceEditorProps>;
