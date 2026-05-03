@@ -1,11 +1,13 @@
 "use client";
 
+import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 
 import { useStudio } from "../app/StudioContext";
 import type { ItemRecord } from "../types";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { FileDropTarget } from "./FileDropTarget";
+import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { ItemModelPreview } from "./ItemModelPreview";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
@@ -900,14 +902,15 @@ export function ItemManager() {
               <>
                 <div className="flex flex-col items-stretch gap-2">
                   <button
-                    className={secondaryButtonClass}
+                    className={`${secondaryButtonClass} inline-flex items-center justify-center gap-2`}
                     onClick={() => {
                       setSelectedCategory(null);
                       setItemQuery("");
                     }}
                     type="button"
                   >
-                    Back
+                    <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronLeft} />
+                    <span>Back</span>
                   </button>
                   <input
                     autoComplete="off"

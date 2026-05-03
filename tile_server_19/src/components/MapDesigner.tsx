@@ -15,12 +15,12 @@ import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-lua";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
 import {
+  faChevronLeft,
   faChevronRight,
   faEraser,
   faEye,
   faEyeDropper,
   faEyeSlash,
-  faFolderArrowUp,
   faFolder,
   faPenToSquare,
   faTrashCan
@@ -33,9 +33,12 @@ import {
 import {
   createMapZoneEventAction,
   createMapAction,
+  createMapPathAction,
   exportTerrainMapAction,
+  readMapPathsAction,
   readMapZoneEventsAction,
   resizeMapAction,
+  saveMapPathAction,
   saveMapZoneEventAction,
   saveMapAction
 } from "../actions/mapActions";
@@ -150,6 +153,8 @@ import {
 import type {
   MapAssetPlacement,
   MapLayerStack,
+  MapPathPoint,
+  MapPathRecord,
   MapTileOptions,
   SpriteRecord,
   TileCell,
@@ -159,6 +164,7 @@ import type {
 
 const MAP_PREVIEW_SIZE = 128;
 const MAP_MINI_MAP_MAX_SIZE = 512;
+const MAP_COORDINATE_LABEL_DELAY_MS = 3000;
 const AI_PREVIEW_SIZE = 1024;
 const VISIBILITY_OPTIONS = [
   { label: "Hide", value: 0 },
@@ -194,8 +200,19 @@ const BRUSH_OPTION_DEFINITIONS = [
 ] as const;
 const DEFAULT_MAP_BRUSH_OPTIONS = normalizeMapTileOptions(undefined);
 type MapAiTool = (typeof AI_TOOL_OPTIONS)[number]["id"];
-type MapSidebarTab = "ai" | "brushes" | "events";
+type MapPathTool = "add" | "erase";
+type MapSidebarTab = "ai" | "brushes" | "events" | "paths";
 type MapSpecialTool = "eraser" | "impassible";
+const MAP_PATH_COLORS = [
+  "#2f80ed",
+  "#8f45d2",
+  "#00a6a6",
+  "#d88753",
+  "#1f9d55",
+  "#d63d62",
+  "#6f7dfb",
+  "#b58900"
+];
 
 interface MapAiSelection {
   bottomTileY: number;
@@ -608,6 +625,10 @@ function getMapCellKey(tileX: number, tileY: number) {
   return `${tileX},${tileY}`;
 }
 
+function getMapPathColor(pathIndex: number) {
+  return MAP_PATH_COLORS[pathIndex % MAP_PATH_COLORS.length] ?? MAP_PATH_COLORS[0];
+}
+
 function cloneMapPlacement(placement: MapAssetPlacement) {
   return placement.kind === "tile"
     ? createMapTilePlacement(placement.tileSlug, placement.options, placement.slotNum)
@@ -942,6 +963,9 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [hasMounted, setHasMounted] = useState(false);
   const [mapQuery, setMapQuery] = useState("");
   const [activeAiTool, setActiveAiTool] = useState<MapAiTool>("mask");
+  const [activeMapPathId, setActiveMapPathId] = useState("");
+  const [activeMapPathNameDraft, setActiveMapPathNameDraft] = useState("");
+  const [activeMapPathTool, setActiveMapPathTool] = useState<MapPathTool>("add");
   const [activeSpecialTool, setActiveSpecialTool] = useState<MapSpecialTool>("impassible");
   const [maskedCells, setMaskedCells] = useState<Set<string>>(() => new Set());
   const [aiSelection, setAiSelection] = useState<MapAiSelection | null>(null);
@@ -970,6 +994,10 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [isResizeDialogOpen, setIsResizeDialogOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
   const [zoneEvents, setZoneEvents] = useState<ZoneEventRecord[]>([]);
+  const [mapPaths, setMapPaths] = useState<MapPathRecord[]>([]);
+  const [mapPathStatus, setMapPathStatus] = useState("");
+  const [isMapPathsLoading, setMapPathsLoading] = useState(false);
+  const [isMapPathSaving, setMapPathSaving] = useState(false);
   const [activeZoneEventName, setActiveZoneEventName] = useState("");
   const [zoneEventDraft, setZoneEventDraft] = useState<LuaEventDraftState>(() => createLuaEventDraft(null));
   const [zoneEventStatus, setZoneEventStatus] = useState("");
@@ -978,6 +1006,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [isZoneEventFormatting, setZoneEventFormatting] = useState(false);
   const [zoneEventLuaAnnotations, setZoneEventLuaAnnotations] = useState<Ace.Annotation[]>([]);
   const [saveConfirmationMessage, setSaveConfirmationMessage] = useState("");
+  const [showCoordinateLabels, setShowCoordinateLabels] = useState(false);
   const [mapAboutPromptDrafts, setMapAboutPromptDrafts] = useState<Record<string, string>>(() =>
     Object.fromEntries(maps.map((mapRecord) => [mapRecord.slug, mapRecord.aboutPrompt ?? ""]))
   );
@@ -1009,6 +1038,8 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const fallbackTileCanvasCacheRef = useRef(new Map<string, HTMLCanvasElement>());
   const renderedPlacementCanvasCacheRef = useRef(new Map<string, HTMLCanvasElement>());
   const saveConfirmationTimeoutRef = useRef<number | null>(null);
+  const coordinateLabelTimeoutRef = useRef<number | null>(null);
+  const isAltKeyHeldRef = useRef(false);
   const assetImageUrlsRef = useRef<string[]>([]);
   const tileSourceUrlsRef = useRef<string[]>([]);
   const mapAssetLoadVersionRef = useRef(0);
@@ -1094,6 +1125,8 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     [activeZoneEventName, zoneEventOptions]
   );
   const activeZoneEvent = activeZoneEventOption?.record ?? null;
+  const activeMapPathIndex = mapPaths.findIndex((pathRecord) => pathRecord.id === activeMapPathId);
+  const activeMapPath = activeMapPathIndex >= 0 ? mapPaths[activeMapPathIndex] : null;
   const isEditingMap = isEditingSelectedMap && Boolean(activeMap);
 
   useEffect(() => {
@@ -1161,6 +1194,13 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setIsAiModalOpen(false);
     setIsAiRunningModalOpen(false);
     setZoneEvents([]);
+    setMapPaths([]);
+    setActiveMapPathId("");
+    setActiveMapPathNameDraft("");
+    setActiveMapPathTool("add");
+    setMapPathStatus("");
+    setMapPathsLoading(false);
+    setMapPathSaving(false);
     setActiveZoneEventName("");
     setZoneEventDraft(createLuaEventDraft(null));
     setZoneEventStatus("");
@@ -1171,6 +1211,15 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setBrushEyedropperActive(false);
     lastPlacedPlacementRef.current = null;
   }, [activeMapSlug]);
+
+  useEffect(() => {
+    if (activeMapPath) {
+      setActiveMapPathNameDraft(activeMapPath.name);
+      return;
+    }
+
+    setActiveMapPathNameDraft("");
+  }, [activeMapPath?.id, activeMapPath?.name]);
 
   useEffect(() => {
     if (activeSidebarTab !== "events") {
@@ -1206,12 +1255,108 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   }, [activeMap?.name, activeSidebarTab]);
 
   useEffect(() => {
+    if (activeSidebarTab !== "paths") {
+      return;
+    }
+
+    if (!activeMap?.name) {
+      setMapPaths([]);
+      setActiveMapPathId("");
+      setActiveMapPathNameDraft("");
+      setMapPathStatus("");
+      return;
+    }
+
+    setMapPathsLoading(true);
+    setMapPathStatus("");
+
+    void readMapPathsAction(activeMap.name)
+      .then((nextPaths) => {
+        setMapPaths(nextPaths);
+        setActiveMapPathId((currentPathId) =>
+          nextPaths.some((pathRecord) => pathRecord.id === currentPathId)
+            ? currentPathId
+            : nextPaths[0]?.id ?? ""
+        );
+      })
+      .catch((error: unknown) => {
+        setMapPaths([]);
+        setActiveMapPathId("");
+        setActiveMapPathNameDraft("");
+        setMapPathStatus(error instanceof Error ? error.message : "Could not load map paths.");
+      })
+      .finally(() => {
+        setMapPathsLoading(false);
+      });
+  }, [activeMap?.name, activeSidebarTab]);
+
+  useEffect(() => {
     return () => {
       if (saveConfirmationTimeoutRef.current !== null) {
         window.clearTimeout(saveConfirmationTimeoutRef.current);
       }
+
+      if (coordinateLabelTimeoutRef.current !== null) {
+        window.clearTimeout(coordinateLabelTimeoutRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!isEditingMap) {
+      setShowCoordinateLabels(false);
+      isAltKeyHeldRef.current = false;
+
+      if (coordinateLabelTimeoutRef.current !== null) {
+        window.clearTimeout(coordinateLabelTimeoutRef.current);
+        coordinateLabelTimeoutRef.current = null;
+      }
+
+      return;
+    }
+
+    const stopCoordinateLabelHold = () => {
+      isAltKeyHeldRef.current = false;
+      setShowCoordinateLabels(false);
+
+      if (coordinateLabelTimeoutRef.current !== null) {
+        window.clearTimeout(coordinateLabelTimeoutRef.current);
+        coordinateLabelTimeoutRef.current = null;
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Alt" || isAltKeyHeldRef.current) {
+        return;
+      }
+
+      isAltKeyHeldRef.current = true;
+      coordinateLabelTimeoutRef.current = window.setTimeout(() => {
+        if (isAltKeyHeldRef.current) {
+          setShowCoordinateLabels(true);
+        }
+
+        coordinateLabelTimeoutRef.current = null;
+      }, MAP_COORDINATE_LABEL_DELAY_MS);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Alt") {
+        stopCoordinateLabelHold();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", stopCoordinateLabelHold);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", stopCoordinateLabelHold);
+      stopCoordinateLabelHold();
+    };
+  }, [isEditingMap]);
 
   useEffect(() => {
     mapScalePercentRef.current = mapScalePercent;
@@ -2106,6 +2251,103 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
     context.clearRect(0, 0, hoverCanvas.width, hoverCanvas.height);
 
+    const drawCoordinateLabels = () => {
+      if (!showCoordinateLabels) {
+        return;
+      }
+
+      context.save();
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.font = "800 12px Inter, sans-serif";
+
+      for (let tileY = 0; tileY < mapHeight; tileY += 1) {
+        for (let tileX = 0; tileX < mapWidth; tileX += 1) {
+          const label = `${tileX},${tileY}`;
+          const centerX = tileX * TILE_SIZE + TILE_SIZE / 2;
+          const centerY = tileY * TILE_SIZE + TILE_SIZE / 2;
+          const labelWidth = Math.ceil(context.measureText(label).width) + 8;
+          const labelHeight = 18;
+
+          context.fillStyle = "rgba(20, 33, 39, 0.74)";
+          context.fillRect(
+            centerX - labelWidth / 2,
+            centerY - labelHeight / 2,
+            labelWidth,
+            labelHeight
+          );
+          context.fillStyle = "#fffdf8";
+          context.fillText(label, centerX, centerY + 0.5);
+        }
+      }
+
+      context.restore();
+    };
+
+    if (activeSidebarTab === "paths") {
+      mapPaths.forEach((pathRecord, pathIndex) => {
+        const color = getMapPathColor(pathIndex);
+
+        context.save();
+        context.strokeStyle = color;
+        context.lineWidth = pathRecord.id === activeMapPathId ? 5 : 3;
+        context.globalAlpha = pathRecord.id === activeMapPathId ? 0.92 : 0.58;
+        context.beginPath();
+
+        pathRecord.points.forEach((point, pointIndex) => {
+          const centerX = point.tileX * TILE_SIZE + TILE_SIZE / 2;
+          const centerY = point.tileY * TILE_SIZE + TILE_SIZE / 2;
+
+          if (pointIndex === 0) {
+            context.moveTo(centerX, centerY);
+          } else {
+            context.lineTo(centerX, centerY);
+          }
+        });
+
+        context.stroke();
+        context.restore();
+
+        pathRecord.points.forEach((point, pointIndex) => {
+          const centerX = point.tileX * TILE_SIZE + TILE_SIZE / 2;
+          const centerY = point.tileY * TILE_SIZE + TILE_SIZE / 2;
+          const radius = Math.max(12, TILE_SIZE * 0.31);
+
+          context.save();
+          context.globalAlpha = pathRecord.id === activeMapPathId ? 0.96 : 0.7;
+          context.fillStyle = color;
+          context.beginPath();
+          context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+          context.fill();
+          context.lineWidth = 3;
+          context.strokeStyle = "#fffdf8";
+          context.stroke();
+          context.fillStyle = "#fffdf8";
+          context.font = `800 ${Math.max(14, Math.min(22, radius))}px Inter, sans-serif`;
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillText(String(pointIndex + 1), centerX, centerY + 1);
+          context.restore();
+        });
+      });
+
+      if (hoverCell) {
+        context.save();
+        context.strokeStyle = activeMapPathTool === "erase" ? "#d88753" : "#2f80ed";
+        context.lineWidth = 4;
+        context.strokeRect(
+          hoverCell.tileX * TILE_SIZE + 2,
+          hoverCell.tileY * TILE_SIZE + 2,
+          TILE_SIZE - 4,
+          TILE_SIZE - 4
+        );
+        context.restore();
+      }
+
+      drawCoordinateLabels();
+      return;
+    }
+
     if (activeSidebarTab === "ai") {
       maskedCells.forEach((cellKey) => {
         const [rawTileX, rawTileY] = cellKey.split(",");
@@ -2169,10 +2411,12 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         context.restore();
       }
 
+      drawCoordinateLabels();
       return;
     }
 
     if (!hoverCell) {
+      drawCoordinateLabels();
       return;
     }
 
@@ -2196,10 +2440,12 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         Math.max(1, outlineRect.width - 5),
         Math.max(1, outlineRect.height - 5)
       );
+      drawCoordinateLabels();
       return;
     }
 
     context.strokeRect(drawX + 2.5, drawY + 2.5, TILE_SIZE - 5, TILE_SIZE - 5);
+    drawCoordinateLabels();
   });
 
   const renderMapCanvas = useEffectEvent(() => {
@@ -2333,6 +2579,8 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     renderHoverCanvas();
   }, [
     activeAiTool,
+    activeMapPathId,
+    activeMapPathTool,
     activeBrushSpriteKey,
     activeSidebarTab,
     aiSelection,
@@ -2341,8 +2589,10 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     isEditingMap,
     mapCanvasHeight,
     mapCanvasWidth,
+    mapPaths,
     maskedCells,
     renderHoverCanvas,
+    showCoordinateLabels,
     sprites
   ]);
 
@@ -2584,6 +2834,82 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     });
   }
 
+  function getMapPathPointKey(point: MapPathPoint) {
+    return getMapCellKey(point.tileX, point.tileY);
+  }
+
+  function getMapPathPointsAfterErase(points: MapPathPoint[], targetCell: TileCell) {
+    const targetKey = getMapCellKey(targetCell.tileX, targetCell.tileY);
+    const exactIndex = points.findIndex((point) => getMapPathPointKey(point) === targetKey);
+
+    if (exactIndex >= 0) {
+      return points.filter((_, index) => index !== exactIndex);
+    }
+
+    return points;
+  }
+
+  function saveMapPathDraft(pathRecord: MapPathRecord, nextFields: Partial<Pick<MapPathRecord, "name" | "points">>) {
+    if (!activeMap || isMapPathSaving) {
+      return;
+    }
+
+    const nextName = nextFields.name ?? pathRecord.name;
+    const nextPoints = nextFields.points ?? pathRecord.points;
+
+    setMapPathSaving(true);
+    setMapPathStatus("");
+
+    void saveMapPathAction({
+      id: pathRecord.id,
+      mapName: activeMap.name,
+      name: nextName,
+      points: nextPoints
+    })
+      .then((savedPath) => {
+        setMapPaths((currentPaths) =>
+          currentPaths.map((currentPath) => (currentPath.id === savedPath.id ? savedPath : currentPath))
+        );
+        setActiveMapPathId(savedPath.id);
+        setMapPathStatus("Path saved.");
+      })
+      .catch((error: unknown) => {
+        setMapPathStatus(error instanceof Error ? error.message : "Could not save path.");
+      })
+      .finally(() => {
+        setMapPathSaving(false);
+      });
+  }
+
+  function applyMapPathCell(nextCell: TileCell) {
+    if (!activeMapPath || isMapPathSaving) {
+      setMapPathStatus(activeMapPath ? "" : "Create or select a path before editing points.");
+      return;
+    }
+
+    const nextPoints =
+      activeMapPathTool === "add"
+        ? [...activeMapPath.points, { tileX: nextCell.tileX, tileY: nextCell.tileY }]
+        : getMapPathPointsAfterErase(activeMapPath.points, nextCell);
+
+    if (nextPoints === activeMapPath.points) {
+      setMapPathStatus(`No path point at ${nextCell.tileX},${nextCell.tileY}.`);
+      return;
+    }
+
+    setMapPaths((currentPaths) =>
+      currentPaths.map((pathRecord) =>
+        pathRecord.id === activeMapPath.id
+          ? {
+              ...pathRecord,
+              points: nextPoints
+            }
+          : pathRecord
+      )
+    );
+    saveMapPathDraft(activeMapPath, { points: nextPoints });
+  }
+
   function finalizeAiSelection(anchorCell: TileCell, focusCell: TileCell) {
     const nextSelection = getAiSelectionFromCells(anchorCell, focusCell);
 
@@ -2663,6 +2989,10 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       }
 
       applyAiMaskCell(nextCell, activeAiTool);
+      return;
+    }
+
+    if (activeSidebarTab === "paths") {
       return;
     }
 
@@ -2949,6 +3279,39 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     })();
   }
 
+  function handleCreateMapPath() {
+    if (!activeMap || isMapPathSaving) {
+      return;
+    }
+
+    setMapPathSaving(true);
+    setMapPathStatus("");
+
+    void createMapPathAction({
+      mapName: activeMap.name
+    })
+      .then((createdPath) => {
+        setMapPaths((currentPaths) => [...currentPaths, createdPath]);
+        setActiveMapPathId(createdPath.id);
+        setActiveMapPathNameDraft(createdPath.name);
+        setMapPathStatus("Path created.");
+      })
+      .catch((error: unknown) => {
+        setMapPathStatus(error instanceof Error ? error.message : "Could not create path.");
+      })
+      .finally(() => {
+        setMapPathSaving(false);
+      });
+  }
+
+  function handleSaveActiveMapPathName() {
+    if (!activeMapPath) {
+      return;
+    }
+
+    saveMapPathDraft(activeMapPath, { name: activeMapPathNameDraft });
+  }
+
   function handleFormatZoneEventLua() {
     const validationResult = validateLuaScript(zoneEventDraft.luaScript);
 
@@ -3165,9 +3528,12 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const selectedSpecialLabel = activeSpecialTool === "impassible" ? "Impassible" : "Eraser";
   const aiSelectionSizeLabel = formatAiSelectionSize(aiSelection);
   const aiModeLabel = `AI: ${AI_TOOL_OPTIONS.find((option) => option.id === activeAiTool)?.label ?? "Mask"}`;
+  const pathsModeLabel = `Path: ${activeMapPathTool === "add" ? "Add Point" : "Erase Point"}`;
   const activeModeLabel =
     activeSidebarTab === "ai"
       ? aiModeLabel
+      : activeSidebarTab === "paths"
+        ? pathsModeLabel
       : isSpecialLayerActive
         ? `Special: ${selectedSpecialLabel}`
       : isBrushEyedropperActive
@@ -3178,12 +3544,14 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const canvasDescription =
     activeSidebarTab === "ai"
       ? `Use ${AI_TOOL_OPTIONS.find((option) => option.id === activeAiTool)?.label ?? "Mask"} on the ${mapWidth}x${mapHeight} map canvas. The scale controls only change the viewing size.`
+      : activeSidebarTab === "paths"
+        ? `Edit walking path points on the ${mapWidth}x${mapHeight} map canvas. Paths are drawn while this tab is visible.`
       : isSpecialLayerActive
         ? `Paint Special codes on the ${mapWidth}x${mapHeight} map canvas. Special display colors are editor-only.`
       : isBrushEyedropperActive
         ? `Click a cell on the ${mapWidth}x${mapHeight} layered map canvas to sample its brush and return to painting.`
       : `Paint directly on the ${mapWidth}x${mapHeight} layered map canvas. The scale controls only change the viewing size.`;
-  const mapCursorClassName = activeSidebarTab === "ai" || isBrushEyedropperActive ? "cursor-crosshair" : "";
+  const mapCursorClassName = activeSidebarTab === "ai" || activeSidebarTab === "paths" || isBrushEyedropperActive ? "cursor-crosshair" : "";
   const filteredMaps = maps.filter((mapRecord) => {
     if (!deferredMapQuery) {
       return true;
@@ -3497,6 +3865,11 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
             return;
           }
 
+          if (activeSidebarTab === "paths") {
+            applyMapPathCell(nextCell);
+            return;
+          }
+
           if (isBrushEyedropperActive) {
             sampleBrushFromCell(nextCell);
             return;
@@ -3618,8 +3991,13 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
             className="h-full"
             actions={
               isEditingMap ? (
-                <button className={secondaryButtonClass} onClick={handleBackToMapSelection} type="button">
-                  Back
+                <button
+                  className={`${secondaryButtonClass} inline-flex items-center gap-2`}
+                  onClick={handleBackToMapSelection}
+                  type="button"
+                >
+                  <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronLeft} />
+                  <span>Back</span>
                 </button>
               ) : (
                 <button
@@ -3695,6 +4073,15 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                     Brushes
                   </button>
                   <button
+                    className={panelTabButtonClass(activeSidebarTab === "paths")}
+                    onClick={() => {
+                      setActiveSidebarTab("paths");
+                    }}
+                    type="button"
+                  >
+                    Paths
+                  </button>
+                  <button
                     className={panelTabButtonClass(activeSidebarTab === "ai")}
                     onClick={() => {
                       setActiveSidebarTab("ai");
@@ -3753,6 +4140,110 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                     ) : null}
                     {zoneEventStatus && zoneEventStatus !== "Event saved." ? (
                       <div className="text-sm text-[#b42318]">{zoneEventStatus}</div>
+                    ) : null}
+                  </div>
+                ) : activeSidebarTab === "paths" ? (
+                  <div className="grid min-h-0 gap-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <SectionEyebrow>Paths</SectionEyebrow>
+                      <button
+                        className={actionButtonClass}
+                        disabled={!activeMap || isMapPathSaving}
+                        onClick={handleCreateMapPath}
+                        type="button"
+                      >
+                        New
+                      </button>
+                    </div>
+
+                    <div className={scrollableAssetListClass}>
+                      {mapPaths.map((pathRecord, pathIndex) => (
+                        <button
+                          className={assetListRowClass(pathRecord.id === activeMapPathId)}
+                          key={pathRecord.id}
+                          onClick={() => {
+                            setActiveMapPathId(pathRecord.id);
+                            setMapPathStatus("");
+                          }}
+                          type="button"
+                        >
+                          <div
+                            className={`${assetListThumbClass} text-white`}
+                            style={{ backgroundColor: getMapPathColor(pathIndex) }}
+                          >
+                            <span className="text-sm font-extrabold">{pathIndex + 1}</span>
+                          </div>
+                          <div className={assetListMetaClass}>
+                            <span className={assetListTitleClass}>{pathRecord.name}</span>
+                            <span className={assetListSubtitleClass}>
+                              {pathRecord.points.length} point{pathRecord.points.length === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+
+                    {isMapPathsLoading ? (
+                      <div className="text-sm theme-text-muted">Loading paths...</div>
+                    ) : null}
+                    {!isMapPathsLoading && activeMap && !mapPaths.length ? (
+                      <div className={emptyStateCardClass}>No paths are defined for {activeMap.name}.</div>
+                    ) : null}
+
+                    {activeMapPath ? (
+                      <div className={sectionCardClass}>
+                        <SectionEyebrow>Active Path</SectionEyebrow>
+                        <input
+                          className={`${compactTextInputClass} w-full min-w-0`}
+                          onChange={(event) => {
+                            setActiveMapPathNameDraft(event.currentTarget.value);
+                            if (mapPathStatus) {
+                              setMapPathStatus("");
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              handleSaveActiveMapPathName();
+                            }
+                          }}
+                          value={activeMapPathNameDraft}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            className={visibilityOptionButtonClass(activeMapPathTool === "add")}
+                            onClick={() => {
+                              setActiveMapPathTool("add");
+                            }}
+                            type="button"
+                          >
+                            Add Point
+                          </button>
+                          <button
+                            className={visibilityOptionButtonClass(activeMapPathTool === "erase")}
+                            onClick={() => {
+                              setActiveMapPathTool("erase");
+                            }}
+                            type="button"
+                          >
+                            Erase Point
+                          </button>
+                        </div>
+                        <button
+                          className={secondaryButtonClass}
+                          disabled={isMapPathSaving || activeMapPathNameDraft.trim() === activeMapPath.name}
+                          onClick={handleSaveActiveMapPathName}
+                          type="button"
+                        >
+                          {isMapPathSaving ? "Saving..." : "Save Name"}
+                        </button>
+                      </div>
+                    ) : null}
+
+                    {mapPathStatus ? (
+                      <div className={mapPathStatus === "Path saved." || mapPathStatus === "Path created." ? "text-sm theme-text-muted" : "text-sm text-[#b42318]"}>
+                        {mapPathStatus}
+                      </div>
                     ) : null}
                   </div>
                 ) : activeSidebarTab === "brushes" && isSpecialLayerActive ? (
@@ -3889,7 +4380,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                             type="button"
                           >
                             <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary transition group-hover:theme-text-accent`}>
-                              <FontAwesomeIcon className="h-4 w-4" icon={faFolderArrowUp} />
+                              <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronLeft} />
                             </div>
                             <div className={assetListMetaClass}>
                               <span className={assetListTitleClass}>Back</span>

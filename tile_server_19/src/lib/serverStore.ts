@@ -57,6 +57,8 @@ import type {
   LoadedImagePayload,
   MapLayerCell,
   MapLayerStack,
+  MapPathPoint,
+  MapPathRecord,
   MapRecord,
   MapTileOptions,
   PersonalityEventRecord,
@@ -190,6 +192,15 @@ interface StoredMapPlacementInsertRow {
   updated_at: string;
 }
 
+interface StoredMapPathRow {
+  id: string;
+  inserted_at: Date | string;
+  map_name: string;
+  name: string;
+  points: unknown;
+  updated_at: Date | string;
+}
+
 interface StoredItemRow {
   base_value: number | null;
   character: string | null;
@@ -252,6 +263,7 @@ interface StoredPersonalityRow {
   goals: string | null;
   gold: number | null;
   goodness: number | null;
+  greeting: string | null;
   hidden_desires: string | null;
   honesty: number | null;
   impulsiveness: number | null;
@@ -360,6 +372,7 @@ const PERSONALITY_EDITABLE_FIELDS = [
   "goals",
   "gold",
   "goodness",
+  "greeting",
   "hidden_desires",
   "honesty",
   "impulsiveness",
@@ -405,6 +418,7 @@ const PERSONALITY_LLM_GENERATED_FIELDS = [
   "goals",
   "gold",
   "goodness",
+  "greeting",
   "hidden_desires",
   "honesty",
   "impulsiveness",
@@ -491,20 +505,30 @@ function hasPromptBaseValue(value: PersonalityRecord[keyof PersonalityRecord]) {
   return value != null;
 }
 
+function formatPromptBaseLabel(label: string) {
+  return label
+    .split(/\s+/u)
+    .filter(Boolean)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+}
+
 function formatPromptBaseValue(
   label: string,
   value: PersonalityRecord[keyof PersonalityRecord],
   type: "number" | "range" | "text"
 ) {
+  const formattedLabel = `*${formatPromptBaseLabel(label)}*`;
+
   if (type === "text") {
-    return `Your ${label}: ${String(value).trim()}`;
+    return `${formattedLabel}\n${String(value).trim()}`;
   }
 
   if (type === "range") {
-    return `Your ${label}: ${Number(value)} out of 100`;
+    return `${formattedLabel}\n${Number(value)} out of 100`;
   }
 
-  return `Your ${label}: ${Number(value)}`;
+  return `${formattedLabel}\n${Number(value)}`;
 }
 
 function normalizeGeneratedTextValue(
@@ -533,6 +557,12 @@ const PERSONALITY_PROMPT_SYSTEM_FIELDS = new Set<keyof PersonalityRecord>([
   "updated_at",
   "voice_id"
 ]);
+
+type PersonalityPromptFieldConfig = {
+  field: Exclude<keyof PersonalityRecord, "character_slug" | "inserted_at" | "llm_prompt_base" | "updated_at" | "voice_id">;
+  label: string;
+  type: "number" | "range" | "text";
+};
 
 const PERSONALITY_PROMPT_SECTION_FIELDS = [
   {
@@ -604,11 +634,7 @@ const PERSONALITY_PROMPT_SECTION_FIELDS = [
     title: "Presentation"
   }
 ] as const satisfies ReadonlyArray<{
-  fields: ReadonlyArray<{
-    field: Exclude<keyof PersonalityRecord, "character_slug" | "inserted_at" | "llm_prompt_base" | "updated_at" | "voice_id">;
-    label: string;
-    type: "number" | "range" | "text";
-  }>;
+  fields: ReadonlyArray<PersonalityPromptFieldConfig>;
   title: string;
 }>;
 
@@ -1083,6 +1109,7 @@ function mapRowToPersonalityRecord(row: StoredPersonalityRow): PersonalityRecord
     goals: normalizeOptionalText(row.goals),
     gold: normalizeInteger(row.gold, 0, 0),
     goodness: normalizeInteger(row.goodness, 50, 1, 100),
+    greeting: normalizeOptionalText(row.greeting),
     hidden_desires: normalizeOptionalText(row.hidden_desires),
     honesty: normalizeInteger(row.honesty, 50, 1, 100),
     impulsiveness: normalizeInteger(row.impulsiveness, 50, 1, 100),
@@ -1149,6 +1176,64 @@ function mapRowToZoneEventRecord(row: StoredZoneEventRow): ZoneEventRecord {
         ? row.zone_event.trim()
         : `event_${row.id}`,
     zone_name: typeof row.zone_name === "string" ? row.zone_name.trim() : ""
+  };
+}
+
+function normalizeMapPathPoint(value: unknown): MapPathPoint | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Partial<MapPathPoint>;
+  const tileX = normalizeOptionalInteger(record.tileX, 0);
+  const tileY = normalizeOptionalInteger(record.tileY, 0);
+
+  if (tileX == null || tileY == null) {
+    return null;
+  }
+
+  return { tileX, tileY };
+}
+
+function normalizeMapPathPoints(value: unknown): MapPathPoint[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((point) => {
+    const normalizedPoint = normalizeMapPathPoint(point);
+    return normalizedPoint ? [normalizedPoint] : [];
+  });
+}
+
+function normalizeMapPathName(value: unknown) {
+  const normalizedName = normalizeOptionalText(value);
+
+  if (!normalizedName) {
+    throw new Error("Path name is required.");
+  }
+
+  return normalizedName;
+}
+
+function normalizeMapPathId(value: unknown) {
+  const normalizedId = normalizeOptionalText(value);
+
+  if (!normalizedId) {
+    throw new Error("Path id is required.");
+  }
+
+  return normalizedId;
+}
+
+function mapRowToMapPathRecord(row: StoredMapPathRow): MapPathRecord {
+  return {
+    id: row.id,
+    inserted_at: serializeStoredTimestamp(row.inserted_at),
+    map_name: typeof row.map_name === "string" ? row.map_name.trim() : "",
+    name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : `path_${row.id}`,
+    points: normalizeMapPathPoints(row.points),
+    updated_at: serializeStoredTimestamp(row.updated_at)
   };
 }
 
@@ -2650,6 +2735,14 @@ async function assertZoneEventsTableExists(db: Awaited<ReturnType<typeof getData
   }
 }
 
+async function assertMapPathsTableExists(db: Awaited<ReturnType<typeof getDatabase>>) {
+  const hasMapPathsTable = await db.schema.hasTable("map_paths");
+
+  if (!hasMapPathsTable) {
+    throw new Error("map_paths table not found.");
+  }
+}
+
 async function assertCharacterEventsTableExists(db: Awaited<ReturnType<typeof getDatabase>>) {
   const hasCharacterEventsTable = await db.schema.hasTable("character_events");
 
@@ -2713,6 +2806,105 @@ export async function readZoneEventRecords(zoneName: string): Promise<ZoneEventR
     ]);
 
   return rows.map(mapRowToZoneEventRecord);
+}
+
+export async function readMapPathRecords(mapName: string): Promise<MapPathRecord[]> {
+  await ensureMapDatabaseReady();
+  const normalizedMapName = normalizeZoneName(mapName);
+  const db = await getDatabase();
+
+  await assertMapPathsTableExists(db);
+
+  const rows = await db<StoredMapPathRow>("map_paths")
+    .select("*")
+    .where({ map_name: normalizedMapName })
+    .orderBy([
+      { column: "inserted_at", order: "asc" },
+      { column: "name", order: "asc" },
+      { column: "id", order: "asc" }
+    ]);
+
+  return rows.map(mapRowToMapPathRecord);
+}
+
+export async function createMapPathRecord(mapName: string, requestedName?: string) {
+  await ensureMapDatabaseReady();
+  const normalizedMapName = normalizeZoneName(mapName);
+  const db = await getDatabase();
+
+  await assertMapPathsTableExists(db);
+
+  const existingPaths = await db<StoredMapPathRow>("map_paths")
+    .select("name")
+    .where({ map_name: normalizedMapName });
+  const takenNames = new Set(existingPaths.map((row) => row.name.trim()).filter(Boolean));
+  const baseName = normalizeOptionalText(requestedName) ?? "new_path";
+  let nextName = baseName;
+  let suffix = 2;
+
+  while (takenNames.has(nextName)) {
+    nextName = `${baseName}_${suffix}`;
+    suffix += 1;
+  }
+
+  const timestamp = new Date();
+  const [createdPath] = await db<StoredMapPathRow>("map_paths")
+    .insert({
+      id: randomUUID(),
+      inserted_at: timestamp,
+      map_name: normalizedMapName,
+      name: nextName,
+      points: JSON.stringify([]),
+      updated_at: timestamp
+    })
+    .returning("*");
+
+  if (!createdPath) {
+    throw new Error("Could not create map path.");
+  }
+
+  return mapRowToMapPathRecord(createdPath);
+}
+
+export async function updateMapPathRecord(input: {
+  id: string;
+  mapName: string;
+  name: string;
+  points: MapPathPoint[];
+}) {
+  await ensureMapDatabaseReady();
+  const normalizedMapName = normalizeZoneName(input.mapName);
+  const pathId = normalizeMapPathId(input.id);
+  const pathName = normalizeMapPathName(input.name);
+  const points = normalizeMapPathPoints(input.points);
+  const db = await getDatabase();
+
+  await assertMapPathsTableExists(db);
+
+  const conflictingPath = await db<StoredMapPathRow>("map_paths")
+    .select("id")
+    .first()
+    .where({ map_name: normalizedMapName, name: pathName })
+    .whereNot({ id: pathId });
+
+  if (conflictingPath) {
+    throw new Error(`Path ${pathName} already exists for ${normalizedMapName}.`);
+  }
+
+  const [updatedPath] = await db<StoredMapPathRow>("map_paths")
+    .where({ id: pathId, map_name: normalizedMapName })
+    .update({
+      name: pathName,
+      points: JSON.stringify(points),
+      updated_at: new Date()
+    })
+    .returning("*");
+
+  if (!updatedPath) {
+    throw new Error("Map path not found.");
+  }
+
+  return mapRowToMapPathRecord(updatedPath);
 }
 
 export async function createZoneEventRecord(zoneName: string, zoneEvent: string) {
@@ -3325,30 +3517,24 @@ function normalizePersonalityIntegerInput(
 
 async function ComputePromptBase(personality: PersonalityRecord) {
   const template = (await readFile(PERSONALITY_BASE_PROMPT_PATH, "utf8")).trim();
-  const sections = PERSONALITY_PROMPT_SECTION_FIELDS
-    .map((section) => {
-      const lines = section.fields
-        .filter((fieldConfig) => !PERSONALITY_PROMPT_SYSTEM_FIELDS.has(fieldConfig.field))
-        .map((fieldConfig) => {
-          const value = personality[fieldConfig.field];
+  const promptFields = PERSONALITY_PROMPT_SECTION_FIELDS
+    .reduce<PersonalityPromptFieldConfig[]>(
+      (fields, section) => [...fields, ...section.fields],
+      []
+    )
+    .filter((fieldConfig) => !PERSONALITY_PROMPT_SYSTEM_FIELDS.has(fieldConfig.field))
+    .map((fieldConfig) => {
+      const value = personality[fieldConfig.field];
 
-          if (!hasPromptBaseValue(value)) {
-            return "";
-          }
-
-          return formatPromptBaseValue(fieldConfig.label, value, fieldConfig.type);
-        })
-        .filter(Boolean);
-
-      if (!lines.length) {
+      if (!hasPromptBaseValue(value)) {
         return "";
       }
 
-      return [section.title, ...lines].join("\n");
+      return formatPromptBaseValue(fieldConfig.label, value, fieldConfig.type);
     })
     .filter(Boolean);
 
-  return [template, ...sections].filter(Boolean).join("\n\n");
+  return [template, ...promptFields].filter(Boolean).join("\n\n");
 }
 
 async function saveComputedPromptBase(
@@ -3822,6 +4008,7 @@ function buildGeneratedPersonalityUpdates(
     goals: normalizeGeneratedTextValue(responseObject.goals, personality.goals),
     gold: coerceGeneratedInteger(responseObject.gold, personality.gold, { min: 0 }),
     goodness: coerceGeneratedInteger(responseObject.goodness, personality.goodness, { max: 100, min: 1 }),
+    greeting: normalizeGeneratedTextValue(responseObject.greeting, personality.greeting),
     hidden_desires: normalizeGeneratedTextValue(responseObject.hidden_desires, personality.hidden_desires),
     honesty: coerceGeneratedInteger(responseObject.honesty, personality.honesty, { max: 100, min: 1 }),
     impulsiveness: coerceGeneratedInteger(responseObject.impulsiveness, personality.impulsiveness, {
@@ -4195,6 +4382,10 @@ export async function updatePersonalityRecord(
 
   if ("goals" in fields) {
     updates.goals = normalizePersonalityTextInput(fields.goals, "Goals");
+  }
+
+  if ("greeting" in fields) {
+    updates.greeting = normalizePersonalityTextInput(fields.greeting, "Greeting");
   }
 
   if ("backstory" in fields) {

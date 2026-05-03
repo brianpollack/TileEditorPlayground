@@ -17,6 +17,7 @@ export const {
   func,
   instanceOf,
   node,
+  number,
   object,
   objectOf,
   oneOf,

@@ -6,6 +6,7 @@ import { LUA_API_HELPER_PATH } from "./luaPaths";
 
 const LUA_API_HELPER_URL = LUA_API_HELPER_PATH;
 const LUA_API_COMPLETER_ID = "lua-api-helper";
+const LUA_SNIPPET_PLACEHOLDER_PATTERN = /\$(?:\d+|\{\d+(?::[^}]*)?\})/;
 
 interface LuaApiHelperCompletionEntry {
   caption?: string;
@@ -99,6 +100,16 @@ type LuaApiHelperLoadResult =
     }
   | {
       status: "error";
+    };
+
+type LuaCompletionInsertion =
+  | {
+      snippet: string;
+      value?: never;
+    }
+  | {
+      snippet?: never;
+      value: string;
     };
 
 let luaApiHelperPromise: Promise<LuaApiHelperLoadResult> | null = null;
@@ -254,6 +265,16 @@ function buildCompletionDocHtml(
   ].join("");
 }
 
+function createCompletionInsertion(value: string): LuaCompletionInsertion {
+  return LUA_SNIPPET_PLACEHOLDER_PATTERN.test(value)
+    ? {
+        snippet: value
+      }
+    : {
+        value
+      };
+}
+
 function createTopLevelCompletion(
   payload: LuaApiHelperPayload,
   entry: LuaApiHelperCompletionEntry
@@ -273,7 +294,7 @@ function createTopLevelCompletion(
     docText: body,
     meta,
     score: entry.score ?? 1000,
-    value: entry.value
+    ...createCompletionInsertion(entry.value)
   };
 }
 
@@ -292,7 +313,7 @@ function createMemberCompletion(
     docText: body,
     meta,
     score: entry.score ?? 1000,
-    value: memberName
+    ...createCompletionInsertion(memberName)
   };
 }
 

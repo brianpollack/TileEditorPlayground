@@ -1,6 +1,6 @@
 "use client";
 
-import { faCamera, faTrashCan } from "@awesome.me/kit-a62459359b/icons/classic/solid";
+import { faCamera, faChevronLeft, faTrashCan } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -732,12 +732,13 @@ export function ItemModelPreview({
           Front
         </button>
         <button
-          className="p-0 text-[11px] leading-none theme-text-muted underline underline-offset-2 transition hover:theme-text-primary disabled:cursor-not-allowed disabled:no-underline disabled:opacity-45"
+          className="inline-flex items-center gap-1 p-0 text-[11px] leading-none theme-text-muted underline underline-offset-2 transition hover:theme-text-primary disabled:cursor-not-allowed disabled:no-underline disabled:opacity-45"
           disabled={status !== "ready"}
           onClick={handleBack}
           type="button"
         >
-          Back
+          <FontAwesomeIcon className="h-2.5 w-2.5" icon={faChevronLeft} />
+          <span>Back</span>
         </button>
         <button
           className="p-0 text-[11px] leading-none theme-text-muted underline underline-offset-2 transition hover:theme-text-primary disabled:cursor-not-allowed disabled:no-underline disabled:opacity-45"

@@ -6,16 +6,19 @@ import path from "node:path";
 import {
   createZoneEventRecord,
   createMapRecord,
+  createMapPathRecord,
   createUniqueSlug,
   normalizeMapPayload,
+  readMapPathRecords,
   readZoneEventRecords,
   readMapRecords,
+  updateMapPathRecord,
   updateZoneEventRecord,
   writeMapRecord
 } from "../lib/serverStore";
 import { normalizeMapDimension } from "../lib/map";
 import { normalizeUnderscoreName } from "../lib/naming";
-import type { MapLayerStack, MapSpecialGrid } from "../types";
+import type { MapLayerStack, MapPathPoint, MapSpecialGrid } from "../types";
 
 export async function createMapAction(name: string, width: number, height: number) {
   const nextName = normalizeUnderscoreName(name);
@@ -143,6 +146,26 @@ export async function exportTerrainMapAction(input: {
 
 export async function readMapZoneEventsAction(mapName: string) {
   return readZoneEventRecords(mapName);
+}
+
+export async function readMapPathsAction(mapName: string) {
+  return readMapPathRecords(mapName);
+}
+
+export async function createMapPathAction(input: {
+  mapName: string;
+  name?: string;
+}) {
+  return createMapPathRecord(input.mapName, input.name);
+}
+
+export async function saveMapPathAction(input: {
+  id: string;
+  mapName: string;
+  name: string;
+  points: MapPathPoint[];
+}) {
+  return updateMapPathRecord(input);
 }
 
 export async function createMapZoneEventAction(input: {

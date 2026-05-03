@@ -11,6 +11,7 @@ const ENV_PATH = path.join(WORKSPACE_ROOT, ".env");
 const DATABASE_TABLE_NAME = "map_tiles";
 const MAPS_TABLE_NAME = "map_maps";
 const MAP_ASSETS_TABLE_NAME = "map_map_assets";
+const MAP_PATHS_TABLE_NAME = "map_paths";
 const PERSONALITIES_TABLE_NAME = "personalities";
 const PERSONALITY_EVENTS_TABLE_NAME = "personality_events";
 const SPRITE_EVENTS_TABLE_NAME = "sprite_events";
@@ -268,6 +269,28 @@ export async function ensureDatabaseSchema(db: Knex) {
     });
   }
 
+  await db.raw("create unique index if not exists map_maps_name_unique_idx on map_maps (name)");
+
+  const hasMapPathsTable = await db.schema.hasTable(MAP_PATHS_TABLE_NAME);
+
+  if (!hasMapPathsTable) {
+    await db.schema.createTable(MAP_PATHS_TABLE_NAME, (table) => {
+      table.uuid("id").primary();
+      table
+        .text("map_name")
+        .notNullable()
+        .references("name")
+        .inTable(MAPS_TABLE_NAME)
+        .onUpdate("CASCADE")
+        .onDelete("CASCADE");
+      table.text("name").notNullable();
+      table.jsonb("points").notNullable().defaultTo(db.raw("'[]'::jsonb"));
+      table.timestamp("inserted_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+      table.timestamp("updated_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
+      table.unique(["map_name", "name"]);
+    });
+  }
+
   const hasPersonalitiesTable = await db.schema.hasTable(PERSONALITIES_TABLE_NAME);
 
   if (!hasPersonalitiesTable) {
@@ -296,6 +319,7 @@ export async function ensureDatabaseSchema(db: Knex) {
       table.integer("sociability").notNullable().defaultTo(50);
       table.integer("loyalty").notNullable().defaultTo(50);
       table.integer("goodness").notNullable().defaultTo(50);
+      table.text("greeting");
       table.text("goals");
       table.text("backstory").defaultTo("");
       table.text("hidden_desires");
@@ -359,6 +383,14 @@ export async function ensureDatabaseSchema(db: Knex) {
         table.text(columnName);
       });
     }
+  }
+
+  const hasPersonalityGreetingColumn = await db.schema.hasColumn(PERSONALITIES_TABLE_NAME, "greeting");
+
+  if (!hasPersonalityGreetingColumn) {
+    await db.schema.alterTable(PERSONALITIES_TABLE_NAME, (table) => {
+      table.text("greeting");
+    });
   }
 
   const hasPersonalityEventsTable = await db.schema.hasTable(PERSONALITY_EVENTS_TABLE_NAME);
@@ -526,6 +558,9 @@ export async function ensureDatabaseSchema(db: Knex) {
   );
   await db.raw(
     "create index if not exists map_map_assets_sprite_asset_idx on map_map_assets (sprite_asset_id)"
+  );
+  await db.raw(
+    "create index if not exists map_paths_map_name_updated_idx on map_paths (map_name, updated_at desc)"
   );
   await db.raw(
     "create index if not exists personalities_gender_idx on personalities (gender)"

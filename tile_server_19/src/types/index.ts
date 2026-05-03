@@ -139,6 +139,20 @@ export interface MapRecord {
   width: number;
 }
 
+export interface MapPathPoint {
+  tileX: number;
+  tileY: number;
+}
+
+export interface MapPathRecord {
+  id: string;
+  inserted_at: string;
+  map_name: string;
+  name: string;
+  points: MapPathPoint[];
+  updated_at: string;
+}
+
 export interface ZoneEventRecord {
   enabled: boolean;
   id: string;
@@ -230,6 +244,7 @@ export interface PersonalityRecord {
   goals: string | null;
   gold: number;
   goodness: number;
+  greeting: string | null;
   hidden_desires: string | null;
   honesty: number;
   impulsiveness: number;

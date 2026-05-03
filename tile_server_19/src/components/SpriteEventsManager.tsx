@@ -1,5 +1,6 @@
 "use client";
 
+import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 import { useEffect, useMemo, useState } from "react";
 import type { Ace } from "ace-builds";
 import AceEditor from "react-ace";
@@ -32,6 +33,7 @@ import {
 } from "../lib/luaEventHelpers";
 import type { SpriteEventRecord } from "../types";
 import { actionButtonClass } from "./buttonStyles";
+import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { LuaEventDefinitionHelp } from "./LuaEventDefinitionHelp";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
@@ -236,13 +238,14 @@ export function SpriteEventsManager() {
           >
             <div className="flex flex-wrap gap-2">
               <button
-                className={secondaryButtonClass}
+                className={`${secondaryButtonClass} inline-flex items-center gap-2`}
                 onClick={() => {
                   window.location.hash = "#/sprite";
                 }}
                 type="button"
               >
-                Back to Sprite
+                <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronLeft} />
+                <span>Back to Sprite</span>
               </button>
               {activeSprite ? <div className={statusChipClass}>{activeSprite.filename}</div> : null}
             </div>

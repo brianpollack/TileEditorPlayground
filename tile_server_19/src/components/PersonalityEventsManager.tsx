@@ -1,5 +1,6 @@
 "use client";
 
+import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
 import { useEffect, useMemo, useState } from "react";
 import type { Ace } from "ace-builds";
 import AceEditor from "react-ace";
@@ -18,6 +19,7 @@ import {
 } from "../lib/luaEditor";
 import type { PersonalityEventRecord } from "../types";
 import { actionButtonClass } from "./buttonStyles";
+import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
 import {
@@ -80,6 +82,7 @@ export function PersonalityEventsManager() {
   const [isLoadingEvents, setLoadingEvents] = useState(false);
   const [isSavingEvent, setSavingEvent] = useState(false);
   const [isFormattingLua, setFormattingLua] = useState(false);
+  const [isFormattingToolJson, setFormattingToolJson] = useState(false);
   const [luaAnnotations, setLuaAnnotations] = useState<Ace.Annotation[]>([]);
   const [status, setStatus] = useState("");
 
@@ -284,6 +287,41 @@ export function PersonalityEventsManager() {
       });
   }
 
+  function handleFormatToolJson() {
+    setFormattingToolJson(true);
+    setStatus("");
+
+    try {
+      const eventDetails = parseEventDetails(draft.eventDetails);
+
+      setDraft((currentDraft) => ({
+        ...currentDraft,
+        eventDetails: JSON.stringify(eventDetails, null, 2)
+      }));
+      setStatus("Tool JSON formatted.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tool definition must be valid JSON.");
+    } finally {
+      setFormattingToolJson(false);
+    }
+  }
+
+  function copyToolEditorText(label: string, value: string) {
+    if (!navigator.clipboard?.writeText) {
+      setStatus("Clipboard is not available in this browser.");
+      return;
+    }
+
+    void navigator.clipboard
+      .writeText(value)
+      .then(() => {
+        setStatus(`${label} copied.`);
+      })
+      .catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : `Could not copy ${label}.`);
+      });
+  }
+
   return (
     <div className="min-h-0">
       <div className="grid min-h-0 gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
@@ -309,13 +347,14 @@ export function PersonalityEventsManager() {
           >
             <div className="flex flex-wrap gap-2">
               <button
-                className={secondaryButtonClass}
+                className={`${secondaryButtonClass} inline-flex items-center gap-2`}
                 onClick={() => {
                   window.location.hash = "#/personalities";
                 }}
                 type="button"
               >
-                Back to Personality
+                <FontAwesomeIcon className="h-3.5 w-3.5" icon={faChevronLeft} />
+                <span>Back to Personality</span>
               </button>
               {activePersonality ? <div className={statusChipClass}>{activePersonality.character_slug}</div> : null}
             </div>
@@ -360,7 +399,11 @@ export function PersonalityEventsManager() {
               {status ? (
                 <div
                   className={
-                    status === "Event saved." || status === "Lua formatted."
+                    status === "Event saved." ||
+                    status === "Lua formatted." ||
+                    status === "Tool JSON formatted." ||
+                    status === "Tool Definition copied." ||
+                    status === "Lua Script copied."
                       ? "text-sm theme-text-muted"
                       : "text-sm text-[#b42318]"
                   }
@@ -380,6 +423,14 @@ export function PersonalityEventsManager() {
                 </button>
                 <button
                   className={secondaryButtonClass}
+                  disabled={!activeEvent || isSavingEvent || isFormattingToolJson}
+                  onClick={handleFormatToolJson}
+                  type="button"
+                >
+                  {isFormattingToolJson ? "Formatting..." : "Format Tool JSON"}
+                </button>
+                <button
+                  className={secondaryButtonClass}
                   disabled={!activeEvent || isSavingEvent || isFormattingLua}
                   onClick={handleFormatLua}
                   type="button"
@@ -388,7 +439,7 @@ export function PersonalityEventsManager() {
                 </button>
                 <button
                   className={actionButtonClass}
-                  disabled={!activeEvent || isSavingEvent || isFormattingLua}
+                  disabled={!activeEvent || isSavingEvent || isFormattingLua || isFormattingToolJson}
                   onClick={handleSaveEvent}
                   type="button"
                 >
@@ -410,9 +461,11 @@ export function PersonalityEventsManager() {
                     <input
                       className={`${textInputClass} !min-w-0 w-full max-w-full`}
                       onChange={(event) => {
+                        const nextName = event.currentTarget.value;
+
                         setDraft((currentDraft) => ({
                           ...currentDraft,
-                          name: event.currentTarget.value
+                          name: nextName
                         }));
                         setLuaAnnotations([]);
                         if (status) {
@@ -447,7 +500,18 @@ export function PersonalityEventsManager() {
                 </div>
 
                 <div className="grid gap-3">
-                  <SectionEyebrow>Tool Definition</SectionEyebrow>
+                  <div className="flex items-center justify-between gap-3">
+                    <SectionEyebrow>Tool Definition</SectionEyebrow>
+                    <button
+                      className={secondaryButtonClass}
+                      onClick={() => {
+                        copyToolEditorText("Tool Definition", draft.eventDetails);
+                      }}
+                      type="button"
+                    >
+                      Copy to Clipboard
+                    </button>
+                  </div>
                   <div className="overflow-hidden border theme-border-panel">
                     <AceEditor
                       className="w-full"
@@ -478,39 +542,18 @@ export function PersonalityEventsManager() {
                 </div>
 
                 <div className="grid gap-3">
-                  <SectionEyebrow>Response Context</SectionEyebrow>
-                  <div className="overflow-hidden border theme-border-panel">
-                    <AceEditor
-                      className="w-full"
-                      fontSize={13}
-                      height="120px"
-                      mode="text"
-                      name={`personality-event-response-context-${activeEvent.id}`}
-                      onChange={(value) => {
-                        setDraft((currentDraft) => ({
-                          ...currentDraft,
-                          responseContext: value
-                        }));
-                        if (status) {
-                          setStatus("");
-                        }
+                  <div className="flex items-center justify-between gap-3">
+                    <SectionEyebrow>Lua Script</SectionEyebrow>
+                    <button
+                      className={secondaryButtonClass}
+                      onClick={() => {
+                        copyToolEditorText("Lua Script", draft.luaScript);
                       }}
-                      setOptions={{
-                        showFoldWidgets: false,
-                        tabSize: 2,
-                        useWorker: false,
-                        useSoftTabs: true
-                      }}
-                      theme="tomorrow_night"
-                      value={draft.responseContext}
-                      width="100%"
-                      wrapEnabled
-                    />
+                      type="button"
+                    >
+                      Copy to Clipboard
+                    </button>
                   </div>
-                </div>
-
-                <div className="grid gap-3">
-                  <SectionEyebrow>Lua Script</SectionEyebrow>
                   <div className="overflow-hidden border theme-border-panel">
                     <AceEditor
                       className="w-full"
@@ -518,7 +561,7 @@ export function PersonalityEventsManager() {
                       enableLiveAutocompletion={enableLiveAutocompletion}
                       enableSnippets={enableSnippets}
                       fontSize={13}
-                      height="320px"
+                      height="640px"
                       mode="lua"
                       name={`personality-event-lua-${activeEvent.id}`}
                       onChange={(value) => {

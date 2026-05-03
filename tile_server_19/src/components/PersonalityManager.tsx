@@ -1,6 +1,9 @@
 "use client";
 
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState, type ComponentType } from "react";
+import AceEditorImport, { type IAceEditorProps } from "react-ace";
+import "ace-builds/src-noconflict/mode-markdown";
+import "ace-builds/src-noconflict/theme-tomorrow_night";
 
 import { useStudio } from "../app/StudioContext";
 import type { PersonalityRecord } from "../types";
@@ -17,6 +20,7 @@ import {
   assetListTitleClass,
   compactTextInputClass,
   emptyStateCardClass,
+  panelTabButtonClass,
   readOnlyInputClass,
   scrollableAssetListClass,
   secondaryButtonClass,
@@ -30,6 +34,10 @@ const PREPARE_RANDOM_PERSONALITY_PROMPT_PATH = "/__personalities/randomize-promp
 const RANDOMIZE_PERSONALITY_PATH = "/__personalities/randomize";
 const UPLOAD_PERSONALITY_PROFILE_PATH = "/__personalities/upload-profile";
 const UPDATE_PERSONALITY_PATH = "/__personalities/update";
+const AceEditor = (
+  (AceEditorImport as unknown as { default?: ComponentType<IAceEditorProps> }).default ?? AceEditorImport
+) as ComponentType<IAceEditorProps>;
+type PersonalityPromptTab = "computed" | "direct";
 
 const PERSONALITY_SHORT_TEXT_FIELDS = [
   "name",
@@ -46,6 +54,7 @@ const PERSONALITY_SHORT_TEXT_FIELDS = [
 
 const PERSONALITY_TEXTAREA_FIELDS = [
   "summary",
+  "greeting",
   "goals",
   "backstory",
   "hidden_desires",
@@ -178,6 +187,7 @@ function createPersonalityDrafts(
     goals: personality?.goals ?? "",
     gold: personality ? String(personality.gold) : "",
     goodness: personality ? String(personality.goodness) : "",
+    greeting: personality?.greeting ?? "",
     hidden_desires: personality?.hidden_desires ?? "",
     honesty: personality ? String(personality.honesty) : "",
     impulsiveness: personality ? String(personality.impulsiveness) : "",
@@ -223,6 +233,7 @@ export function PersonalityManager() {
   const [profileImageStatus, setProfileImageStatus] = useState("");
   const [selectedRandomizeModel, setSelectedRandomizeModel] = useState("");
   const [personalityQuery, setPersonalityQuery] = useState("");
+  const [activePromptTab, setActivePromptTab] = useState<PersonalityPromptTab>("direct");
   const [randomizePromptDraft, setRandomizePromptDraft] = useState("");
   const [randomizeStatus, setRandomizeStatus] = useState("");
   const [drafts, setDrafts] = useState<PersonalityDraftState>(() => createPersonalityDrafts(activePersonality));
@@ -230,6 +241,7 @@ export function PersonalityManager() {
   const [savingField, setSavingField] = useState<EditablePersonalityField | null>(null);
   const profileUploadInputRef = useRef<HTMLInputElement | null>(null);
   const deferredPersonalityQuery = useDeferredValue(personalityQuery.trim().toLowerCase());
+  const hasDirectSummary = drafts.summary.trim().length > 0;
 
   useEffect(() => {
     setDrafts(createPersonalityDrafts(activePersonality));
@@ -639,9 +651,14 @@ export function PersonalityManager() {
     );
   }
 
-  function renderTextareaField(field: PersonalityTextareaField, label: string) {
+  function renderTextareaField(
+    field: PersonalityTextareaField,
+    label: string,
+    options: { disabled?: boolean; disabledMessage?: string } = {}
+  ) {
     const errorMessage = fieldErrors[field];
     const isSaving = savingField === field;
+    const isDisabled = isSaving || options.disabled === true;
 
     return (
       <div className="grid gap-1">
@@ -651,12 +668,20 @@ export function PersonalityManager() {
           data-cloned-val={drafts[field]}
         >
           <textarea
-            className={`${textInputClass} min-h-[7rem] !min-w-0 w-full max-w-full resize-none overflow-hidden ${isSaving ? "opacity-75" : ""}`}
-            disabled={isSaving}
+            className={`${textInputClass} min-h-[7rem] !min-w-0 w-full max-w-full resize-none overflow-hidden ${isDisabled ? "opacity-75" : ""}`}
+            disabled={isDisabled}
             onBlur={() => {
+              if (options.disabled) {
+                return;
+              }
+
               commitTextField(field);
             }}
             onChange={(event) => {
+              if (options.disabled) {
+                return;
+              }
+
               setDraftValue(field, event.currentTarget.value);
               if (errorMessage) {
                 clearFieldError(field);
@@ -664,6 +689,53 @@ export function PersonalityManager() {
             }}
             rows={3}
             value={drafts[field]}
+          />
+        </div>
+        {isSaving ? <div className="text-xs theme-text-muted">Saving...</div> : null}
+        {!isSaving && options.disabled && options.disabledMessage ? (
+          <div className="text-xs theme-text-muted">{options.disabledMessage}</div>
+        ) : null}
+        {!isSaving && errorMessage ? <div className="text-xs text-[#b42318]">{errorMessage}</div> : null}
+      </div>
+    );
+  }
+
+  function renderSummaryMarkdownEditor() {
+    const errorMessage = fieldErrors.summary;
+    const isSaving = savingField === "summary";
+
+    return (
+      <div className="grid gap-2">
+        <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
+          Summary
+        </div>
+        <div className={`overflow-hidden border theme-border-panel ${isSaving ? "opacity-75" : ""}`}>
+          <AceEditor
+            className="w-full"
+            fontSize={13}
+            height="630px"
+            mode="markdown"
+            name={`personality-summary-markdown-${activePersonality?.character_slug ?? "none"}`}
+            onBlur={() => {
+              commitTextField("summary");
+            }}
+            onChange={(value) => {
+              setDraftValue("summary", value);
+              if (errorMessage) {
+                clearFieldError("summary");
+              }
+            }}
+            readOnly={isSaving}
+            setOptions={{
+              showFoldWidgets: false,
+              tabSize: 2,
+              useSoftTabs: true,
+              useWorker: false
+            }}
+            theme="tomorrow_night"
+            value={drafts.summary}
+            width="100%"
+            wrapEnabled
           />
         </div>
         {isSaving ? <div className="text-xs theme-text-muted">Saving...</div> : null}
@@ -1032,53 +1104,141 @@ export function PersonalityManager() {
                 )}
               </div>
 
-              <PersonalitySectionTitle>Motivation</PersonalitySectionTitle>
+              <PersonalitySectionTitle>Greeting</PersonalitySectionTitle>
               <div className="grid gap-3">
-                {renderTextareaField("summary", "Summary")}
-                {renderTextareaField("goals", "Goals")}
-                {renderTextareaField("backstory", "Backstory")}
-                {renderTextareaField("hidden_desires", "Hidden Desires")}
-                {renderTextareaField("fears", "Fears")}
-                {renderTextareaField("family_description", "Family Description")}
-                {renderTextareaField("areas_of_expertise", "Areas of Expertise")}
-                {renderTextareaField("specialties", "Specialties")}
+                {renderTextareaField("greeting", "Greeting")}
               </div>
 
-              <PersonalitySectionTitle>Personal Information</PersonalitySectionTitle>
-              <div className="grid gap-3">
-                {renderTextareaField("secrets_you_know", "Secrets You Know")}
-                {renderTextareaField("things_you_can_share", "Things You Can Share")}
-                {renderTextareaField("smalltalk_topics_enjoyed", "Smalltalk Topics Enjoyed")}
-                {renderTextareaField("other_world_knowledge", "Other World Knowledge")}
-              </div>
-
-              <PersonalitySectionTitle>Presentation</PersonalitySectionTitle>
-              <div className="grid gap-3">
-                {renderTextareaField("physical_description", "Physical Description")}
-                {renderTextareaField("distinguishing_feature", "Distinguishing Feature")}
-                {renderTextareaField("speech_style", "Speech Style")}
-                {renderTextareaField("mannerisms", "Mannerisms")}
-                {renderTextareaField("clothing_style", "Clothing Style")}
-              </div>
-
-              <PersonalitySectionTitle>System</PersonalitySectionTitle>
-              <div className="grid gap-3">
-                <PersonalityField label="Inserted" value={formatTimestampValue(activePersonality.inserted_at)} />
-                <PersonalityField label="Updated" value={formatTimestampValue(activePersonality.updated_at)} />
-                <div className="grid gap-1">
-                  <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
-                    LLM Prompt Base
-                  </div>
-                  <textarea
-                    className={`${textInputClass} ${readOnlyInputClass} min-h-[9rem] !min-w-0 w-full max-w-full`}
-                    readOnly
-                    value={activePersonality.llm_prompt_base ?? ""}
-                  />
-                  {!activePersonality.llm_prompt_base?.trim() ? (
-                    <div className="text-xs theme-text-muted">No generated prompt has been stored yet.</div>
-                  ) : null}
+              <div className="pt-5">
+                <div className="panel-tabs">
+                  <button
+                    className={panelTabButtonClass(activePromptTab === "direct")}
+                    onClick={() => {
+                      setActivePromptTab("direct");
+                    }}
+                    type="button"
+                  >
+                    Direct
+                  </button>
+                  <button
+                    className={panelTabButtonClass(activePromptTab === "computed")}
+                    onClick={() => {
+                      setActivePromptTab("computed");
+                    }}
+                    type="button"
+                  >
+                    Computed
+                  </button>
                 </div>
               </div>
+
+              {activePromptTab === "direct" ? (
+                <div className="pt-3">
+                  {renderSummaryMarkdownEditor()}
+                </div>
+              ) : (
+                <>
+                  <PersonalitySectionTitle>Motivation</PersonalitySectionTitle>
+                  {hasDirectSummary ? (
+                    <div className="text-sm theme-text-muted">
+                      Computed fields are disabled while Summary has direct content.
+                    </div>
+                  ) : null}
+                  <div className="grid gap-3">
+                    {renderTextareaField("goals", "Goals", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("backstory", "Backstory", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("hidden_desires", "Hidden Desires", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("fears", "Fears", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("family_description", "Family Description", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("areas_of_expertise", "Areas of Expertise", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("specialties", "Specialties", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                  </div>
+
+                  <PersonalitySectionTitle>Personal Information</PersonalitySectionTitle>
+                  <div className="grid gap-3">
+                    {renderTextareaField("secrets_you_know", "Secrets You Know", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("things_you_can_share", "Things You Can Share", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("smalltalk_topics_enjoyed", "Smalltalk Topics Enjoyed", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("other_world_knowledge", "Other World Knowledge", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                  </div>
+
+                  <PersonalitySectionTitle>Presentation</PersonalitySectionTitle>
+                  <div className="grid gap-3">
+                    {renderTextareaField("physical_description", "Physical Description", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("distinguishing_feature", "Distinguishing Feature", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("speech_style", "Speech Style", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("mannerisms", "Mannerisms", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                    {renderTextareaField("clothing_style", "Clothing Style", {
+                      disabled: hasDirectSummary,
+                      disabledMessage: "Clear Summary on the Direct tab to edit this computed field."
+                    })}
+                  </div>
+
+                  <PersonalitySectionTitle>System</PersonalitySectionTitle>
+                  <div className="grid gap-3">
+                    <PersonalityField label="Inserted" value={formatTimestampValue(activePersonality.inserted_at)} />
+                    <PersonalityField label="Updated" value={formatTimestampValue(activePersonality.updated_at)} />
+                    <div className="grid gap-1">
+                      <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
+                        LLM Prompt Base
+                      </div>
+                      <textarea
+                        className={`${textInputClass} ${readOnlyInputClass} min-h-[9rem] !min-w-0 w-full max-w-full`}
+                        readOnly
+                        value={activePersonality.llm_prompt_base ?? ""}
+                      />
+                      {!activePersonality.llm_prompt_base?.trim() ? (
+                        <div className="text-xs theme-text-muted">No generated prompt has been stored yet.</div>
+                      ) : null}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             <div className="flex min-h-[20rem] items-center justify-center text-sm theme-text-muted">
