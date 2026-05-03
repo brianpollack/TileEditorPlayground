@@ -45,6 +45,7 @@ import {
   UPLOAD_PERSONALITY_PROFILE_PATH
 } from "../lib/apiRoutes";
 import { escapeHtml } from "../lib/escapeHtml";
+import { pickItemUpdateFields, type EditableRemoteItemField } from "../lib/itemFields";
 import { LUA_API_HELPER_PATH, LUA_SCRIPTING_GUIDE_PATH } from "../lib/luaPaths";
 import {
   createPersonalityRecord,
@@ -590,79 +591,9 @@ export default async function handler(request: Request) {
   if (request.method === "POST" && requestUrl.pathname === UPDATE_ITEM_PATH) {
     try {
       const requestBody = (await request.json()) as Partial<{
-        base_value: number | null;
-        description: string | null;
-        durability: number | null;
-        gives_light: number | null;
         id: number;
-        is_consumable: boolean | null;
-        is_container: boolean | null;
-        level: number | null;
-        long_description: string | null;
-        mount_point: string | null;
-        quality: string | null;
-        rarity: string | null;
-        storage_capacity: number | null;
-        weapon_grip: string | null;
-      }>;
-      const nextFields: Partial<
-        Pick<
-          ItemRecord,
-          "base_value" | "description" | "durability" | "gives_light" | "is_consumable" | "is_container" | "level" | "long_description" | "mount_point" | "quality" | "rarity" | "storage_capacity" | "weapon_grip"
-        >
-      > = {};
-
-      if ("base_value" in requestBody) {
-        nextFields.base_value = requestBody.base_value ?? null;
-      }
-
-      if ("description" in requestBody) {
-        nextFields.description = requestBody.description ?? null;
-      }
-
-      if ("durability" in requestBody) {
-        nextFields.durability = requestBody.durability ?? null;
-      }
-
-      if ("gives_light" in requestBody) {
-        nextFields.gives_light = requestBody.gives_light ?? null;
-      }
-
-      if ("is_consumable" in requestBody) {
-        nextFields.is_consumable = requestBody.is_consumable ?? null;
-      }
-
-      if ("is_container" in requestBody) {
-        nextFields.is_container = requestBody.is_container ?? null;
-      }
-
-      if ("level" in requestBody) {
-        nextFields.level = requestBody.level ?? null;
-      }
-
-      if ("long_description" in requestBody) {
-        nextFields.long_description = requestBody.long_description ?? null;
-      }
-
-      if ("mount_point" in requestBody) {
-        nextFields.mount_point = requestBody.mount_point ?? null;
-      }
-
-      if ("quality" in requestBody) {
-        nextFields.quality = requestBody.quality ?? null;
-      }
-
-      if ("rarity" in requestBody) {
-        nextFields.rarity = requestBody.rarity ?? null;
-      }
-
-      if ("storage_capacity" in requestBody) {
-        nextFields.storage_capacity = requestBody.storage_capacity ?? null;
-      }
-
-      if ("weapon_grip" in requestBody) {
-        nextFields.weapon_grip = requestBody.weapon_grip ?? null;
-      }
+      }> & Partial<Record<EditableRemoteItemField, unknown>>;
+      const nextFields = pickItemUpdateFields(requestBody);
 
       const updatedItem = await updateRemoteItemRecord(Number(requestBody.id), nextFields);
 

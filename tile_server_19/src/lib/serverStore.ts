@@ -19,6 +19,14 @@ import {
   getVaxServer
 } from "./env";
 import {
+  ITEM_BOOLEAN_FIELDS,
+  ITEM_EDITABLE_FIELDS,
+  ITEM_NUMBER_FIELDS,
+  ITEM_TEXT_FIELDS,
+  type EditableRemoteItemField,
+  type EditableRemoteItemUpdate
+} from "./itemFields";
+import {
   createEmptyMapCells,
   createEmptyMapLayers,
   createEmptyMapSpecialGrid,
@@ -4584,14 +4592,25 @@ export async function loadItemFieldLookups(): Promise<ItemFieldLookups> {
   return { mountPoints, rarities, weaponGrips };
 }
 
+function normalizeRemoteItemField(field: EditableRemoteItemField, value: unknown) {
+  if ((ITEM_NUMBER_FIELDS as readonly string[]).includes(field)) {
+    return normalizeOptionalNumber(value) ?? null;
+  }
+
+  if ((ITEM_BOOLEAN_FIELDS as readonly string[]).includes(field)) {
+    return normalizeOptionalBoolean(value) ?? null;
+  }
+
+  if ((ITEM_TEXT_FIELDS as readonly string[]).includes(field)) {
+    return normalizeOptionalText(value) ?? null;
+  }
+
+  return null;
+}
+
 export async function updateRemoteItemRecord(
   itemId: number,
-  fields: Partial<
-    Pick<
-      ItemRecord,
-      "base_value" | "description" | "durability" | "gives_light" | "is_consumable" | "is_container" | "level" | "long_description" | "mount_point" | "quality" | "rarity" | "storage_capacity" | "weapon_grip"
-    >
-  >
+  fields: EditableRemoteItemUpdate
 ) {
   const normalizedItemId = await assertItemExists(itemId);
   const vaxServer = getVaxServer();
@@ -4603,56 +4622,10 @@ export async function updateRemoteItemRecord(
 
   const requestBody: Record<string, string | number | boolean | null> = {};
 
-  if ("base_value" in fields) {
-    requestBody.base_value = normalizeOptionalNumber(fields.base_value) ?? null;
-  }
-
-  if ("description" in fields) {
-    requestBody.description = normalizeOptionalText(fields.description) ?? null;
-  }
-
-  if ("durability" in fields) {
-    requestBody.durability = normalizeOptionalNumber(fields.durability) ?? null;
-  }
-
-  if ("gives_light" in fields) {
-    requestBody.gives_light = normalizeOptionalNumber(fields.gives_light) ?? null;
-  }
-
-  if ("is_consumable" in fields) {
-    requestBody.is_consumable = normalizeOptionalBoolean(fields.is_consumable) ?? null;
-  }
-
-  if ("is_container" in fields) {
-    requestBody.is_container = normalizeOptionalBoolean(fields.is_container) ?? null;
-  }
-
-  if ("level" in fields) {
-    requestBody.level = normalizeOptionalNumber(fields.level) ?? null;
-  }
-
-  if ("long_description" in fields) {
-    requestBody.long_description = normalizeOptionalText(fields.long_description) ?? null;
-  }
-
-  if ("mount_point" in fields) {
-    requestBody.mount_point = normalizeOptionalText(fields.mount_point) ?? null;
-  }
-
-  if ("quality" in fields) {
-    requestBody.quality = normalizeOptionalText(fields.quality) ?? null;
-  }
-
-  if ("rarity" in fields) {
-    requestBody.rarity = normalizeOptionalText(fields.rarity) ?? null;
-  }
-
-  if ("storage_capacity" in fields) {
-    requestBody.storage_capacity = normalizeOptionalNumber(fields.storage_capacity) ?? null;
-  }
-
-  if ("weapon_grip" in fields) {
-    requestBody.weapon_grip = normalizeOptionalText(fields.weapon_grip) ?? null;
+  for (const field of ITEM_EDITABLE_FIELDS) {
+    if (field in fields) {
+      requestBody[field] = normalizeRemoteItemField(field, fields[field]);
+    }
   }
 
   if (!Object.keys(requestBody).length) {
