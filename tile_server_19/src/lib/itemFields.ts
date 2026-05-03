@@ -25,7 +25,7 @@ export const ITEM_EDITABLE_FIELDS = [
 export type EditableRemoteItemField = (typeof ITEM_EDITABLE_FIELDS)[number];
 export type EditableRemoteItemUpdate = Partial<Pick<ItemRecord, EditableRemoteItemField>>;
 
-export function pickItemUpdateFields(source: Partial<Record<EditableRemoteItemField, unknown>>) {
+export function pickItemUpdateFields(source: Readonly<Record<string, unknown>>) {
   const nextFields: EditableRemoteItemUpdate = {};
 
   for (const field of ITEM_EDITABLE_FIELDS) {
