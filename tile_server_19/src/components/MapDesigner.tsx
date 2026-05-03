@@ -33,12 +33,9 @@ import {
 import {
   createMapZoneEventAction,
   createMapAction,
-  createMapPathAction,
   exportTerrainMapAction,
-  readMapPathsAction,
   readMapZoneEventsAction,
   resizeMapAction,
-  saveMapPathAction,
   saveMapZoneEventAction,
   saveMapAction
 } from "../actions/mapActions";
@@ -117,6 +114,7 @@ import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { LuaEventDefinitionHelp } from "./LuaEventDefinitionHelp";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
+import { useMapPathsEditor, type MapPathTool } from "./useMapPathsEditor";
 import {
   assetListActionButtonClass,
   assetListCheckerThumbClass,
@@ -153,8 +151,6 @@ import {
 import type {
   MapAssetPlacement,
   MapLayerStack,
-  MapPathPoint,
-  MapPathRecord,
   MapTileOptions,
   SpriteRecord,
   TileCell,
@@ -200,7 +196,6 @@ const BRUSH_OPTION_DEFINITIONS = [
 ] as const;
 const DEFAULT_MAP_BRUSH_OPTIONS = normalizeMapTileOptions(undefined);
 type MapAiTool = (typeof AI_TOOL_OPTIONS)[number]["id"];
-type MapPathTool = "add" | "erase";
 type MapSidebarTab = "ai" | "brushes" | "events" | "paths";
 type MapSpecialTool = "eraser" | "impassible";
 const MAP_PATH_COLORS = [
@@ -963,9 +958,6 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [hasMounted, setHasMounted] = useState(false);
   const [mapQuery, setMapQuery] = useState("");
   const [activeAiTool, setActiveAiTool] = useState<MapAiTool>("mask");
-  const [activeMapPathId, setActiveMapPathId] = useState("");
-  const [activeMapPathNameDraft, setActiveMapPathNameDraft] = useState("");
-  const [activeMapPathTool, setActiveMapPathTool] = useState<MapPathTool>("add");
   const [activeSpecialTool, setActiveSpecialTool] = useState<MapSpecialTool>("impassible");
   const [maskedCells, setMaskedCells] = useState<Set<string>>(() => new Set());
   const [aiSelection, setAiSelection] = useState<MapAiSelection | null>(null);
@@ -994,10 +986,6 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [isResizeDialogOpen, setIsResizeDialogOpen] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
   const [zoneEvents, setZoneEvents] = useState<ZoneEventRecord[]>([]);
-  const [mapPaths, setMapPaths] = useState<MapPathRecord[]>([]);
-  const [mapPathStatus, setMapPathStatus] = useState("");
-  const [isMapPathsLoading, setMapPathsLoading] = useState(false);
-  const [isMapPathSaving, setMapPathSaving] = useState(false);
   const [activeZoneEventName, setActiveZoneEventName] = useState("");
   const [zoneEventDraft, setZoneEventDraft] = useState<LuaEventDraftState>(() => createLuaEventDraft(null));
   const [zoneEventStatus, setZoneEventStatus] = useState("");
@@ -1125,9 +1113,28 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     [activeZoneEventName, zoneEventOptions]
   );
   const activeZoneEvent = activeZoneEventOption?.record ?? null;
-  const activeMapPathIndex = mapPaths.findIndex((pathRecord) => pathRecord.id === activeMapPathId);
-  const activeMapPath = activeMapPathIndex >= 0 ? mapPaths[activeMapPathIndex] : null;
   const isEditingMap = isEditingSelectedMap && Boolean(activeMap);
+  const {
+    activeMapPath,
+    activeMapPathId,
+    activeMapPathNameDraft,
+    activeMapPathTool,
+    applyMapPathCell,
+    handleCreateMapPath,
+    handleSaveActiveMapPathName,
+    isMapPathSaving,
+    isMapPathsLoading,
+    mapPathStatus,
+    mapPaths,
+    setActiveMapPathId,
+    setActiveMapPathNameDraft,
+    setActiveMapPathTool,
+    setMapPathStatus
+  } = useMapPathsEditor({
+    activeMapName: activeMap?.name,
+    activeMapSlug,
+    isPathsTabActive: activeSidebarTab === "paths"
+  });
 
   useEffect(() => {
     setHasMounted(true);
@@ -1194,13 +1201,6 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setIsAiModalOpen(false);
     setIsAiRunningModalOpen(false);
     setZoneEvents([]);
-    setMapPaths([]);
-    setActiveMapPathId("");
-    setActiveMapPathNameDraft("");
-    setActiveMapPathTool("add");
-    setMapPathStatus("");
-    setMapPathsLoading(false);
-    setMapPathSaving(false);
     setActiveZoneEventName("");
     setZoneEventDraft(createLuaEventDraft(null));
     setZoneEventStatus("");
@@ -1211,15 +1211,6 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setBrushEyedropperActive(false);
     lastPlacedPlacementRef.current = null;
   }, [activeMapSlug]);
-
-  useEffect(() => {
-    if (activeMapPath) {
-      setActiveMapPathNameDraft(activeMapPath.name);
-      return;
-    }
-
-    setActiveMapPathNameDraft("");
-  }, [activeMapPath?.id, activeMapPath?.name]);
 
   useEffect(() => {
     if (activeSidebarTab !== "events") {
@@ -1251,42 +1242,6 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       })
       .finally(() => {
         setZoneEventsLoading(false);
-      });
-  }, [activeMap?.name, activeSidebarTab]);
-
-  useEffect(() => {
-    if (activeSidebarTab !== "paths") {
-      return;
-    }
-
-    if (!activeMap?.name) {
-      setMapPaths([]);
-      setActiveMapPathId("");
-      setActiveMapPathNameDraft("");
-      setMapPathStatus("");
-      return;
-    }
-
-    setMapPathsLoading(true);
-    setMapPathStatus("");
-
-    void readMapPathsAction(activeMap.name)
-      .then((nextPaths) => {
-        setMapPaths(nextPaths);
-        setActiveMapPathId((currentPathId) =>
-          nextPaths.some((pathRecord) => pathRecord.id === currentPathId)
-            ? currentPathId
-            : nextPaths[0]?.id ?? ""
-        );
-      })
-      .catch((error: unknown) => {
-        setMapPaths([]);
-        setActiveMapPathId("");
-        setActiveMapPathNameDraft("");
-        setMapPathStatus(error instanceof Error ? error.message : "Could not load map paths.");
-      })
-      .finally(() => {
-        setMapPathsLoading(false);
       });
   }, [activeMap?.name, activeSidebarTab]);
 
@@ -2834,82 +2789,6 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     });
   }
 
-  function getMapPathPointKey(point: MapPathPoint) {
-    return getMapCellKey(point.tileX, point.tileY);
-  }
-
-  function getMapPathPointsAfterErase(points: MapPathPoint[], targetCell: TileCell) {
-    const targetKey = getMapCellKey(targetCell.tileX, targetCell.tileY);
-    const exactIndex = points.findIndex((point) => getMapPathPointKey(point) === targetKey);
-
-    if (exactIndex >= 0) {
-      return points.filter((_, index) => index !== exactIndex);
-    }
-
-    return points;
-  }
-
-  function saveMapPathDraft(pathRecord: MapPathRecord, nextFields: Partial<Pick<MapPathRecord, "name" | "points">>) {
-    if (!activeMap || isMapPathSaving) {
-      return;
-    }
-
-    const nextName = nextFields.name ?? pathRecord.name;
-    const nextPoints = nextFields.points ?? pathRecord.points;
-
-    setMapPathSaving(true);
-    setMapPathStatus("");
-
-    void saveMapPathAction({
-      id: pathRecord.id,
-      mapName: activeMap.name,
-      name: nextName,
-      points: nextPoints
-    })
-      .then((savedPath) => {
-        setMapPaths((currentPaths) =>
-          currentPaths.map((currentPath) => (currentPath.id === savedPath.id ? savedPath : currentPath))
-        );
-        setActiveMapPathId(savedPath.id);
-        setMapPathStatus("Path saved.");
-      })
-      .catch((error: unknown) => {
-        setMapPathStatus(error instanceof Error ? error.message : "Could not save path.");
-      })
-      .finally(() => {
-        setMapPathSaving(false);
-      });
-  }
-
-  function applyMapPathCell(nextCell: TileCell) {
-    if (!activeMapPath || isMapPathSaving) {
-      setMapPathStatus(activeMapPath ? "" : "Create or select a path before editing points.");
-      return;
-    }
-
-    const nextPoints =
-      activeMapPathTool === "add"
-        ? [...activeMapPath.points, { tileX: nextCell.tileX, tileY: nextCell.tileY }]
-        : getMapPathPointsAfterErase(activeMapPath.points, nextCell);
-
-    if (nextPoints === activeMapPath.points) {
-      setMapPathStatus(`No path point at ${nextCell.tileX},${nextCell.tileY}.`);
-      return;
-    }
-
-    setMapPaths((currentPaths) =>
-      currentPaths.map((pathRecord) =>
-        pathRecord.id === activeMapPath.id
-          ? {
-              ...pathRecord,
-              points: nextPoints
-            }
-          : pathRecord
-      )
-    );
-    saveMapPathDraft(activeMapPath, { points: nextPoints });
-  }
-
   function finalizeAiSelection(anchorCell: TileCell, focusCell: TileCell) {
     const nextSelection = getAiSelectionFromCells(anchorCell, focusCell);
 
@@ -3277,39 +3156,6 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         setZoneEventSaving(false);
       }
     })();
-  }
-
-  function handleCreateMapPath() {
-    if (!activeMap || isMapPathSaving) {
-      return;
-    }
-
-    setMapPathSaving(true);
-    setMapPathStatus("");
-
-    void createMapPathAction({
-      mapName: activeMap.name
-    })
-      .then((createdPath) => {
-        setMapPaths((currentPaths) => [...currentPaths, createdPath]);
-        setActiveMapPathId(createdPath.id);
-        setActiveMapPathNameDraft(createdPath.name);
-        setMapPathStatus("Path created.");
-      })
-      .catch((error: unknown) => {
-        setMapPathStatus(error instanceof Error ? error.message : "Could not create path.");
-      })
-      .finally(() => {
-        setMapPathSaving(false);
-      });
-  }
-
-  function handleSaveActiveMapPathName() {
-    if (!activeMapPath) {
-      return;
-    }
-
-    saveMapPathDraft(activeMapPath, { name: activeMapPathNameDraft });
   }
 
   function handleFormatZoneEventLua() {
