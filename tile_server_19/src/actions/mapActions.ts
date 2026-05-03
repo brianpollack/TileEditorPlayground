@@ -6,16 +6,18 @@ import path from "node:path";
 import {
   createZoneEventRecord,
   createMapRecord,
-  createMapPathRecord,
   createUniqueSlug,
   normalizeMapPayload,
-  readMapPathRecords,
   readZoneEventRecords,
   readMapRecords,
-  updateMapPathRecord,
   updateZoneEventRecord,
   writeMapRecord
 } from "../lib/serverStore";
+import {
+  createMapPathRecord,
+  readMapPathRecords,
+  updateMapPathRecord
+} from "../lib/mapPathStore";
 import { normalizeMapDimension } from "../lib/map";
 import { normalizeUnderscoreName } from "../lib/naming";
 import type { MapLayerStack, MapPathPoint, MapSpecialGrid } from "../types";
