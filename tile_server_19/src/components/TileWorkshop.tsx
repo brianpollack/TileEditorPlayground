@@ -1140,7 +1140,7 @@ export function TileWorkshop() {
 
     spriteDraftRef.current = nextSprite;
     setSpriteDraft(nextSprite);
-    void persistSprite(true, false);
+    void persistSprite(true);
   }
 
   async function handleCreateSpriteState(stateName: string) {
