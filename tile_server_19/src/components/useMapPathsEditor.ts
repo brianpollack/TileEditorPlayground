@@ -27,7 +27,6 @@ function getMapPathPointsAfterErase(points: MapPathPoint[], targetCell: TileCell
 }
 
 export function useMapPathsEditor(input: {
-  activeMapName: string | undefined;
   activeMapSlug: string;
   isPathsTabActive: boolean;
 }) {
@@ -68,7 +67,7 @@ export function useMapPathsEditor(input: {
       return;
     }
 
-    if (!input.activeMapName) {
+    if (!input.activeMapSlug) {
       setMapPaths([]);
       setActiveMapPathId("");
       setActiveMapPathNameDraft("");
@@ -79,7 +78,7 @@ export function useMapPathsEditor(input: {
     setMapPathsLoading(true);
     setMapPathStatus("");
 
-    void readMapPathsAction(input.activeMapName)
+    void readMapPathsAction(input.activeMapSlug)
       .then((nextPaths) => {
         setMapPaths(nextPaths);
         setActiveMapPathId((currentPathId) =>
@@ -97,13 +96,13 @@ export function useMapPathsEditor(input: {
       .finally(() => {
         setMapPathsLoading(false);
       });
-  }, [input.activeMapName, input.isPathsTabActive]);
+  }, [input.activeMapSlug, input.isPathsTabActive]);
 
   function saveMapPathDraft(
     pathRecord: MapPathRecord,
     nextFields: Partial<Pick<MapPathRecord, "name" | "points">>
   ) {
-    if (!input.activeMapName || isMapPathSaving) {
+    if (!input.activeMapSlug || isMapPathSaving) {
       return;
     }
 
@@ -115,7 +114,7 @@ export function useMapPathsEditor(input: {
 
     void saveMapPathAction({
       id: pathRecord.id,
-      mapName: input.activeMapName,
+      mapSlug: input.activeMapSlug,
       name: nextName,
       points: nextPoints
     })
@@ -164,7 +163,7 @@ export function useMapPathsEditor(input: {
   }
 
   function handleCreateMapPath() {
-    if (!input.activeMapName || isMapPathSaving) {
+    if (!input.activeMapSlug || isMapPathSaving) {
       return;
     }
 
@@ -172,7 +171,7 @@ export function useMapPathsEditor(input: {
     setMapPathStatus("");
 
     void createMapPathAction({
-      mapName: input.activeMapName
+      mapSlug: input.activeMapSlug
     })
       .then((createdPath) => {
         setMapPaths((currentPaths) => [...currentPaths, createdPath]);

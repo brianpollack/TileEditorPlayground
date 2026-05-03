@@ -8,9 +8,15 @@ interface StoredMapPathRow {
   id: string;
   inserted_at: Date | string;
   map_name: string;
+  map_slug?: string | null;
   name: string;
   points: unknown;
   updated_at: Date | string;
+}
+
+interface StoredMapIdentityRow {
+  name: string;
+  slug: string;
 }
 
 function serializeStoredTimestamp(value: Date | string | undefined) {
@@ -48,11 +54,11 @@ function normalizeOptionalInteger(value: unknown, minimum?: number, maximum?: nu
   return numericValue;
 }
 
-function normalizeMapName(value: unknown) {
+function normalizeMapSlug(value: unknown) {
   const normalizedName = normalizeOptionalText(value);
 
   if (!normalizedName) {
-    throw new Error("Map name is required.");
+    throw new Error("Map slug is required.");
   }
 
   return normalizedName;
@@ -110,6 +116,7 @@ function mapRowToMapPathRecord(row: StoredMapPathRow): MapPathRecord {
     id: row.id,
     inserted_at: serializeStoredTimestamp(row.inserted_at),
     map_name: typeof row.map_name === "string" ? row.map_name.trim() : "",
+    map_slug: typeof row.map_slug === "string" ? row.map_slug.trim() : "",
     name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : `path_${row.id}`,
     points: normalizeMapPathPoints(row.points),
     updated_at: serializeStoredTimestamp(row.updated_at)
@@ -128,12 +135,28 @@ async function ensureMapPathsTableExists() {
   return db;
 }
 
-export async function readMapPathRecords(mapName: string): Promise<MapPathRecord[]> {
-  const normalizedMapName = normalizeMapName(mapName);
+async function readMapIdentity(db: Awaited<ReturnType<typeof getDatabase>>, mapSlug: string) {
+  const mapRow = await db<StoredMapIdentityRow>("map_maps")
+    .select("name", "slug")
+    .first()
+    .where({ deleted: false, slug: mapSlug });
+
+  if (!mapRow) {
+    throw new Error("Map not found.");
+  }
+
+  return {
+    name: mapRow.name,
+    slug: mapRow.slug
+  };
+}
+
+export async function readMapPathRecords(mapSlug: string): Promise<MapPathRecord[]> {
+  const normalizedMapSlug = normalizeMapSlug(mapSlug);
   const db = await ensureMapPathsTableExists();
   const rows = await db<StoredMapPathRow>("map_paths")
     .select("*")
-    .where({ map_name: normalizedMapName })
+    .where({ map_slug: normalizedMapSlug })
     .orderBy([
       { column: "inserted_at", order: "asc" },
       { column: "name", order: "asc" },
@@ -143,12 +166,13 @@ export async function readMapPathRecords(mapName: string): Promise<MapPathRecord
   return rows.map(mapRowToMapPathRecord);
 }
 
-export async function createMapPathRecord(mapName: string, requestedName?: string) {
-  const normalizedMapName = normalizeMapName(mapName);
+export async function createMapPathRecord(mapSlug: string, requestedName?: string) {
+  const normalizedMapSlug = normalizeMapSlug(mapSlug);
   const db = await ensureMapPathsTableExists();
+  const mapIdentity = await readMapIdentity(db, normalizedMapSlug);
   const existingPaths = await db<StoredMapPathRow>("map_paths")
     .select("name")
-    .where({ map_name: normalizedMapName });
+    .where({ map_slug: mapIdentity.slug });
   const takenNames = new Set(existingPaths.map((row) => row.name.trim()).filter(Boolean));
   const baseName = normalizeOptionalText(requestedName) ?? "new_path";
   let nextName = baseName;
@@ -164,7 +188,8 @@ export async function createMapPathRecord(mapName: string, requestedName?: strin
     .insert({
       id: randomUUID(),
       inserted_at: timestamp,
-      map_name: normalizedMapName,
+      map_name: mapIdentity.name,
+      map_slug: mapIdentity.slug,
       name: nextName,
       points: JSON.stringify([]),
       updated_at: timestamp
@@ -180,28 +205,30 @@ export async function createMapPathRecord(mapName: string, requestedName?: strin
 
 export async function updateMapPathRecord(input: {
   id: string;
-  mapName: string;
+  mapSlug: string;
   name: string;
   points: MapPathPoint[];
 }) {
-  const normalizedMapName = normalizeMapName(input.mapName);
+  const normalizedMapSlug = normalizeMapSlug(input.mapSlug);
   const pathId = normalizeMapPathId(input.id);
   const pathName = normalizeMapPathName(input.name);
   const points = normalizeMapPathPoints(input.points);
   const db = await ensureMapPathsTableExists();
+  const mapIdentity = await readMapIdentity(db, normalizedMapSlug);
   const conflictingPath = await db<StoredMapPathRow>("map_paths")
     .select("id")
     .first()
-    .where({ map_name: normalizedMapName, name: pathName })
+    .where({ map_slug: mapIdentity.slug, name: pathName })
     .whereNot({ id: pathId });
 
   if (conflictingPath) {
-    throw new Error(`Path ${pathName} already exists for ${normalizedMapName}.`);
+    throw new Error(`Path ${pathName} already exists for ${mapIdentity.name}.`);
   }
 
   const [updatedPath] = await db<StoredMapPathRow>("map_paths")
-    .where({ id: pathId, map_name: normalizedMapName })
+    .where({ id: pathId, map_slug: mapIdentity.slug })
     .update({
+      map_name: mapIdentity.name,
       name: pathName,
       points: JSON.stringify(points),
       updated_at: new Date()

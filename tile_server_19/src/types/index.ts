@@ -148,6 +148,7 @@ export interface MapPathRecord {
   id: string;
   inserted_at: string;
   map_name: string;
+  map_slug: string;
   name: string;
   points: MapPathPoint[];
   updated_at: string;

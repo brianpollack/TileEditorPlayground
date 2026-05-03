@@ -79,6 +79,32 @@ const migrations: DatabaseMigration[] = [
         });
       }
     }
+  },
+  {
+    id: "20260503_03_add_map_path_slugs",
+    async run(db) {
+      const hasMapPathSlugColumn = await db.schema.hasColumn(MAP_PATHS_TABLE_NAME, "map_slug");
+
+      if (!hasMapPathSlugColumn) {
+        await db.schema.alterTable(MAP_PATHS_TABLE_NAME, (table) => {
+          table.text("map_slug");
+        });
+      }
+
+      await db.raw(`
+        update map_paths
+        set map_slug = map_maps.slug
+        from map_maps
+        where map_paths.map_name = map_maps.name
+          and (map_paths.map_slug is null or map_paths.map_slug = '')
+      `);
+      await db.raw(
+        "create index if not exists map_paths_map_slug_updated_idx on map_paths (map_slug, updated_at desc)"
+      );
+      await db.raw(
+        "create unique index if not exists map_paths_map_slug_name_unique_idx on map_paths (map_slug, name) where map_slug is not null"
+      );
+    }
   }
 ];
 

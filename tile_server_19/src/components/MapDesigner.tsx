@@ -1131,7 +1131,6 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setActiveMapPathTool,
     setMapPathStatus
   } = useMapPathsEditor({
-    activeMapName: activeMap?.name,
     activeMapSlug,
     isPathsTabActive: activeSidebarTab === "paths"
   });

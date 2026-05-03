@@ -150,20 +150,20 @@ export async function readMapZoneEventsAction(mapName: string) {
   return readZoneEventRecords(mapName);
 }
 
-export async function readMapPathsAction(mapName: string) {
-  return readMapPathRecords(mapName);
+export async function readMapPathsAction(mapSlug: string) {
+  return readMapPathRecords(mapSlug);
 }
 
 export async function createMapPathAction(input: {
-  mapName: string;
+  mapSlug: string;
   name?: string;
 }) {
-  return createMapPathRecord(input.mapName, input.name);
+  return createMapPathRecord(input.mapSlug, input.name);
 }
 
 export async function saveMapPathAction(input: {
   id: string;
-  mapName: string;
+  mapSlug: string;
   name: string;
   points: MapPathPoint[];
 }) {
