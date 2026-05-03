@@ -1,8 +1,7 @@
 "use client";
 
 import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
-import { useEffect, useMemo, useState } from "react";
-import type { Ace } from "ace-builds";
+import { useCallback, useMemo } from "react";
 import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-lua";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
@@ -13,30 +12,19 @@ import {
   saveSpriteEventAction
 } from "../actions/spriteEventActions";
 import { useStudio } from "../app/StudioContext";
-import {
-  createLuaErrorAnnotations,
-  formatLuaScript,
-  openLuaScriptingGuide,
-  validateLuaScript
-} from "../lib/luaEditor";
+import { openLuaScriptingGuide } from "../lib/luaEditor";
 import {
   useLuaAceSupport,
   useLuaEventDefinitions,
   type LuaEventDefinition
 } from "../lib/luaApiHelper";
-import {
-  createLuaEventDraft,
-  mergeLuaEventOptions,
-  sortLuaEvents,
-  type LuaEventDraftState,
-  type LuaEventOption
-} from "../lib/luaEventHelpers";
 import type { SpriteEventRecord } from "../types";
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { LuaEventDefinitionHelp } from "./LuaEventDefinitionHelp";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
+import { useLuaEventEditor } from "./useLuaEventEditor";
 import {
   assetListMetaClass,
   assetListRowClass,
@@ -68,15 +56,6 @@ export function SpriteEventsManager() {
     eventDefinitions,
     helperWarning: eventDefinitionWarning
   } = useLuaEventDefinitions("sprite");
-  const [events, setEvents] = useState<SpriteEventRecord[]>([]);
-  const [activeEventName, setActiveEventName] = useState("");
-  const [draft, setDraft] = useState<LuaEventDraftState>(() => createLuaEventDraft(null));
-  const [isLoadingEvents, setLoadingEvents] = useState(false);
-  const [isSavingEvent, setSavingEvent] = useState(false);
-  const [isFormattingLua, setFormattingLua] = useState(false);
-  const [luaAnnotations, setLuaAnnotations] = useState<Ace.Annotation[]>([]);
-  const [status, setStatus] = useState("");
-
   const spriteEventDefinitions = useMemo(() => {
     const eventNames = new Set(eventDefinitions.map((eventDefinition) => eventDefinition.eventName));
 
@@ -85,147 +64,75 @@ export function SpriteEventsManager() {
       ...FALLBACK_SPRITE_EVENTS.filter((eventDefinition) => !eventNames.has(eventDefinition.eventName))
     ];
   }, [eventDefinitions]);
-  const eventOptions = useMemo<LuaEventOption<SpriteEventRecord>[]>(
-    () => mergeLuaEventOptions(spriteEventDefinitions, events, (eventRecord) => eventRecord.event_id),
-    [events, spriteEventDefinitions]
-  );
-  const activeEventOption = useMemo(
-    () => eventOptions.find((eventOption) => eventOption.eventName === activeEventName) ?? null,
-    [activeEventName, eventOptions]
-  );
-  const activeEvent = activeEventOption?.record ?? null;
-
-  useEffect(() => {
-    setDraft(createLuaEventDraft(activeEvent));
-    setLuaAnnotations([]);
-  }, [activeEvent?.id, activeEventOption?.eventName]);
-
-  useEffect(() => {
-    setActiveEventName((currentEventName) =>
-      eventOptions.some((eventOption) => eventOption.eventName === currentEventName)
-        ? currentEventName
-        : eventOptions[0]?.eventName ?? ""
-    );
-  }, [eventOptions]);
-
-  useEffect(() => {
+  const spriteSubjectKey = activeSprite ? `${activeSprite.path}/${activeSprite.filename}` : "";
+  const getSpriteEventName = useCallback((eventRecord: SpriteEventRecord) => eventRecord.event_id, []);
+  const readSpriteEvents = useCallback(() => {
     if (!activeSprite) {
-      setEvents([]);
-      setActiveEventName("");
-      setDraft(createLuaEventDraft(null));
-      setLuaAnnotations([]);
-      setStatus("");
-      return;
+      return Promise.resolve([]);
     }
 
-    setLoadingEvents(true);
-    setStatus("");
-
-    void readSpriteEventsAction({
+    return readSpriteEventsAction({
       filename: activeSprite.filename,
       path: activeSprite.path
-    })
-      .then((nextEvents) => {
-        setEvents(sortLuaEvents(nextEvents, (eventRecord) => eventRecord.event_id));
-      })
-      .catch((error: unknown) => {
-        setEvents([]);
-        setActiveEventName("");
-        setDraft(createLuaEventDraft(null));
-        setLuaAnnotations([]);
-        setStatus(error instanceof Error ? error.message : "Could not load sprite events.");
-      })
-      .finally(() => {
-        setLoadingEvents(false);
-      });
-  }, [activeSprite?.filename, activeSprite?.path]);
-
-  function handleSaveEvent() {
-    if (!activeSprite || !activeEventOption || isSavingEvent) {
-      return;
-    }
-
-    const validationResult = validateLuaScript(draft.luaScript);
-
-    if (!validationResult.ok) {
-      setLuaAnnotations(createLuaErrorAnnotations(validationResult));
-      setStatus(validationResult.error.message);
-      return;
-    }
-
-    setLuaAnnotations([]);
-    setSavingEvent(true);
-    setStatus("");
-
-    void (async () => {
-      try {
-        const createdOrExistingEvent =
-          activeEvent ??
-          (await createSpriteEventAction({
-            eventId: activeEventOption.eventName,
-            filename: activeSprite.filename,
-            path: activeSprite.path
-          }));
-        const savedEvent =
-          createdOrExistingEvent.enabled === draft.enabled &&
-          createdOrExistingEvent.lua_script === draft.luaScript
-            ? createdOrExistingEvent
-            : await saveSpriteEventAction({
-                enabled: draft.enabled,
-                eventId: activeEventOption.eventName,
-                filename: activeSprite.filename,
-                id: createdOrExistingEvent.id,
-                luaScript: draft.luaScript,
-                path: activeSprite.path
-              });
-
-        setEvents((currentEvents) =>
-          sortLuaEvents(
-            [
-              ...currentEvents.filter((eventRecord) => eventRecord.id !== savedEvent.id),
-              savedEvent
-            ],
-            (eventRecord) => eventRecord.event_id
-          )
-        );
-        setDraft(createLuaEventDraft(savedEvent));
-        setStatus("Event saved.");
-      } catch (error: unknown) {
-        setStatus(error instanceof Error ? error.message : "Could not save sprite event.");
-      } finally {
-        setSavingEvent(false);
+    });
+  }, [activeSprite]);
+  const createSpriteEvent = useCallback(
+    (eventName: string) => {
+      if (!activeSprite) {
+        throw new Error("Choose a sprite before editing events.");
       }
-    })();
-  }
 
-  function handleFormatLua() {
-    const validationResult = validateLuaScript(draft.luaScript);
-
-    if (!validationResult.ok) {
-      setLuaAnnotations(createLuaErrorAnnotations(validationResult));
-      setStatus(validationResult.error.message);
-      return;
-    }
-
-    setFormattingLua(true);
-    setLuaAnnotations([]);
-    setStatus("");
-
-    void formatLuaScript(draft.luaScript)
-      .then((formattedScript) => {
-        setDraft((currentDraft) => ({
-          ...currentDraft,
-          luaScript: formattedScript
-        }));
-        setStatus("Lua formatted.");
-      })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : "Could not format Lua script.");
-      })
-      .finally(() => {
-        setFormattingLua(false);
+      return createSpriteEventAction({
+        eventId: eventName,
+        filename: activeSprite.filename,
+        path: activeSprite.path
       });
-  }
+    },
+    [activeSprite]
+  );
+  const saveSpriteEvent = useCallback(
+    (eventRecord: SpriteEventRecord, eventName: string, draftState: { enabled: boolean; luaScript: string }) => {
+      if (!activeSprite) {
+        throw new Error("Choose a sprite before editing events.");
+      }
+
+      return saveSpriteEventAction({
+        enabled: draftState.enabled,
+        eventId: eventName,
+        filename: activeSprite.filename,
+        id: eventRecord.id,
+        luaScript: draftState.luaScript,
+        path: activeSprite.path
+      });
+    },
+    [activeSprite]
+  );
+  const {
+    activeEventOption,
+    activeEventName,
+    draft,
+    eventOptions,
+    handleFormatLua,
+    handleSaveEvent,
+    isFormattingLua,
+    isLoadingEvents,
+    isSavingEvent,
+    luaAnnotations,
+    setActiveEventName,
+    setDraft,
+    setLuaAnnotations,
+    setStatus,
+    status
+  } = useLuaEventEditor({
+    createEvent: createSpriteEvent,
+    eventDefinitions: spriteEventDefinitions,
+    getEventName: getSpriteEventName,
+    loadErrorMessage: "Could not load sprite events.",
+    readEvents: readSpriteEvents,
+    saveErrorMessage: "Could not save sprite event.",
+    saveEvent: saveSpriteEvent,
+    subjectKey: spriteSubjectKey
+  });
 
   return (
     <div className="min-h-0">

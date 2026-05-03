@@ -1,8 +1,7 @@
 "use client";
 
 import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
-import { useEffect, useMemo, useState } from "react";
-import type { Ace } from "ace-builds";
+import { useCallback } from "react";
 import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-lua";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
@@ -13,29 +12,18 @@ import {
   saveCharacterEventAction
 } from "../actions/characterEventActions";
 import { useStudio } from "../app/StudioContext";
-import {
-  createLuaErrorAnnotations,
-  formatLuaScript,
-  openLuaScriptingGuide,
-  validateLuaScript
-} from "../lib/luaEditor";
+import { openLuaScriptingGuide } from "../lib/luaEditor";
 import {
   useLuaAceSupport,
   useLuaEventDefinitions
 } from "../lib/luaApiHelper";
-import {
-  createLuaEventDraft,
-  mergeLuaEventOptions,
-  sortLuaEvents,
-  type LuaEventDraftState,
-  type LuaEventOption
-} from "../lib/luaEventHelpers";
 import type { CharacterEventRecord } from "../types";
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { LuaEventDefinitionHelp } from "./LuaEventDefinitionHelp";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
+import { useLuaEventEditor } from "./useLuaEventEditor";
 import {
   assetListMetaClass,
   assetListRowClass,
@@ -59,151 +47,60 @@ export function CharacterEventsManager() {
     eventDefinitions,
     helperWarning: eventDefinitionWarning
   } = useLuaEventDefinitions("character");
-  const [events, setEvents] = useState<CharacterEventRecord[]>([]);
-  const [activeEventName, setActiveEventName] = useState("");
-  const [draft, setDraft] = useState<LuaEventDraftState>(() => createLuaEventDraft(null));
-  const [isLoadingEvents, setLoadingEvents] = useState(false);
-  const [isSavingEvent, setSavingEvent] = useState(false);
-  const [isFormattingLua, setFormattingLua] = useState(false);
-  const [luaAnnotations, setLuaAnnotations] = useState<Ace.Annotation[]>([]);
-  const [status, setStatus] = useState("");
-
-  const eventOptions = useMemo<LuaEventOption<CharacterEventRecord>[]>(
-    () => mergeLuaEventOptions(eventDefinitions, events, (eventRecord) => eventRecord.character_event),
-    [eventDefinitions, events]
+  const characterSlug = activePersonality?.character_slug ?? "";
+  const getCharacterEventName = useCallback(
+    (eventRecord: CharacterEventRecord) => eventRecord.character_event,
+    []
   );
-  const activeEventOption = useMemo(
-    () => eventOptions.find((eventOption) => eventOption.eventName === activeEventName) ?? null,
-    [activeEventName, eventOptions]
+  const readCharacterEvents = useCallback(
+    () => readCharacterEventsAction(characterSlug),
+    [characterSlug]
   );
-  const activeEvent = activeEventOption?.record ?? null;
-
-  useEffect(() => {
-    setDraft(createLuaEventDraft(activeEvent));
-    setLuaAnnotations([]);
-  }, [activeEvent?.id, activeEventOption?.eventName]);
-
-  useEffect(() => {
-    setActiveEventName((currentEventName) =>
-      eventOptions.some((eventOption) => eventOption.eventName === currentEventName)
-        ? currentEventName
-        : eventOptions[0]?.eventName ?? ""
-    );
-  }, [eventOptions]);
-
-  useEffect(() => {
-    if (!activePersonality?.character_slug) {
-      setEvents([]);
-      setActiveEventName("");
-      setDraft(createLuaEventDraft(null));
-      setLuaAnnotations([]);
-      setStatus("");
-      return;
-    }
-
-    setLoadingEvents(true);
-    setStatus("");
-
-    void readCharacterEventsAction(activePersonality.character_slug)
-      .then((nextEvents) => {
-        setEvents(sortLuaEvents(nextEvents, (eventRecord) => eventRecord.character_event));
-      })
-      .catch((error: unknown) => {
-        setEvents([]);
-        setActiveEventName("");
-        setDraft(createLuaEventDraft(null));
-        setLuaAnnotations([]);
-        setStatus(error instanceof Error ? error.message : "Could not load character events.");
-      })
-      .finally(() => {
-        setLoadingEvents(false);
-      });
-  }, [activePersonality?.character_slug]);
-
-  function handleSaveEvent() {
-    if (!activePersonality?.character_slug || !activeEventOption || isSavingEvent) {
-      return;
-    }
-
-    const validationResult = validateLuaScript(draft.luaScript);
-
-    if (!validationResult.ok) {
-      setLuaAnnotations(createLuaErrorAnnotations(validationResult));
-      setStatus(validationResult.error.message);
-      return;
-    }
-
-    setLuaAnnotations([]);
-    setSavingEvent(true);
-    setStatus("");
-
-    void (async () => {
-      try {
-        const createdOrExistingEvent =
-          activeEvent ??
-          (await createCharacterEventAction({
-            characterEvent: activeEventOption.eventName,
-            characterName: activePersonality.character_slug
-          }));
-        const savedEvent =
-          createdOrExistingEvent.enabled === draft.enabled &&
-          createdOrExistingEvent.lua_script === draft.luaScript
-            ? createdOrExistingEvent
-            : await saveCharacterEventAction({
-                characterEvent: activeEventOption.eventName,
-                characterName: activePersonality.character_slug,
-                enabled: draft.enabled,
-                id: createdOrExistingEvent.id,
-                luaScript: draft.luaScript
-              });
-
-        setEvents((currentEvents) =>
-          sortLuaEvents(
-            [
-              ...currentEvents.filter((eventRecord) => eventRecord.id !== savedEvent.id),
-              savedEvent
-            ],
-            (eventRecord) => eventRecord.character_event
-          )
-        );
-        setDraft(createLuaEventDraft(savedEvent));
-        setStatus("Event saved.");
-      } catch (error: unknown) {
-        setStatus(error instanceof Error ? error.message : "Could not save character event.");
-      } finally {
-        setSavingEvent(false);
-      }
-    })();
-  }
-
-  function handleFormatLua() {
-    const validationResult = validateLuaScript(draft.luaScript);
-
-    if (!validationResult.ok) {
-      setLuaAnnotations(createLuaErrorAnnotations(validationResult));
-      setStatus(validationResult.error.message);
-      return;
-    }
-
-    setFormattingLua(true);
-    setLuaAnnotations([]);
-    setStatus("");
-
-    void formatLuaScript(draft.luaScript)
-      .then((formattedScript) => {
-        setDraft((currentDraft) => ({
-          ...currentDraft,
-          luaScript: formattedScript
-        }));
-        setStatus("Lua formatted.");
-      })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : "Could not format Lua script.");
-      })
-      .finally(() => {
-        setFormattingLua(false);
-      });
-  }
+  const createCharacterEvent = useCallback(
+    (eventName: string) =>
+      createCharacterEventAction({
+        characterEvent: eventName,
+        characterName: characterSlug
+      }),
+    [characterSlug]
+  );
+  const saveCharacterEvent = useCallback(
+    (eventRecord: CharacterEventRecord, eventName: string, draftState: { enabled: boolean; luaScript: string }) =>
+      saveCharacterEventAction({
+        characterEvent: eventName,
+        characterName: characterSlug,
+        enabled: draftState.enabled,
+        id: eventRecord.id,
+        luaScript: draftState.luaScript
+      }),
+    [characterSlug]
+  );
+  const {
+    activeEventOption,
+    activeEventName,
+    draft,
+    eventOptions,
+    handleFormatLua,
+    handleSaveEvent,
+    isFormattingLua,
+    isLoadingEvents,
+    isSavingEvent,
+    luaAnnotations,
+    setActiveEventName,
+    setDraft,
+    setLuaAnnotations,
+    setStatus,
+    status
+  } = useLuaEventEditor({
+    createEvent: createCharacterEvent,
+    eventDefinitions,
+    getEventName: getCharacterEventName,
+    loadErrorMessage: "Could not load character events.",
+    readEvents: readCharacterEvents,
+    saveErrorMessage: "Could not save character event.",
+    saveEvent: saveCharacterEvent,
+    subjectKey: characterSlug
+  });
 
   return (
     <div className="min-h-0">
