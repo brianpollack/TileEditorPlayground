@@ -112,6 +112,10 @@ import { actionButtonClass } from "./buttonStyles";
 import { CheckerboardFrame } from "./CheckerboardFrame";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { LuaEventDefinitionHelp } from "./LuaEventDefinitionHelp";
+import {
+  ensureCanvasSize,
+  getRenderedTilePlacementCanvas
+} from "./mapCanvasRenderer";
 import { Panel } from "./Panel";
 import { SectionEyebrow } from "./SectionEyebrow";
 import { useMapPathsEditor, type MapPathTool } from "./useMapPathsEditor";
@@ -600,16 +604,6 @@ const MapWorkspace = memo(function MapWorkspace({
     </div>
   );
 });
-
-function ensureCanvasSize(canvas: HTMLCanvasElement, width: number, height: number) {
-  if (canvas.width !== width) {
-    canvas.width = width;
-  }
-
-  if (canvas.height !== height) {
-    canvas.height = height;
-  }
-}
 
 function drawPreviewBackground(context: CanvasRenderingContext2D, width: number, height: number) {
   context.fillStyle = "rgba(255,253,248,0.96)";
@@ -1614,80 +1608,23 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
       const sourceKey = tileImage ? renderSlotSource : `fallback:${tileRecord.name}`;
       const variantKey = `${placement.tileSlug}:${placement.slotNum}:${sourceKey}:${serializeMapTileOptionsKey(placement.options)}`;
-      let variantCanvas = renderedPlacementCanvasCacheRef.current.get(variantKey) ?? null;
+      const variantCanvas = getRenderedTilePlacementCanvas({
+        drawFallback: (baseContext) => {
+          drawMapTileFallback(baseContext, tileRecord, 0, 0);
+        },
+        fallbackCanvasKey: `fallback:${tileRecord.slug}:${tileRecord.name}`,
+        fallbackTileCanvasCache: fallbackTileCanvasCacheRef.current,
+        getRotationDegrees: getPlacementRotationDegrees,
+        options: placement.options,
+        renderedPlacementCanvasCache: renderedPlacementCanvasCacheRef.current,
+        sourceKey,
+        tileImage: tileImage ?? null,
+        tileSize: TILE_SIZE,
+        variantKey
+      });
 
       if (!variantCanvas) {
-        const baseCanvasKey = tileImage ? `image:${sourceKey}` : `fallback:${tileRecord.slug}:${tileRecord.name}`;
-        let baseCanvas = fallbackTileCanvasCacheRef.current.get(baseCanvasKey) ?? null;
-
-        if (!baseCanvas) {
-          baseCanvas = document.createElement("canvas");
-          ensureCanvasSize(baseCanvas, TILE_SIZE, TILE_SIZE);
-          const baseContext = baseCanvas.getContext("2d");
-
-          if (!baseContext) {
-            return;
-          }
-
-          baseContext.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
-
-          if (tileImage) {
-            baseContext.drawImage(tileImage, 0, 0, TILE_SIZE, TILE_SIZE);
-          } else {
-            drawMapTileFallback(baseContext, tileRecord, 0, 0);
-          }
-
-          fallbackTileCanvasCacheRef.current.set(baseCanvasKey, baseCanvas);
-        }
-
-        variantCanvas = document.createElement("canvas");
-        ensureCanvasSize(variantCanvas, TILE_SIZE, TILE_SIZE);
-        const variantContext = variantCanvas.getContext("2d");
-
-        if (!variantContext) {
-          return;
-        }
-
-        variantContext.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
-        variantContext.save();
-        variantContext.translate(TILE_SIZE / 2, TILE_SIZE / 2);
-        variantContext.scale(
-          placement.options.flipHorizontal ? -1 : 1,
-          placement.options.flipVertical ? -1 : 1
-        );
-        variantContext.rotate((getPlacementRotationDegrees(placement.options) * Math.PI) / 180);
-        variantContext.drawImage(baseCanvas, -TILE_SIZE / 2, -TILE_SIZE / 2, TILE_SIZE, TILE_SIZE);
-        variantContext.restore();
-
-        if (placement.options.multiply) {
-          const multipliedCanvas = document.createElement("canvas");
-          ensureCanvasSize(multipliedCanvas, TILE_SIZE, TILE_SIZE);
-          const multipliedContext = multipliedCanvas.getContext("2d");
-
-          if (!multipliedContext) {
-            return;
-          }
-
-          multipliedContext.drawImage(variantCanvas, 0, 0);
-          multipliedContext.globalCompositeOperation = "multiply";
-          multipliedContext.fillStyle = placement.options.colorValue;
-          multipliedContext.fillRect(0, 0, TILE_SIZE, TILE_SIZE);
-          multipliedContext.globalCompositeOperation = "destination-in";
-          multipliedContext.drawImage(variantCanvas, 0, 0);
-          variantContext.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
-          variantContext.drawImage(multipliedCanvas, 0, 0);
-        }
-
-        if (placement.options.color) {
-          variantContext.save();
-          variantContext.globalAlpha = placement.options.multiply ? 0.35 : 1;
-          variantContext.globalCompositeOperation = "source-atop";
-          variantContext.fillStyle = placement.options.colorValue;
-          variantContext.fillRect(0, 0, TILE_SIZE, TILE_SIZE);
-          variantContext.restore();
-        }
-
-        renderedPlacementCanvasCacheRef.current.set(variantKey, variantCanvas);
+        return;
       }
 
       context.drawImage(variantCanvas, drawX, drawY, drawWidth, drawHeight);
