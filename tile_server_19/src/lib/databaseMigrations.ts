@@ -2,7 +2,7 @@ import type { Knex } from "knex";
 
 const MAPS_TABLE_NAME = "map_maps";
 const MAP_PATHS_TABLE_NAME = "map_paths";
-const MIGRATIONS_TABLE_NAME = "schema_migrations";
+const MIGRATIONS_TABLE_NAME = "tile_server_schema_migrations";
 const PERSONALITIES_TABLE_NAME = "personalities";
 
 type DatabaseMigration = {
