@@ -56,6 +56,8 @@ export function SpriteEventsManager() {
     eventDefinitions,
     helperWarning: eventDefinitionWarning
   } = useLuaEventDefinitions("sprite");
+  const activeSpriteFilename = activeSprite?.filename ?? "";
+  const activeSpritePath = activeSprite?.path ?? "";
   const spriteEventDefinitions = useMemo(() => {
     const eventNames = new Set(eventDefinitions.map((eventDefinition) => eventDefinition.eventName));
 
@@ -64,48 +66,48 @@ export function SpriteEventsManager() {
       ...FALLBACK_SPRITE_EVENTS.filter((eventDefinition) => !eventNames.has(eventDefinition.eventName))
     ];
   }, [eventDefinitions]);
-  const spriteSubjectKey = activeSprite ? `${activeSprite.path}/${activeSprite.filename}` : "";
+  const spriteSubjectKey = activeSprite ? `${activeSpritePath}/${activeSpriteFilename}` : "";
   const getSpriteEventName = useCallback((eventRecord: SpriteEventRecord) => eventRecord.event_id, []);
   const readSpriteEvents = useCallback(() => {
-    if (!activeSprite) {
+    if (!activeSpritePath || !activeSpriteFilename) {
       return Promise.resolve([]);
     }
 
     return readSpriteEventsAction({
-      filename: activeSprite.filename,
-      path: activeSprite.path
+      filename: activeSpriteFilename,
+      path: activeSpritePath
     });
-  }, [activeSprite]);
+  }, [activeSpriteFilename, activeSpritePath]);
   const createSpriteEvent = useCallback(
     (eventName: string) => {
-      if (!activeSprite) {
+      if (!activeSpritePath || !activeSpriteFilename) {
         throw new Error("Choose a sprite before editing events.");
       }
 
       return createSpriteEventAction({
         eventId: eventName,
-        filename: activeSprite.filename,
-        path: activeSprite.path
+        filename: activeSpriteFilename,
+        path: activeSpritePath
       });
     },
-    [activeSprite]
+    [activeSpriteFilename, activeSpritePath]
   );
   const saveSpriteEvent = useCallback(
     (eventRecord: SpriteEventRecord, eventName: string, draftState: { enabled: boolean; luaScript: string }) => {
-      if (!activeSprite) {
+      if (!activeSpritePath || !activeSpriteFilename) {
         throw new Error("Choose a sprite before editing events.");
       }
 
       return saveSpriteEventAction({
         enabled: draftState.enabled,
         eventId: eventName,
-        filename: activeSprite.filename,
+        filename: activeSpriteFilename,
         id: eventRecord.id,
         luaScript: draftState.luaScript,
-        path: activeSprite.path
+        path: activeSpritePath
       });
     },
-    [activeSprite]
+    [activeSpriteFilename, activeSpritePath]
   );
   const {
     activeEventOption,
