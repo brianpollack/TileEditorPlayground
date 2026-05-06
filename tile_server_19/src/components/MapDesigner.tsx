@@ -166,6 +166,7 @@ import type {
 const MAP_PREVIEW_SIZE = 128;
 const MAP_MINI_MAP_MAX_SIZE = 512;
 const MAP_COORDINATE_LABEL_DELAY_MS = 3000;
+const MAP_COORDINATE_LABEL_MIN_CSS_PX = 12;
 const AI_PREVIEW_SIZE = 1024;
 const VISIBILITY_OPTIONS = [
   { label: "Hide", value: 0 },
@@ -2162,18 +2163,28 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         return;
       }
 
+      const visibleCanvasBounds = hoverCanvas.getBoundingClientRect();
+      const visibleScale = visibleCanvasBounds.width > 0 && hoverCanvas.width > 0
+        ? visibleCanvasBounds.width / hoverCanvas.width
+        : 1;
+      const labelFontSize = Math.max(
+        MAP_COORDINATE_LABEL_MIN_CSS_PX,
+        Math.ceil(MAP_COORDINATE_LABEL_MIN_CSS_PX / Math.max(visibleScale, 0.01))
+      );
+      const labelPaddingX = Math.max(8, Math.ceil(labelFontSize * 0.55));
+      const labelHeight = Math.ceil(labelFontSize * 1.45);
+
       context.save();
       context.textAlign = "center";
       context.textBaseline = "middle";
-      context.font = "800 12px Inter, sans-serif";
+      context.font = `800 ${labelFontSize}px Inter, sans-serif`;
 
       for (let tileY = 0; tileY < mapHeight; tileY += 1) {
         for (let tileX = 0; tileX < mapWidth; tileX += 1) {
           const label = `${tileX},${tileY}`;
           const centerX = tileX * TILE_SIZE + TILE_SIZE / 2;
           const centerY = tileY * TILE_SIZE + TILE_SIZE / 2;
-          const labelWidth = Math.ceil(context.measureText(label).width) + 8;
-          const labelHeight = 18;
+          const labelWidth = Math.ceil(context.measureText(label).width) + labelPaddingX;
 
           context.fillStyle = "rgba(20, 33, 39, 0.74)";
           context.fillRect(
@@ -2495,6 +2506,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     isEditingMap,
     mapCanvasHeight,
     mapCanvasWidth,
+    mapScalePercent,
     mapPaths,
     maskedCells,
     renderHoverCanvas,
