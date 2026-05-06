@@ -634,6 +634,10 @@ function cloneMapLayers(layers: MapLayerStack): MapLayerStack {
   );
 }
 
+function cloneMapSpecialGrid(specialGrid: number[][]) {
+  return specialGrid.map((row) => row.slice());
+}
+
 function getCellsInLine(startCell: TileCell, endCell: TileCell) {
   const cells: TileCell[] = [];
   let currentX = startCell.tileX;
@@ -1001,8 +1005,14 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [isBrushMoveActive, setBrushMoveActive] = useState(false);
   const [, startTransition] = useTransition();
   const drawingRef = useRef(false);
+  const isCanvasEditUndoCapturedRef = useRef(false);
   const lastPaintedCellKeyRef = useRef("");
   const lastPlacedPlacementRef = useRef<{ cell: TileCell; placement: MapAssetPlacement } | null>(null);
+  const mapCanvasUndoRef = useRef<{
+    layers: MapLayerStack;
+    mapSlug: string;
+    special: number[][];
+  } | null>(null);
   const movePlacementRef = useRef<{
     currentCell: TileCell;
     layerIndex: number;
@@ -1011,6 +1021,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     sourceCell: TileCell;
   } | null>(null);
   const draftLayersRef = useRef<MapLayerStack | null>(null);
+  const draftSpecialRef = useRef<number[][] | null>(null);
   const lastKnownScrollRef = useRef({
     scrollLeft: initialMapDesignerUiState.scrollLeft,
     scrollTop: initialMapDesignerUiState.scrollTop
@@ -1066,6 +1077,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const { height: mapHeight, width: mapWidth } = getMapLayerDimensions(draftLayers, activeMap?.cells);
   const normalizedDraftSpecial = normalizeMapSpecialGrid(draftSpecial, mapWidth, mapHeight);
   draftLayersRef.current = draftLayers;
+  draftSpecialRef.current = normalizedDraftSpecial;
   const savedLayers = activeMap
     ? normalizeMapLayers(activeMap.layers, activeMap.width, activeMap.height, activeMap.cells)
     : null;
@@ -1215,6 +1227,8 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setZoneEventLuaAnnotations([]);
     setBrushEyedropperActive(false);
     setBrushMoveActive(false);
+    isCanvasEditUndoCapturedRef.current = false;
+    mapCanvasUndoRef.current = null;
     movePlacementRef.current = null;
     lastPlacedPlacementRef.current = null;
   }, [activeMapSlug]);
@@ -1323,6 +1337,58 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   useEffect(() => {
     mapScalePercentRef.current = mapScalePercent;
   }, [mapScalePercent]);
+
+  useEffect(() => {
+    if (!isEditingMap) {
+      return;
+    }
+
+    const isEditableUndoTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) {
+        return false;
+      }
+
+      return Boolean(
+        target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']")
+      );
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "z" || (!event.metaKey && !event.ctrlKey) || event.shiftKey) {
+        return;
+      }
+
+      if (isEditableUndoTarget(event.target)) {
+        return;
+      }
+
+      const undoSnapshot = mapCanvasUndoRef.current;
+
+      if (!undoSnapshot || undoSnapshot.mapSlug !== activeMapSlug) {
+        return;
+      }
+
+      event.preventDefault();
+      const restoredLayers = cloneMapLayers(undoSnapshot.layers);
+      const restoredSpecial = cloneMapSpecialGrid(undoSnapshot.special);
+
+      draftLayersRef.current = restoredLayers;
+      draftSpecialRef.current = restoredSpecial;
+      setMapDraftLayers(activeMapSlug, restoredLayers, mapWidth, mapHeight);
+      setMapDraftSpecial(activeMapSlug, restoredSpecial, mapWidth, mapHeight);
+      mapCanvasUndoRef.current = null;
+      isCanvasEditUndoCapturedRef.current = false;
+      movePlacementRef.current = null;
+      finishPaint();
+      setMapStatus("Undid the last map canvas edit.");
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activeMapSlug, isEditingMap, mapHeight, mapWidth, setMapDraftLayers, setMapDraftSpecial]);
 
   useEffect(() => {
     const storedUiState = getMapDesignerUiState(activeMapSlug);
@@ -2596,6 +2662,19 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         : null;
   }
 
+  function captureMapCanvasUndoSnapshot() {
+    if (!activeMapSlug || isCanvasEditUndoCapturedRef.current) {
+      return;
+    }
+
+    mapCanvasUndoRef.current = {
+      layers: cloneMapLayers(draftLayersRef.current ?? draftLayers),
+      mapSlug: activeMapSlug,
+      special: cloneMapSpecialGrid(draftSpecialRef.current ?? normalizedDraftSpecial)
+    };
+    isCanvasEditUndoCapturedRef.current = true;
+  }
+
   function paintSpecialCell(nextCell: TileCell) {
     if (!activeMapSlug) {
       return;
@@ -2608,7 +2687,9 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       return;
     }
 
+    captureMapCanvasUndoSnapshot();
     nextRow[nextCell.tileX] = activeSpecialTool === "impassible" ? MAP_SPECIAL_IMPASSIBLE : 0;
+    draftSpecialRef.current = nextSpecial;
     setMapDraftSpecial(activeMapSlug, nextSpecial, mapWidth, mapHeight);
   }
 
@@ -2631,7 +2712,9 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       return;
     }
 
+    captureMapCanvasUndoSnapshot();
     nextRow[nextCell.tileX] = nextPlacement ? cloneMapPlacement(nextPlacement) : null;
+    draftLayersRef.current = nextLayers;
     setMapDraftLayers(activeMapSlug, nextLayers, mapWidth, mapHeight);
 
     if (nextPlacement) {
@@ -2664,6 +2747,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       return false;
     }
 
+    captureMapCanvasUndoSnapshot();
     for (const lineCell of getCellsInLine(lastPlacedPlacementRef.current.cell, targetCell)) {
       const nextRow = nextLayer[lineCell.tileY];
 
@@ -2672,6 +2756,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       }
     }
 
+    draftLayersRef.current = nextLayers;
     setMapDraftLayers(activeMapSlug, nextLayers, mapWidth, mapHeight);
     lastPlacedPlacementRef.current = {
       cell: targetCell,
@@ -2735,6 +2820,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       return false;
     }
 
+    captureMapCanvasUndoSnapshot();
     movePlacementRef.current = {
       currentCell: sourceCell,
       layerIndex: activeLayerIndex,
@@ -2901,6 +2987,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
   function finishPaint() {
     drawingRef.current = false;
+    isCanvasEditUndoCapturedRef.current = false;
     lastPaintedCellKeyRef.current = "";
   }
 
@@ -3806,6 +3893,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
           }
 
           if (event.shiftKey && paintLineFromLastPlacement(nextCell)) {
+            finishPaint();
             return;
           }
 
