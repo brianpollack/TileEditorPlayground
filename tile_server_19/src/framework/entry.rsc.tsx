@@ -46,7 +46,12 @@ import {
 } from "../lib/apiRoutes";
 import { escapeHtml } from "../lib/escapeHtml";
 import { pickItemUpdateFields, type EditableRemoteItemField } from "../lib/itemFields";
-import { LUA_API_HELPER_PATH, LUA_SCRIPTING_GUIDE_PATH } from "../lib/luaPaths";
+import {
+  LUA_API_HELPER_PATH,
+  LUA_API_HELPER_SOURCE_URL,
+  LUA_SCRIPTING_GUIDE_PATH,
+  LUA_SCRIPTING_GUIDE_SOURCE_URL
+} from "../lib/luaPaths";
 import {
   createPersonalityRecord,
   createPersonalityEventRecord,
@@ -76,8 +81,6 @@ import {
 } from "../lib/serverStore";
 import type { ItemRecord, PersonalityEventRecord, PersonalityRecord, SpriteRecord } from "../types";
 
-const LUA_API_HELPER_SOURCE_URL = "https://vax.protovateai.com/lua_api_helper.json";
-const LUA_SCRIPTING_GUIDE_SOURCE_URL = "https://vax.protovateai.com/lua_scripting_guide.md";
 const VAX_PROXY_PATH_PREFIX = "/__vax-proxy";
 const VAX_PROXY_ORIGIN = "https://vax.protovateai.com";
 const luaGuideRenderer = new Marked({

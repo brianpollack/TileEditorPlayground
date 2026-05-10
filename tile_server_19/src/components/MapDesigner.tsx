@@ -31,6 +31,7 @@ import {
   prepareMapAiRunAction,
   runMapAiModelAction
 } from "../actions/mapAiActions";
+import { fixLuaScriptWithAiAction } from "../actions/luaActions";
 import {
   createMapZoneEventAction,
   createMapAction,
@@ -40,6 +41,11 @@ import {
   saveMapZoneEventAction,
   saveMapAction
 } from "../actions/mapActions";
+import {
+  createSpriteEventAction,
+  readSpriteInstanceEventsAction,
+  saveSpriteEventAction
+} from "../actions/spriteEventActions";
 import { useStudio } from "../app/StudioContext";
 import {
   MAP_DEFAULT_GRID_SIZE,
@@ -109,6 +115,7 @@ import {
   TILE_LIBRARY_LAYERS
 } from "../lib/tileLibrary";
 import { useImageCache } from "../lib/useImageCache";
+import { AiLuaDiffReview } from "./AiLuaDiffReview";
 import { actionButtonClass } from "./buttonStyles";
 import { CheckerboardFrame } from "./CheckerboardFrame";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
@@ -156,7 +163,9 @@ import {
 import type {
   MapAssetPlacement,
   MapLayerStack,
+  MapSpritePlacement,
   MapTileOptions,
+  SpriteEventRecord,
   SpriteRecord,
   TileCell,
   TileRecord,
@@ -214,6 +223,30 @@ const MAP_PATH_COLORS = [
   "#6f7dfb",
   "#b58900"
 ];
+const FALLBACK_SPRITE_EVENTS = [
+  {
+    description: "Runs when a player activates this sprite.",
+    eventName: "on_activate",
+    globals: []
+  }
+];
+
+interface MapSpriteEventPlacement {
+  eventName: string;
+  instanceId: string;
+  key: string;
+  record: SpriteEventRecord | null;
+  sprite: SpriteRecord;
+  spriteKey: string;
+  tileX: number;
+  tileY: number;
+}
+
+interface AiLuaReviewState {
+  originalLua: string;
+  revisedLua: string;
+  target: "sprite" | "zone";
+}
 
 interface MapAiSelection {
   bottomTileY: number;
@@ -620,10 +653,19 @@ function getMapPathColor(pathIndex: number) {
   return MAP_PATH_COLORS[pathIndex % MAP_PATH_COLORS.length] ?? MAP_PATH_COLORS[0];
 }
 
-function cloneMapPlacement(placement: MapAssetPlacement) {
+function hasLuaScriptContent(luaScript: string | null | undefined) {
+  const trimmedScript = luaScript?.trim() ?? "";
+
+  return Boolean(trimmedScript && trimmedScript !== "return \"\"" && trimmedScript !== "return ''");
+}
+
+function cloneMapPlacement(placement: MapAssetPlacement, options?: { freshSpriteInstance?: boolean }) {
   return placement.kind === "tile"
     ? createMapTilePlacement(placement.tileSlug, placement.options, placement.slotNum)
-    : createMapSpritePlacement(placement.spriteKey);
+    : createMapSpritePlacement(
+        placement.spriteKey,
+        options?.freshSpriteInstance ? undefined : placement.instanceId
+      );
 }
 
 function cloneMapLayers(layers: MapLayerStack): MapLayerStack {
@@ -993,6 +1035,16 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [isZoneEventSaving, setZoneEventSaving] = useState(false);
   const [isZoneEventFormatting, setZoneEventFormatting] = useState(false);
   const [zoneEventLuaAnnotations, setZoneEventLuaAnnotations] = useState<Ace.Annotation[]>([]);
+  const [spriteInstanceEvents, setSpriteInstanceEvents] = useState<SpriteEventRecord[]>([]);
+  const [activeSpriteEventKey, setActiveSpriteEventKey] = useState("");
+  const [spriteEventDraft, setSpriteEventDraft] = useState<LuaEventDraftState>(() => createLuaEventDraft(null));
+  const [spriteEventStatus, setSpriteEventStatus] = useState("");
+  const [isSpriteEventsLoading, setSpriteEventsLoading] = useState(false);
+  const [isSpriteEventSaving, setSpriteEventSaving] = useState(false);
+  const [isSpriteEventFormatting, setSpriteEventFormatting] = useState(false);
+  const [spriteEventLuaAnnotations, setSpriteEventLuaAnnotations] = useState<Ace.Annotation[]>([]);
+  const [isAiLuaFixing, setAiLuaFixing] = useState(false);
+  const [aiLuaReview, setAiLuaReview] = useState<AiLuaReviewState | null>(null);
   const [saveConfirmationMessage, setSaveConfirmationMessage] = useState("");
   const [showCoordinateLabels, setShowCoordinateLabels] = useState(false);
   const [mapAboutPromptDrafts, setMapAboutPromptDrafts] = useState<Record<string, string>>(() =>
@@ -1054,6 +1106,8 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const deferredMapQuery = useDeferredValue(mapQuery.trim().toLowerCase());
   const { eventDefinitions: zoneEventDefinitions, helperWarning: zoneEventDefinitionWarning } =
     useLuaEventDefinitions("zone");
+  const { eventDefinitions: loadedSpriteEventDefinitions, helperWarning: spriteEventDefinitionWarning } =
+    useLuaEventDefinitions("sprite");
   const normalizedNewMapName = normalizeUnderscoreName(newMapName);
   const normalizedNewMapWidth = normalizeMapDimension(newMapWidth);
   const normalizedNewMapHeight = normalizeMapDimension(newMapHeight);
@@ -1122,6 +1176,14 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     )
   );
   const spriteThumbnailUrls = sprites.map((spriteRecord) => spriteRecord.thumbnail ?? "");
+  const spriteEventDefinitions = useMemo(() => {
+    const eventNames = new Set(loadedSpriteEventDefinitions.map((eventDefinition) => eventDefinition.eventName));
+
+    return [
+      ...loadedSpriteEventDefinitions,
+      ...FALLBACK_SPRITE_EVENTS.filter((eventDefinition) => !eventNames.has(eventDefinition.eventName))
+    ];
+  }, [loadedSpriteEventDefinitions]);
   const zoneEventOptions = useMemo<LuaEventOption<ZoneEventRecord>[]>(
     () => mergeLuaEventOptions(zoneEventDefinitions, zoneEvents, (eventRecord) => eventRecord.zone_event),
     [zoneEventDefinitions, zoneEvents]
@@ -1131,6 +1193,69 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     [activeZoneEventName, zoneEventOptions]
   );
   const activeZoneEvent = activeZoneEventOption?.record ?? null;
+  const spriteEventPlacements = useMemo<MapSpriteEventPlacement[]>(() => {
+    const placements: MapSpriteEventPlacement[] = [];
+    const seenInstanceIds = new Set<string>();
+
+    draftLayers.forEach((layerRows) => {
+      layerRows.forEach((row, tileY) => {
+        row.forEach((placement, tileX) => {
+          if (!isMapSpritePlacement(placement) || seenInstanceIds.has(placement.instanceId)) {
+            return;
+          }
+
+          const sprite = spritesByKey.get(placement.spriteKey);
+
+          if (!sprite) {
+            return;
+          }
+
+          const eventName = "on_activate";
+          const record =
+            spriteInstanceEvents.find(
+              (eventRecord) =>
+                eventRecord.sprite_id === sprite.id &&
+                eventRecord.sprite_instance_id === placement.instanceId &&
+                eventRecord.event_id === eventName
+            ) ?? null;
+
+          seenInstanceIds.add(placement.instanceId);
+          placements.push({
+            eventName,
+            instanceId: placement.instanceId,
+            key: `${placement.instanceId}:${eventName}`,
+            record,
+            sprite,
+            spriteKey: placement.spriteKey,
+            tileX,
+            tileY
+          });
+        });
+      });
+    });
+
+    return placements.sort(
+      (left, right) =>
+        left.sprite.name.localeCompare(right.sprite.name) ||
+        left.tileY - right.tileY ||
+        left.tileX - right.tileX ||
+        left.instanceId.localeCompare(right.instanceId)
+    );
+  }, [draftLayers, spriteInstanceEvents, spritesByKey]);
+  const activeSpriteEventPlacement = useMemo(
+    () => spriteEventPlacements.find((eventPlacement) => eventPlacement.key === activeSpriteEventKey) ?? null,
+    [activeSpriteEventKey, spriteEventPlacements]
+  );
+  const activeSpriteEventDefinition = useMemo(
+    () =>
+      spriteEventDefinitions.find(
+        (eventDefinition) => eventDefinition.eventName === activeSpriteEventPlacement?.eventName
+      ) ?? null,
+    [activeSpriteEventPlacement?.eventName, spriteEventDefinitions]
+  );
+  const spriteEventPlacementLoadKey = spriteEventPlacements
+    .map((eventPlacement) => `${eventPlacement.sprite.id}:${eventPlacement.instanceId}`)
+    .join("|");
   const isEditingMap = isEditingSelectedMap && Boolean(activeMap);
   const {
     activeMapPath,
@@ -1177,12 +1302,29 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   }, [activeZoneEvent?.id, activeZoneEventOption?.eventName]);
 
   useEffect(() => {
+    setSpriteEventDraft(createLuaEventDraft(activeSpriteEventPlacement?.record ?? null));
+    setSpriteEventLuaAnnotations([]);
+  }, [
+    activeSpriteEventPlacement?.eventName,
+    activeSpriteEventPlacement?.instanceId,
+    activeSpriteEventPlacement?.record?.id
+  ]);
+
+  useEffect(() => {
     setActiveZoneEventName((currentEventName) =>
       zoneEventOptions.some((eventOption) => eventOption.eventName === currentEventName)
         ? currentEventName
         : zoneEventOptions[0]?.eventName ?? ""
     );
   }, [zoneEventOptions]);
+
+  useEffect(() => {
+    setActiveSpriteEventKey((currentEventKey) =>
+      spriteEventPlacements.some((eventPlacement) => eventPlacement.key === currentEventKey)
+        ? currentEventKey
+        : ""
+    );
+  }, [spriteEventPlacements]);
 
   useEffect(() => {
     if (!activeMap) {
@@ -1225,6 +1367,16 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setZoneEventSaving(false);
     setZoneEventFormatting(false);
     setZoneEventLuaAnnotations([]);
+    setSpriteInstanceEvents([]);
+    setActiveSpriteEventKey("");
+    setSpriteEventDraft(createLuaEventDraft(null));
+    setSpriteEventStatus("");
+    setSpriteEventsLoading(false);
+    setSpriteEventSaving(false);
+    setSpriteEventFormatting(false);
+    setSpriteEventLuaAnnotations([]);
+    setAiLuaFixing(false);
+    setAiLuaReview(null);
     setBrushEyedropperActive(false);
     setBrushMoveActive(false);
     isCanvasEditUndoCapturedRef.current = false;
@@ -1244,6 +1396,11 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       setZoneEventDraft(createLuaEventDraft(null));
       setZoneEventLuaAnnotations([]);
       setZoneEventStatus("");
+      setSpriteInstanceEvents([]);
+      setActiveSpriteEventKey("");
+      setSpriteEventDraft(createLuaEventDraft(null));
+      setSpriteEventLuaAnnotations([]);
+      setSpriteEventStatus("");
       return;
     }
 
@@ -1265,6 +1422,44 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         setZoneEventsLoading(false);
       });
   }, [activeMap?.name, activeSidebarTab]);
+
+  useEffect(() => {
+    if (activeSidebarTab !== "events") {
+      return;
+    }
+
+    const spriteIds = Array.from(new Set(spriteEventPlacements.map((eventPlacement) => eventPlacement.sprite.id)));
+    const spriteInstanceIds = Array.from(
+      new Set(spriteEventPlacements.map((eventPlacement) => eventPlacement.instanceId))
+    );
+
+    if (!activeMapSlug || !spriteIds.length || !spriteInstanceIds.length) {
+      setSpriteInstanceEvents([]);
+      setActiveSpriteEventKey("");
+      setSpriteEventDraft(createLuaEventDraft(null));
+      setSpriteEventLuaAnnotations([]);
+      setSpriteEventStatus("");
+      return;
+    }
+
+    setSpriteEventsLoading(true);
+    setSpriteEventStatus("");
+
+    void readSpriteInstanceEventsAction({ spriteIds, spriteInstanceIds })
+      .then((nextEvents) => {
+        setSpriteInstanceEvents(sortLuaEvents(nextEvents, (eventRecord) => eventRecord.event_id));
+      })
+      .catch((error: unknown) => {
+        setSpriteInstanceEvents([]);
+        setActiveSpriteEventKey("");
+        setSpriteEventDraft(createLuaEventDraft(null));
+        setSpriteEventLuaAnnotations([]);
+        setSpriteEventStatus(error instanceof Error ? error.message : "Could not load sprite events.");
+      })
+      .finally(() => {
+        setSpriteEventsLoading(false);
+      });
+  }, [activeMapSlug, activeSidebarTab, spriteEventPlacementLoadKey]);
 
   useEffect(() => {
     return () => {
@@ -1716,7 +1911,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const renderSpritePlacement = useEffectEvent(
     (
       context: CanvasRenderingContext2D,
-      placement: { kind: "sprite"; spriteKey: string } | null,
+      placement: MapSpritePlacement | null,
       drawX: number,
       drawY: number,
       tileDrawWidth: number,
@@ -2713,14 +2908,16 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     }
 
     captureMapCanvasUndoSnapshot();
-    nextRow[nextCell.tileX] = nextPlacement ? cloneMapPlacement(nextPlacement) : null;
+    nextRow[nextCell.tileX] = nextPlacement
+      ? cloneMapPlacement(nextPlacement, { freshSpriteInstance: true })
+      : null;
     draftLayersRef.current = nextLayers;
     setMapDraftLayers(activeMapSlug, nextLayers, mapWidth, mapHeight);
 
     if (nextPlacement) {
       lastPlacedPlacementRef.current = {
         cell: nextCell,
-        placement: cloneMapPlacement(nextPlacement) as MapAssetPlacement
+        placement: cloneMapPlacement(nextPlacement, { freshSpriteInstance: true }) as MapAssetPlacement
       };
     }
   }
@@ -2752,7 +2949,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       const nextRow = nextLayer[lineCell.tileY];
 
       if (nextRow) {
-        nextRow[lineCell.tileX] = cloneMapPlacement(linePlacement);
+        nextRow[lineCell.tileX] = cloneMapPlacement(linePlacement, { freshSpriteInstance: true });
       }
     }
 
@@ -3345,6 +3542,186 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       });
   }
 
+  function handleSaveSpriteInstanceEvent() {
+    if (!activeSpriteEventPlacement || isSpriteEventSaving) {
+      return;
+    }
+
+    const validationResult = validateLuaScript(spriteEventDraft.luaScript);
+
+    if (!validationResult.ok) {
+      setSpriteEventLuaAnnotations(createLuaErrorAnnotations(validationResult));
+      setSpriteEventStatus(validationResult.error.message);
+      return;
+    }
+
+    setSpriteEventLuaAnnotations([]);
+    setSpriteEventSaving(true);
+    setSpriteEventStatus("");
+
+    void (async () => {
+      try {
+        const createdOrExistingEvent =
+          activeSpriteEventPlacement.record ??
+          (await createSpriteEventAction({
+            eventId: activeSpriteEventPlacement.eventName,
+            filename: activeSpriteEventPlacement.sprite.filename,
+            path: activeSpriteEventPlacement.sprite.path,
+            spriteInstanceId: activeSpriteEventPlacement.instanceId
+          }));
+        const savedEvent =
+          createdOrExistingEvent.enabled === spriteEventDraft.enabled &&
+          createdOrExistingEvent.lua_script === spriteEventDraft.luaScript
+            ? createdOrExistingEvent
+            : await saveSpriteEventAction({
+                enabled: spriteEventDraft.enabled,
+                eventId: activeSpriteEventPlacement.eventName,
+                filename: activeSpriteEventPlacement.sprite.filename,
+                id: createdOrExistingEvent.id,
+                luaScript: spriteEventDraft.luaScript,
+                path: activeSpriteEventPlacement.sprite.path,
+                spriteInstanceId: activeSpriteEventPlacement.instanceId
+              });
+
+        setSpriteInstanceEvents((currentEvents) =>
+          sortLuaEvents(
+            [
+              ...currentEvents.filter((eventRecord) => eventRecord.id !== savedEvent.id),
+              savedEvent
+            ],
+            (eventRecord) => eventRecord.event_id
+          )
+        );
+        setSpriteEventDraft(createLuaEventDraft(savedEvent));
+        setSpriteEventStatus("Event saved.");
+      } catch (error: unknown) {
+        setSpriteEventStatus(error instanceof Error ? error.message : "Could not save sprite event.");
+      } finally {
+        setSpriteEventSaving(false);
+      }
+    })();
+  }
+
+  function handleFormatSpriteEventLua() {
+    const validationResult = validateLuaScript(spriteEventDraft.luaScript);
+
+    if (!validationResult.ok) {
+      setSpriteEventLuaAnnotations(createLuaErrorAnnotations(validationResult));
+      setSpriteEventStatus(validationResult.error.message);
+      return;
+    }
+
+    setSpriteEventFormatting(true);
+    setSpriteEventLuaAnnotations([]);
+    setSpriteEventStatus("");
+
+    void formatLuaScript(spriteEventDraft.luaScript)
+      .then((formattedScript) => {
+        setSpriteEventDraft((currentDraft) => ({
+          ...currentDraft,
+          luaScript: formattedScript
+        }));
+        setSpriteEventStatus("Lua formatted.");
+      })
+      .catch((error: unknown) => {
+        setSpriteEventStatus(error instanceof Error ? error.message : "Could not format Lua script.");
+      })
+      .finally(() => {
+        setSpriteEventFormatting(false);
+      });
+  }
+
+  function handleAiLuaFix() {
+    if (!activeEventName || isAiLuaFixing) {
+      return;
+    }
+
+    setAiLuaFixing(true);
+    if (isEditingSpriteEvent) {
+      setSpriteEventLuaAnnotations([]);
+      setSpriteEventStatus("");
+    } else {
+      setZoneEventLuaAnnotations([]);
+      setZoneEventStatus("");
+    }
+
+    void fixLuaScriptWithAiAction({
+      luaScript: eventEditorDraft.luaScript,
+      toolDefinition: {
+        context: isEditingSpriteEvent ? "sprite" : "zone",
+        event: activeEventName,
+        definition: activeEventDefinition
+      }
+    })
+      .then((result) => {
+        setAiLuaReview({
+          originalLua: eventEditorDraft.luaScript,
+          revisedLua: result.luaScript,
+          target: isEditingSpriteEvent ? "sprite" : "zone"
+        });
+
+        if (isEditingSpriteEvent) {
+          setSpriteEventStatus("Review AI Lua changes.");
+          return;
+        }
+
+        setZoneEventStatus("Review AI Lua changes.");
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Could not fix Lua with AI.";
+
+        if (isEditingSpriteEvent) {
+          setSpriteEventStatus(message);
+          return;
+        }
+
+        setZoneEventStatus(message);
+      })
+      .finally(() => {
+        setAiLuaFixing(false);
+      });
+  }
+
+  function handleKeepAiLuaChanges() {
+    if (!aiLuaReview) {
+      return;
+    }
+
+    const validationResult = validateLuaScript(aiLuaReview.revisedLua);
+
+    if (aiLuaReview.target === "sprite") {
+      setSpriteEventDraft((currentDraft) => ({
+        ...currentDraft,
+        luaScript: aiLuaReview.revisedLua
+      }));
+      setSpriteEventLuaAnnotations(createLuaErrorAnnotations(validationResult));
+      setSpriteEventStatus(validationResult.ok ? "AI Lua updated." : validationResult.error.message);
+      setAiLuaReview(null);
+      return;
+    }
+
+    setZoneEventDraft((currentDraft) => ({
+      ...currentDraft,
+      luaScript: aiLuaReview.revisedLua
+    }));
+    setZoneEventLuaAnnotations(createLuaErrorAnnotations(validationResult));
+    setZoneEventStatus(validationResult.ok ? "AI Lua updated." : validationResult.error.message);
+    setAiLuaReview(null);
+  }
+
+  function handleDeclineAiLuaChanges() {
+    const target = aiLuaReview?.target;
+
+    setAiLuaReview(null);
+
+    if (target === "sprite") {
+      setSpriteEventStatus("AI Lua changes declined.");
+      return;
+    }
+
+    setZoneEventStatus("AI Lua changes declined.");
+  }
+
   function updateAiModelStatus(
     modelId: string,
     nextStatus: Partial<MapAiModelStatus> & Pick<MapAiModelStatus, "status">
@@ -3642,28 +4019,45 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setIsEditingSelectedMap(false);
   }
 
+  const isEditingSpriteEvent = Boolean(activeSpriteEventPlacement);
+  const eventEditorStatus = isEditingSpriteEvent ? spriteEventStatus : zoneEventStatus;
+  const isEventEditorSaving = isEditingSpriteEvent ? isSpriteEventSaving : isZoneEventSaving;
+  const isEventEditorFormatting = isEditingSpriteEvent ? isSpriteEventFormatting : isZoneEventFormatting;
+  const activeEventName = activeSpriteEventPlacement?.eventName ?? activeZoneEventOption?.eventName ?? "";
+  const activeEventDefinition = isEditingSpriteEvent
+    ? activeSpriteEventDefinition
+    : activeZoneEventOption?.definition ?? null;
+  const eventEditorDraft = isEditingSpriteEvent ? spriteEventDraft : zoneEventDraft;
+  const eventEditorAnnotations = isEditingSpriteEvent ? spriteEventLuaAnnotations : zoneEventLuaAnnotations;
+  const eventDefinitionWarning = isEditingSpriteEvent ? spriteEventDefinitionWarning : zoneEventDefinitionWarning;
+
   const eventEditorPanel = (
     <Panel
       className="xl:h-[calc(100vh-7rem)]"
       description={
-        activeZoneEventOption
+        activeSpriteEventPlacement
+          ? `${activeSpriteEventPlacement.sprite.name} id: ${activeSpriteEventPlacement.instanceId}`
+        : activeZoneEventOption
           ? `${activeMap?.name ?? ""} • ${activeZoneEventOption.eventName}`
           : activeMap
-            ? `Select a zone event for ${activeMap.name}.`
-            : "Choose a map before editing zone events."
+            ? `Select an event for ${activeMap.name}.`
+            : "Choose a map before editing events."
       }
       footer={
         <div className="flex flex-wrap items-center justify-between gap-3">
-          {zoneEventStatus ? (
+          {eventEditorStatus ? (
             <div
               className={
-                zoneEventStatus === "Event saved." ||
-                zoneEventStatus === "Lua formatted."
+                eventEditorStatus === "Event saved." ||
+                eventEditorStatus === "Lua formatted." ||
+                eventEditorStatus === "AI Lua updated." ||
+                eventEditorStatus === "Review AI Lua changes." ||
+                eventEditorStatus === "AI Lua changes declined."
                   ? "text-sm theme-text-muted"
                   : "text-sm text-[#b42318]"
               }
             >
-              {zoneEventStatus}
+              {eventEditorStatus}
             </div>
           ) : (
             <div />
@@ -3678,46 +4072,71 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
             </button>
             <button
               className={secondaryButtonClass}
-              disabled={!activeZoneEventOption || isZoneEventSaving || isZoneEventFormatting}
-              onClick={handleFormatZoneEventLua}
+              disabled={!activeEventName || isEventEditorSaving || isEventEditorFormatting || isAiLuaFixing}
+              onClick={isEditingSpriteEvent ? handleFormatSpriteEventLua : handleFormatZoneEventLua}
               type="button"
             >
-              {isZoneEventFormatting ? "Formatting..." : "Format Lua"}
+              {isEventEditorFormatting ? "Formatting..." : "Format Lua"}
+            </button>
+            <button
+              className={secondaryButtonClass}
+              disabled={!activeEventName || isEventEditorSaving || isEventEditorFormatting || isAiLuaFixing}
+              onClick={handleAiLuaFix}
+              type="button"
+            >
+              {isAiLuaFixing ? "AI Lua..." : "AI Lua"}
             </button>
             <button
               className={actionButtonClass}
-              disabled={!activeZoneEventOption || isZoneEventSaving || isZoneEventFormatting}
-              onClick={handleSaveZoneEvent}
+              disabled={!activeEventName || isEventEditorSaving || isEventEditorFormatting || isAiLuaFixing}
+              onClick={isEditingSpriteEvent ? handleSaveSpriteInstanceEvent : handleSaveZoneEvent}
               type="button"
             >
-              {isZoneEventSaving ? "Saving..." : "Save Event"}
+              {isEventEditorSaving ? "Saving..." : "Save Event"}
             </button>
           </div>
         </div>
       }
-      title={activeZoneEventOption ? activeZoneEventOption.eventName : "Event Editor"}
+      title={activeEventName || "Event Editor"}
     >
-      {activeZoneEventOption ? (
+      {activeEventName ? (
         <div className="grid min-h-0 gap-4 overflow-y-auto pr-1">
           <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
             <div className="grid gap-1">
               <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] theme-text-muted">
                 Event Name
               </span>
-              <div className="font-mono text-sm theme-text-primary">{activeZoneEventOption.eventName}</div>
+              <div className="font-mono text-sm theme-text-primary">{activeEventName}</div>
+              {activeSpriteEventPlacement ? (
+                <div className="font-mono text-xs theme-text-muted">
+                  id: {activeSpriteEventPlacement.instanceId} x: {activeSpriteEventPlacement.tileX} y:{" "}
+                  {activeSpriteEventPlacement.tileY}
+                </div>
+              ) : null}
             </div>
 
             <label className="flex items-end gap-2 pb-3 text-sm theme-text-muted">
               <input
-                checked={zoneEventDraft.enabled}
+                checked={eventEditorDraft.enabled}
                 onChange={(event) => {
-                  setZoneEventDraft((currentDraft) => ({
-                    ...currentDraft,
-                    enabled: event.currentTarget.checked
-                  }));
-                  setZoneEventLuaAnnotations([]);
-                  if (zoneEventStatus) {
-                    setZoneEventStatus("");
+                  if (isEditingSpriteEvent) {
+                    setSpriteEventDraft((currentDraft) => ({
+                      ...currentDraft,
+                      enabled: event.currentTarget.checked
+                    }));
+                    setSpriteEventLuaAnnotations([]);
+                    if (spriteEventStatus) {
+                      setSpriteEventStatus("");
+                    }
+                  } else {
+                    setZoneEventDraft((currentDraft) => ({
+                      ...currentDraft,
+                      enabled: event.currentTarget.checked
+                    }));
+                    setZoneEventLuaAnnotations([]);
+                    if (zoneEventStatus) {
+                      setZoneEventStatus("");
+                    }
                   }
                 }}
                 type="checkbox"
@@ -3726,7 +4145,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
             </label>
           </div>
 
-          <LuaEventDefinitionHelp eventDefinition={activeZoneEventOption.definition} />
+          <LuaEventDefinitionHelp eventDefinition={activeEventDefinition} />
 
           <div className="grid gap-3">
             <SectionEyebrow>Lua Script</SectionEyebrow>
@@ -3739,18 +4158,29 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                 fontSize={13}
                 height="640px"
                 mode="lua"
-                name={`map-zone-event-lua-${activeZoneEventOption.eventName}`}
+                name={`map-event-lua-${isEditingSpriteEvent ? "sprite" : "zone"}-${activeEventName}`}
                 onChange={(value) => {
-                  setZoneEventDraft((currentDraft) => ({
-                    ...currentDraft,
-                    luaScript: value
-                  }));
-                  setZoneEventLuaAnnotations([]);
-                  if (zoneEventStatus) {
-                    setZoneEventStatus("");
+                  if (isEditingSpriteEvent) {
+                    setSpriteEventDraft((currentDraft) => ({
+                      ...currentDraft,
+                      luaScript: value
+                    }));
+                    setSpriteEventLuaAnnotations([]);
+                    if (spriteEventStatus) {
+                      setSpriteEventStatus("");
+                    }
+                  } else {
+                    setZoneEventDraft((currentDraft) => ({
+                      ...currentDraft,
+                      luaScript: value
+                    }));
+                    setZoneEventLuaAnnotations([]);
+                    if (zoneEventStatus) {
+                      setZoneEventStatus("");
+                    }
                   }
                 }}
-                annotations={zoneEventLuaAnnotations}
+                annotations={eventEditorAnnotations}
                 onLoad={handleLuaEditorLoad}
                 setOptions={{
                   showFoldWidgets: false,
@@ -3759,14 +4189,14 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                   useSoftTabs: true
                 }}
                 theme="tomorrow_night"
-                value={zoneEventDraft.luaScript}
+                value={eventEditorDraft.luaScript}
                 width="100%"
                 wrapEnabled
               />
             </div>
             {luaHelperWarning ? <div className="text-sm text-[#b42318]">{luaHelperWarning}</div> : null}
-            {!luaHelperWarning && zoneEventDefinitionWarning ? (
-              <div className="text-sm text-[#b42318]">{zoneEventDefinitionWarning}</div>
+            {!luaHelperWarning && eventDefinitionWarning ? (
+              <div className="text-sm text-[#b42318]">{eventDefinitionWarning}</div>
             ) : null}
           </div>
         </div>
@@ -4128,6 +4558,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                               className={assetListRowClass(eventOption.eventName === activeZoneEventName)}
                               key={eventOption.eventName}
                               onClick={() => {
+                                setActiveSpriteEventKey("");
                                 setActiveZoneEventName(eventOption.eventName);
                                 setZoneEventStatus("");
                               }}
@@ -4154,14 +4585,68 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                       </div>
                     </div>
 
+                    <div className="grid min-h-0 gap-2">
+                      <SectionEyebrow>Sprite Events</SectionEyebrow>
+                      <div className={scrollableAssetListClass}>
+                        {spriteEventPlacements.map((eventPlacement) => {
+                          const hasScript = hasLuaScriptContent(eventPlacement.record?.lua_script);
+                          const displayColor = hasScript ? "#000000" : "#909090";
+
+                          return (
+                            <button
+                              className={assetListRowClass(eventPlacement.key === activeSpriteEventKey)}
+                              key={eventPlacement.key}
+                              onClick={() => {
+                                setActiveZoneEventName("");
+                                setActiveSpriteEventKey(eventPlacement.key);
+                                setSpriteEventStatus("");
+                              }}
+                              type="button"
+                            >
+                              <div className={assetListMetaClass}>
+                                <span className={assetListTitleClass} style={{ color: displayColor }}>
+                                  {eventPlacement.sprite.name} @ {eventPlacement.tileX},{" "}
+                                  {eventPlacement.tileY} {eventPlacement.eventName}
+                                </span>
+                                <span className={assetListSubtitleClass} style={{ color: displayColor }}>
+                                  {hasScript
+                                    ? eventPlacement.record?.enabled
+                                      ? "Configured • Enabled"
+                                      : "Configured • Disabled"
+                                    : "Available • Empty"}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
                     {isZoneEventsLoading ? (
                       <div className="text-sm theme-text-muted">Loading zone events...</div>
+                    ) : null}
+                    {isSpriteEventsLoading ? (
+                      <div className="text-sm theme-text-muted">Loading sprite events...</div>
                     ) : null}
                     {!isZoneEventsLoading && activeMap && !zoneEventOptions.length ? (
                       <div className={emptyStateCardClass}>No events are available for {activeMap.name}.</div>
                     ) : null}
-                    {zoneEventStatus && zoneEventStatus !== "Event saved." ? (
+                    {!isSpriteEventsLoading && activeMap && !spriteEventPlacements.length ? (
+                      <div className={emptyStateCardClass}>No placed sprites are available for {activeMap.name}.</div>
+                    ) : null}
+                    {zoneEventStatus &&
+                    zoneEventStatus !== "Event saved." &&
+                    zoneEventStatus !== "AI Lua updated." &&
+                    zoneEventStatus !== "Review AI Lua changes." &&
+                    zoneEventStatus !== "AI Lua changes declined." ? (
                       <div className="text-sm text-[#b42318]">{zoneEventStatus}</div>
+                    ) : null}
+                    {spriteEventStatus &&
+                    spriteEventStatus !== "Event saved." &&
+                    spriteEventStatus !== "AI Lua updated." &&
+                    spriteEventStatus !== "Review AI Lua changes." &&
+                    spriteEventStatus !== "AI Lua changes declined." ? (
+                      <div className="text-sm text-[#b42318]">{spriteEventStatus}</div>
                     ) : null}
                   </div>
                 ) : activeSidebarTab === "paths" ? (
@@ -5120,6 +5605,14 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
             </div>
           </div>
         </div>
+      ) : null}
+      {aiLuaReview ? (
+        <AiLuaDiffReview
+          onDecline={handleDeclineAiLuaChanges}
+          onKeep={handleKeepAiLuaChanges}
+          originalLua={aiLuaReview.originalLua}
+          revisedLua={aiLuaReview.revisedLua}
+        />
       ) : null}
     </div>
   );

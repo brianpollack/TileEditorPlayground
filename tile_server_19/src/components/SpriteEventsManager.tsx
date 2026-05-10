@@ -1,24 +1,30 @@
 "use client";
 
 import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-lua";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
 
+import { fixLuaScriptWithAiAction } from "../actions/luaActions";
 import {
   createSpriteEventAction,
   readSpriteEventsAction,
   saveSpriteEventAction
 } from "../actions/spriteEventActions";
 import { useStudio } from "../app/StudioContext";
-import { openLuaScriptingGuide } from "../lib/luaEditor";
+import {
+  createLuaErrorAnnotations,
+  openLuaScriptingGuide,
+  validateLuaScript
+} from "../lib/luaEditor";
 import {
   useLuaAceSupport,
   useLuaEventDefinitions,
   type LuaEventDefinition
 } from "../lib/luaApiHelper";
 import type { SpriteEventRecord } from "../types";
+import { AiLuaDiffReview } from "./AiLuaDiffReview";
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { LuaEventDefinitionHelp } from "./LuaEventDefinitionHelp";
@@ -43,8 +49,15 @@ const FALLBACK_SPRITE_EVENTS: LuaEventDefinition[] = [
   }
 ];
 
+interface AiLuaReviewState {
+  originalLua: string;
+  revisedLua: string;
+}
+
 export function SpriteEventsManager() {
   const { activeSprite } = useStudio();
+  const [isAiLuaFixing, setAiLuaFixing] = useState(false);
+  const [aiLuaReview, setAiLuaReview] = useState<AiLuaReviewState | null>(null);
   const {
     enableBasicAutocompletion,
     enableLiveAutocompletion,
@@ -136,6 +149,59 @@ export function SpriteEventsManager() {
     subjectKey: spriteSubjectKey
   });
 
+  function handleAiLuaFix() {
+    if (!activeEventOption || isAiLuaFixing) {
+      return;
+    }
+
+    setAiLuaFixing(true);
+    setLuaAnnotations([]);
+    setStatus("");
+
+    void fixLuaScriptWithAiAction({
+      luaScript: draft.luaScript,
+      toolDefinition: {
+        context: "sprite",
+        event: activeEventOption.eventName,
+        definition: activeEventOption.definition
+      }
+    })
+      .then((result) => {
+        setAiLuaReview({
+          originalLua: draft.luaScript,
+          revisedLua: result.luaScript
+        });
+        setStatus("Review AI Lua changes.");
+      })
+      .catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : "Could not fix Lua with AI.");
+      })
+      .finally(() => {
+        setAiLuaFixing(false);
+      });
+  }
+
+  function handleKeepAiLuaChanges() {
+    if (!aiLuaReview) {
+      return;
+    }
+
+    const validationResult = validateLuaScript(aiLuaReview.revisedLua);
+
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      luaScript: aiLuaReview.revisedLua
+    }));
+    setLuaAnnotations(createLuaErrorAnnotations(validationResult));
+    setStatus(validationResult.ok ? "AI Lua updated." : validationResult.error.message);
+    setAiLuaReview(null);
+  }
+
+  function handleDeclineAiLuaChanges() {
+    setAiLuaReview(null);
+    setStatus("AI Lua changes declined.");
+  }
+
   return (
     <div className="min-h-0">
       <div className="grid min-h-0 gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
@@ -211,7 +277,11 @@ export function SpriteEventsManager() {
               {status ? (
                 <div
                   className={
-                    status === "Event saved." || status === "Lua formatted."
+                    status === "Event saved." ||
+                    status === "Lua formatted." ||
+                    status === "AI Lua updated." ||
+                    status === "Review AI Lua changes." ||
+                    status === "AI Lua changes declined."
                       ? "text-sm theme-text-muted"
                       : "text-sm text-[#b42318]"
                   }
@@ -227,15 +297,23 @@ export function SpriteEventsManager() {
                 </button>
                 <button
                   className={secondaryButtonClass}
-                  disabled={!activeEventOption || isSavingEvent || isFormattingLua}
+                  disabled={!activeEventOption || isSavingEvent || isFormattingLua || isAiLuaFixing}
                   onClick={handleFormatLua}
                   type="button"
                 >
                   {isFormattingLua ? "Formatting..." : "Format Lua"}
                 </button>
                 <button
+                  className={secondaryButtonClass}
+                  disabled={!activeEventOption || isSavingEvent || isFormattingLua || isAiLuaFixing}
+                  onClick={handleAiLuaFix}
+                  type="button"
+                >
+                  {isAiLuaFixing ? "AI Lua..." : "AI Lua"}
+                </button>
+                <button
                   className={actionButtonClass}
-                  disabled={!activeEventOption || isSavingEvent || isFormattingLua}
+                  disabled={!activeEventOption || isSavingEvent || isFormattingLua || isAiLuaFixing}
                   onClick={handleSaveEvent}
                   type="button"
                 >
@@ -326,6 +404,14 @@ export function SpriteEventsManager() {
           )}
         </Panel>
       </div>
+      {aiLuaReview ? (
+        <AiLuaDiffReview
+          onDecline={handleDeclineAiLuaChanges}
+          onKeep={handleKeepAiLuaChanges}
+          originalLua={aiLuaReview.originalLua}
+          revisedLua={aiLuaReview.revisedLua}
+        />
+      ) : null}
     </div>
   );
 }

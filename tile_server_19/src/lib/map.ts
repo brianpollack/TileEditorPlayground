@@ -24,6 +24,14 @@ const MAP_MIN_GRID_SIZE = 1;
 const MAP_MAX_GRID_SIZE = 200;
 const DEFAULT_MAP_COLOR = "#ffffff";
 
+export function createMapSpriteInstanceId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `sprite-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 function cloneMapLayerCell(cell: MapLayerCell): MapLayerCell {
   if (!cell) {
     return null;
@@ -31,6 +39,7 @@ function cloneMapLayerCell(cell: MapLayerCell): MapLayerCell {
 
   if (cell.kind === "sprite") {
     return {
+      instanceId: cell.instanceId,
       kind: "sprite",
       spriteKey: cell.spriteKey
     };
@@ -109,14 +118,16 @@ export function createMapTilePlacement(
   };
 }
 
-export function createMapSpritePlacement(spriteKey: string): MapSpritePlacement | null {
+export function createMapSpritePlacement(spriteKey: string, instanceId?: string): MapSpritePlacement | null {
   const normalizedSpriteKey = spriteKey.trim();
+  const normalizedInstanceId = instanceId?.trim() ?? "";
 
   if (!normalizedSpriteKey) {
     return null;
   }
 
   return {
+    instanceId: normalizedInstanceId || createMapSpriteInstanceId(),
     kind: "sprite",
     spriteKey: normalizedSpriteKey
   };
@@ -144,7 +155,7 @@ export function normalizeMapLayerCell(cell: unknown): MapLayerCell {
   const candidate = cell as Partial<MapTilePlacement> & Partial<MapSpritePlacement>;
 
   if (candidate.kind === "sprite" || typeof candidate.spriteKey === "string") {
-    return createMapSpritePlacement(candidate.spriteKey ?? "");
+    return createMapSpritePlacement(candidate.spriteKey ?? "", candidate.instanceId);
   }
 
   return createMapTilePlacement(

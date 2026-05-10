@@ -9,6 +9,7 @@ import "ace-builds/src-noconflict/mode-lua";
 import "ace-builds/src-noconflict/mode-text";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
 
+import { fixLuaScriptWithAiAction } from "../actions/luaActions";
 import { useStudio } from "../app/StudioContext";
 import {
   CREATE_PERSONALITY_EVENT_PATH,
@@ -23,6 +24,7 @@ import {
   validateLuaScript
 } from "../lib/luaEditor";
 import type { PersonalityEventRecord } from "../types";
+import { AiLuaDiffReview } from "./AiLuaDiffReview";
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { Panel } from "./Panel";
@@ -45,6 +47,11 @@ interface EventDraftState {
   luaScript: string;
   name: string;
   responseContext: string;
+}
+
+interface AiLuaReviewState {
+  originalLua: string;
+  revisedLua: string;
 }
 
 function createEventDraft(event: PersonalityEventRecord | null): EventDraftState {
@@ -84,6 +91,8 @@ export function PersonalityEventsManager() {
   const [isSavingEvent, setSavingEvent] = useState(false);
   const [isFormattingLua, setFormattingLua] = useState(false);
   const [isFormattingToolJson, setFormattingToolJson] = useState(false);
+  const [isAiLuaFixing, setAiLuaFixing] = useState(false);
+  const [aiLuaReview, setAiLuaReview] = useState<AiLuaReviewState | null>(null);
   const [luaAnnotations, setLuaAnnotations] = useState<Ace.Annotation[]>([]);
   const [status, setStatus] = useState("");
 
@@ -307,6 +316,64 @@ export function PersonalityEventsManager() {
     }
   }
 
+  function handleAiLuaFix() {
+    if (!activeEvent || isAiLuaFixing) {
+      return;
+    }
+
+    let eventDetails: Record<string, unknown>;
+
+    try {
+      eventDetails = parseEventDetails(draft.eventDetails);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tool definition must be valid JSON.");
+      return;
+    }
+
+    setAiLuaFixing(true);
+    setLuaAnnotations([]);
+    setStatus("");
+
+    void fixLuaScriptWithAiAction({
+      luaScript: draft.luaScript,
+      toolDefinition: eventDetails
+    })
+      .then((result) => {
+        setAiLuaReview({
+          originalLua: draft.luaScript,
+          revisedLua: result.luaScript
+        });
+        setStatus("Review AI Lua changes.");
+      })
+      .catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : "Could not fix Lua with AI.");
+      })
+      .finally(() => {
+        setAiLuaFixing(false);
+      });
+  }
+
+  function handleKeepAiLuaChanges() {
+    if (!aiLuaReview) {
+      return;
+    }
+
+    const validationResult = validateLuaScript(aiLuaReview.revisedLua);
+
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      luaScript: aiLuaReview.revisedLua
+    }));
+    setLuaAnnotations(createLuaErrorAnnotations(validationResult));
+    setStatus(validationResult.ok ? "AI Lua updated." : validationResult.error.message);
+    setAiLuaReview(null);
+  }
+
+  function handleDeclineAiLuaChanges() {
+    setAiLuaReview(null);
+    setStatus("AI Lua changes declined.");
+  }
+
   function copyToolEditorText(label: string, value: string) {
     if (!navigator.clipboard?.writeText) {
       setStatus("Clipboard is not available in this browser.");
@@ -402,7 +469,10 @@ export function PersonalityEventsManager() {
                   className={
                     status === "Event saved." ||
                     status === "Lua formatted." ||
+                    status === "AI Lua updated." ||
                     status === "Tool JSON formatted." ||
+                    status === "Review AI Lua changes." ||
+                    status === "AI Lua changes declined." ||
                     status === "Tool Definition copied." ||
                     status === "Lua Script copied."
                       ? "text-sm theme-text-muted"
@@ -424,7 +494,7 @@ export function PersonalityEventsManager() {
                 </button>
                 <button
                   className={secondaryButtonClass}
-                  disabled={!activeEvent || isSavingEvent || isFormattingToolJson}
+                  disabled={!activeEvent || isSavingEvent || isFormattingToolJson || isAiLuaFixing}
                   onClick={handleFormatToolJson}
                   type="button"
                 >
@@ -432,15 +502,23 @@ export function PersonalityEventsManager() {
                 </button>
                 <button
                   className={secondaryButtonClass}
-                  disabled={!activeEvent || isSavingEvent || isFormattingLua}
+                  disabled={!activeEvent || isSavingEvent || isFormattingLua || isAiLuaFixing}
                   onClick={handleFormatLua}
                   type="button"
                 >
                   {isFormattingLua ? "Formatting..." : "Format Lua"}
                 </button>
                 <button
+                  className={secondaryButtonClass}
+                  disabled={!activeEvent || isSavingEvent || isFormattingLua || isFormattingToolJson || isAiLuaFixing}
+                  onClick={handleAiLuaFix}
+                  type="button"
+                >
+                  {isAiLuaFixing ? "AI Lua..." : "AI Lua"}
+                </button>
+                <button
                   className={actionButtonClass}
-                  disabled={!activeEvent || isSavingEvent || isFormattingLua || isFormattingToolJson}
+                  disabled={!activeEvent || isSavingEvent || isFormattingLua || isFormattingToolJson || isAiLuaFixing}
                   onClick={handleSaveEvent}
                   type="button"
                 >
@@ -544,6 +622,49 @@ export function PersonalityEventsManager() {
 
                 <div className="grid gap-3">
                   <div className="flex items-center justify-between gap-3">
+                    <SectionEyebrow>Response Context</SectionEyebrow>
+                    <button
+                      className={secondaryButtonClass}
+                      onClick={() => {
+                        copyToolEditorText("Response Context", draft.responseContext);
+                      }}
+                      type="button"
+                    >
+                      Copy to Clipboard
+                    </button>
+                  </div>
+                  <div className="overflow-hidden border theme-border-panel">
+                    <AceEditor
+                      className="w-full"
+                      fontSize={13}
+                      height="220px"
+                      mode="text"
+                      name={`personality-event-response-context-${activeEvent.id}`}
+                      onChange={(value) => {
+                        setDraft((currentDraft) => ({
+                          ...currentDraft,
+                          responseContext: value
+                        }));
+                        if (status) {
+                          setStatus("");
+                        }
+                      }}
+                      setOptions={{
+                        showFoldWidgets: false,
+                        tabSize: 2,
+                        useWorker: false,
+                        useSoftTabs: true
+                      }}
+                      theme="tomorrow_night"
+                      value={draft.responseContext}
+                      width="100%"
+                      wrapEnabled
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-3">
+                  <div className="flex items-center justify-between gap-3">
                     <SectionEyebrow>Lua Script</SectionEyebrow>
                     <button
                       className={secondaryButtonClass}
@@ -600,6 +721,14 @@ export function PersonalityEventsManager() {
           )}
         </Panel>
       </div>
+      {aiLuaReview ? (
+        <AiLuaDiffReview
+          onDecline={handleDeclineAiLuaChanges}
+          onKeep={handleKeepAiLuaChanges}
+          originalLua={aiLuaReview.originalLua}
+          revisedLua={aiLuaReview.revisedLua}
+        />
+      ) : null}
     </div>
   );
 }

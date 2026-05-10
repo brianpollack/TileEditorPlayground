@@ -257,6 +257,7 @@ export async function ensureDatabaseSchema(db: Knex) {
       table.text("asset_type").notNullable();
       table.uuid("tile_asset_id").references("id").inTable(DATABASE_TABLE_NAME).onDelete("SET NULL");
       table.uuid("sprite_asset_id").references("id").inTable(DATABASE_TABLE_NAME).onDelete("SET NULL");
+      table.uuid("sprite_instance_id");
       table.integer("slot_num").notNullable().defaultTo(0);
       table.boolean("color_enabled").notNullable().defaultTo(false);
       table.text("color_value").notNullable().defaultTo("#ffffff");
@@ -400,16 +401,19 @@ export async function ensureDatabaseSchema(db: Knex) {
       table.bigIncrements("id").primary();
       table.uuid("sprite_id").notNullable().references("id").inTable(DATABASE_TABLE_NAME).onDelete("CASCADE");
       table.text("event_id").notNullable();
+      table.uuid("sprite_instance_id");
       table.text("lua_script").notNullable();
       table.boolean("enabled").notNullable().defaultTo(true);
       table.timestamp("inserted_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
       table.timestamp("updated_at", { useTz: true }).notNullable().defaultTo(db.fn.now());
-      table.unique(["sprite_id", "event_id"]);
     });
   }
 
   await db.raw(
-    "create unique index if not exists sprite_events_sprite_event_idx on sprite_events (sprite_id, event_id)"
+    "create unique index if not exists sprite_events_global_event_idx on sprite_events (sprite_id, event_id) where sprite_instance_id is null"
+  );
+  await db.raw(
+    "create unique index if not exists sprite_events_instance_event_idx on sprite_events (sprite_id, sprite_instance_id, event_id) where sprite_instance_id is not null"
   );
 
   const hasSpriteStatesTable = await db.schema.hasTable(SPRITE_STATES_TABLE_NAME);
@@ -516,7 +520,7 @@ export async function ensureDatabaseSchema(db: Knex) {
       and sprite_metadata is not null
       and jsonb_typeof(sprite_metadata) = 'object'
       and coalesce(sprite_metadata ->> 'on_activate', '') <> ''
-    on conflict (sprite_id, event_id) do nothing
+    on conflict (sprite_id, event_id) where sprite_instance_id is null do nothing
   `);
 
   await db.raw(

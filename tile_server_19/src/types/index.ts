@@ -61,6 +61,7 @@ export interface MapTilePlacement {
 }
 
 export interface MapSpritePlacement {
+  instanceId: string;
   kind: "sprite";
   spriteKey: string;
 }
@@ -181,6 +182,7 @@ export interface SpriteEventRecord {
   inserted_at: string;
   lua_script: string;
   sprite_id: string;
+  sprite_instance_id: string | null;
   updated_at: string;
 }
 

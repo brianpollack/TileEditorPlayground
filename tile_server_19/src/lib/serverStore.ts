@@ -26,6 +26,7 @@ import {
   type EditableRemoteItemField,
   type EditableRemoteItemUpdate
 } from "./itemFields";
+import { LUA_SCRIPTING_GUIDE_SOURCE_URL } from "./luaPaths";
 import {
   createEmptyMapCells,
   createEmptyMapLayers,
@@ -97,6 +98,7 @@ const IMAGE_EXTENSIONS = new Set([".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 const SPRITE_IMAGE_EXTENSION = ".png";
 const THUMBNAIL_TILE_SIZE = 16;
 const MAP_SCHEMA_REF = "./starter-camp.jsonschema";
+const AI_LUA_OPENROUTER_MODEL = "~anthropic/claude-haiku-latest";
 
 type StoredMapCell = number | string | null;
 type StoredMapTileReference =
@@ -104,6 +106,7 @@ type StoredMapTileReference =
   | {
       options?: Partial<MapTileOptions>;
       sprite?: string;
+      spriteInstanceId?: string;
       tile?: string;
     };
 
@@ -171,6 +174,7 @@ interface StoredMapPlacementRow {
   slot_num: number;
   sprite_asset_id: string | null;
   sprite_file_name: string | null;
+  sprite_instance_id: string | null;
   sprite_sub_folder: string | null;
   tile_asset_id: string | null;
   tile_slug: string | null;
@@ -192,6 +196,7 @@ interface StoredMapPlacementInsertRow {
   rotate_quarter_turns: number;
   slot_num: number;
   sprite_asset_id: string | null;
+  sprite_instance_id: string | null;
   tile_asset_id: string | null;
   tile_x: number;
   tile_y: number;
@@ -328,6 +333,7 @@ interface StoredSpriteEventRow {
   inserted_at: Date | string;
   lua_script: string | null;
   sprite_id: string;
+  sprite_instance_id: string | null;
   updated_at: Date | string;
 }
 
@@ -1202,6 +1208,7 @@ function mapRowToSpriteEventRecord(row: StoredSpriteEventRow): SpriteEventRecord
     inserted_at: serializeStoredTimestamp(row.inserted_at),
     lua_script: typeof row.lua_script === "string" ? row.lua_script : "",
     sprite_id: row.sprite_id,
+    sprite_instance_id: typeof row.sprite_instance_id === "string" ? row.sprite_instance_id : null,
     updated_at: serializeStoredTimestamp(row.updated_at)
   };
 }
@@ -1842,7 +1849,10 @@ function createMapPlacementFromRow(row: StoredMapPlacementRow): MapLayerCell {
       return null;
     }
 
-    return createMapSpritePlacement(getTileLibrarySpriteKey(row.sprite_sub_folder, row.sprite_file_name));
+    return createMapSpritePlacement(
+      getTileLibrarySpriteKey(row.sprite_sub_folder, row.sprite_file_name),
+      row.sprite_instance_id ?? undefined
+    );
   }
 
   if (!row.tile_slug) {
@@ -1870,7 +1880,10 @@ function decodeStoredMapTileReference(reference: StoredMapTileReference | undefi
   }
 
   if (typeof reference.sprite === "string" && reference.sprite.trim()) {
-    return createMapSpritePlacement(getSpriteKeyFromStoredReference(reference.sprite));
+    return createMapSpritePlacement(
+      getSpriteKeyFromStoredReference(reference.sprite),
+      reference.spriteInstanceId
+    );
   }
 
   return createMapTilePlacement(
@@ -1882,7 +1895,8 @@ function decodeStoredMapTileReference(reference: StoredMapTileReference | undefi
 function buildStoredMapTileReference(placement: MapLayerCell, tilePathBySlug: Map<string, string>) {
   if (isMapSpritePlacement(placement)) {
     return {
-      sprite: getSpriteKeyFromStoredReference(placement.spriteKey)
+      sprite: getSpriteKeyFromStoredReference(placement.spriteKey),
+      spriteInstanceId: placement.instanceId
     } satisfies Exclude<StoredMapTileReference, string>;
   }
 
@@ -2009,7 +2023,9 @@ function buildStoredMapRecord(
           ? `tile:${tilePathBySlug.get(placement.tileSlug) ?? placement.tileSlug}:${serializeMapTileOptionsKey(
               placement.options
             )}`
-          : `sprite:${spritePathByKey.get(placement.spriteKey) ?? getSpriteKeyFromStoredReference(placement.spriteKey)}`;
+          : `sprite:${spritePathByKey.get(placement.spriteKey) ?? getSpriteKeyFromStoredReference(placement.spriteKey)}:${
+              placement.instanceId
+            }`;
         const existingTileId = tileIdByReference.get(referenceKey);
 
         if (existingTileId) {
@@ -2229,6 +2245,7 @@ async function upsertMapRecordToDatabase(mapRecord: MapRecord) {
               rotate_quarter_turns: getRotateQuarterTurnsFromOptions(placement.options),
               slot_num: placement.slotNum ?? 0,
               sprite_asset_id: null,
+              sprite_instance_id: null,
               tile_asset_id: tileAssetId,
               tile_x: tileX,
               tile_y: tileY,
@@ -2257,6 +2274,7 @@ async function upsertMapRecordToDatabase(mapRecord: MapRecord) {
             rotate_quarter_turns: 0,
             slot_num: 0,
             sprite_asset_id: spriteAssetId,
+            sprite_instance_id: placement.instanceId,
             tile_asset_id: null,
             tile_x: tileX,
             tile_y: tileY,
@@ -2613,6 +2631,10 @@ function normalizeSpriteEventName(value: unknown) {
   }
 
   return normalizedName;
+}
+
+function normalizeSpriteInstanceId(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function normalizeSpriteStateId(value: unknown) {
@@ -3090,6 +3112,7 @@ export async function readSpriteEventRecords(spritePath: string, spriteFilename:
   const rows = await db<StoredSpriteEventRow>("sprite_events")
     .select("*")
     .where({ sprite_id: spriteId })
+    .whereNull("sprite_instance_id")
     .orderBy([
       { column: "enabled", order: "desc" },
       { column: "event_id", order: "asc" },
@@ -3099,15 +3122,59 @@ export async function readSpriteEventRecords(spritePath: string, spriteFilename:
   return rows.map(mapRowToSpriteEventRecord);
 }
 
-export async function createSpriteEventRecord(spritePath: string, spriteFilename: string, eventId: string) {
+export async function readSpriteEventRecordsForInstances(
+  spriteIds: string[],
+  spriteInstanceIds: string[]
+): Promise<SpriteEventRecord[]> {
+  await ensureAssetDatabaseReady();
+  const normalizedSpriteIds = Array.from(
+    new Set(spriteIds.map((spriteId) => normalizeSpriteInstanceId(spriteId)).filter(Boolean))
+  ) as string[];
+  const normalizedSpriteInstanceIds = Array.from(
+    new Set(spriteInstanceIds.map((instanceId) => normalizeSpriteInstanceId(instanceId)).filter(Boolean))
+  ) as string[];
+
+  if (!normalizedSpriteIds.length || !normalizedSpriteInstanceIds.length) {
+    return [];
+  }
+
+  const db = await getDatabase();
+  const rows = await db<StoredSpriteEventRow>("sprite_events")
+    .select("*")
+    .whereIn("sprite_id", normalizedSpriteIds)
+    .whereIn("sprite_instance_id", normalizedSpriteInstanceIds)
+    .orderBy([
+      { column: "enabled", order: "desc" },
+      { column: "event_id", order: "asc" },
+      { column: "id", order: "asc" }
+    ]);
+
+  return rows.map(mapRowToSpriteEventRecord);
+}
+
+export async function createSpriteEventRecord(
+  spritePath: string,
+  spriteFilename: string,
+  eventId: string,
+  spriteInstanceId?: string | null
+) {
   await ensureAssetDatabaseReady();
   const normalizedEventId = normalizeSpriteEventName(eventId);
+  const normalizedSpriteInstanceId = normalizeSpriteInstanceId(spriteInstanceId);
   const db = await getDatabase();
   const spriteId = await readSpriteAssetId(db, spritePath, spriteFilename);
-  const existingEvent = await db<StoredSpriteEventRow>("sprite_events")
+  const existingEventQuery = db<StoredSpriteEventRow>("sprite_events")
     .select("id")
     .first()
     .where({ event_id: normalizedEventId, sprite_id: spriteId });
+
+  if (normalizedSpriteInstanceId) {
+    existingEventQuery.where({ sprite_instance_id: normalizedSpriteInstanceId });
+  } else {
+    existingEventQuery.whereNull("sprite_instance_id");
+  }
+
+  const existingEvent = await existingEventQuery;
 
   if (existingEvent) {
     throw new Error(`Event ${normalizedEventId} already exists for this sprite.`);
@@ -3121,6 +3188,7 @@ export async function createSpriteEventRecord(spritePath: string, spriteFilename
       inserted_at: timestamp,
       lua_script: "return \"\"",
       sprite_id: spriteId,
+      sprite_instance_id: normalizedSpriteInstanceId,
       updated_at: timestamp
     })
     .returning("*");
@@ -3140,22 +3208,39 @@ export async function updateSpriteEventRecord(
   await ensureAssetDatabaseReady();
   const eventRecordId = normalizeSpriteEventId(fields.id);
   const normalizedEventId = normalizeSpriteEventName(fields.event_id);
+  const normalizedSpriteInstanceId = normalizeSpriteInstanceId(fields.sprite_instance_id);
   const luaScript = typeof fields.lua_script === "string" ? fields.lua_script : "";
   const enabled = fields.enabled !== false;
   const db = await getDatabase();
   const spriteId = await readSpriteAssetId(db, spritePath, spriteFilename);
-  const conflictingEvent = await db<StoredSpriteEventRow>("sprite_events")
+  const conflictingEventQuery = db<StoredSpriteEventRow>("sprite_events")
     .select("id")
     .first()
     .where({ event_id: normalizedEventId, sprite_id: spriteId })
     .whereNot({ id: eventRecordId });
 
+  if (normalizedSpriteInstanceId) {
+    conflictingEventQuery.where({ sprite_instance_id: normalizedSpriteInstanceId });
+  } else {
+    conflictingEventQuery.whereNull("sprite_instance_id");
+  }
+
+  const conflictingEvent = await conflictingEventQuery;
+
   if (conflictingEvent) {
     throw new Error(`Event ${normalizedEventId} already exists for this sprite.`);
   }
 
-  const [updatedEvent] = await db<StoredSpriteEventRow>("sprite_events")
-    .where({ id: eventRecordId, sprite_id: spriteId })
+  const updateQuery = db<StoredSpriteEventRow>("sprite_events")
+    .where({ id: eventRecordId, sprite_id: spriteId });
+
+  if (normalizedSpriteInstanceId) {
+    updateQuery.where({ sprite_instance_id: normalizedSpriteInstanceId });
+  } else {
+    updateQuery.whereNull("sprite_instance_id");
+  }
+
+  const [updatedEvent] = await updateQuery
     .update({
       enabled,
       event_id: normalizedEventId,
@@ -3585,6 +3670,149 @@ function buildOpenRouterErrorMessage(responseBody: Record<string, unknown>, resp
     : `OpenRouter request failed (${status}): ${primaryDetail}`;
 }
 
+function stripMarkdownCodeFence(value: string) {
+  const trimmedValue = value.trim();
+  const fencedMatch = trimmedValue.match(/^```(?:lua)?\s*([\s\S]*?)\s*```$/iu);
+
+  return (fencedMatch?.[1] ?? trimmedValue).trim();
+}
+
+function escapePdfText(value: string) {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("(", "\\(")
+    .replaceAll(")", "\\)")
+    .replaceAll("\r", "");
+}
+
+function wrapPdfTextLine(value: string, maxCharacters: number) {
+  const words = value.replace(/\s+/gu, " ").trim().split(" ").filter(Boolean);
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    if (!currentLine) {
+      currentLine = word;
+      continue;
+    }
+
+    if (`${currentLine} ${word}`.length <= maxCharacters) {
+      currentLine = `${currentLine} ${word}`;
+      continue;
+    }
+
+    lines.push(currentLine);
+    currentLine = word;
+  }
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines.length ? lines : [""];
+}
+
+function createSimpleTextPdfDataUrl(text: string) {
+  const pageWidth = 612;
+  const pageHeight = 792;
+  const marginX = 48;
+  const marginTop = 54;
+  const lineHeight = 13;
+  const maxLinesPerPage = Math.floor((pageHeight - marginTop * 2) / lineHeight);
+  const lines = text
+    .split("\n")
+    .flatMap((line) => wrapPdfTextLine(line, 92));
+  const pages: string[][] = [];
+
+  for (let index = 0; index < lines.length; index += maxLinesPerPage) {
+    pages.push(lines.slice(index, index + maxLinesPerPage));
+  }
+
+  if (!pages.length) {
+    pages.push([""]);
+  }
+
+  const objects: string[] = [];
+  const catalogObjectNumber = 1;
+  const pagesObjectNumber = 2;
+  const fontObjectNumber = 3;
+  const pageObjectNumbers: number[] = [];
+  const contentObjectNumbers: number[] = [];
+  let nextObjectNumber = 4;
+
+  for (const pageLines of pages) {
+    const pageObjectNumber = nextObjectNumber;
+    const contentObjectNumber = nextObjectNumber + 1;
+
+    nextObjectNumber += 2;
+    pageObjectNumbers.push(pageObjectNumber);
+    contentObjectNumbers.push(contentObjectNumber);
+
+    const content = [
+      "BT",
+      "/F1 10 Tf",
+      `1 0 0 1 ${marginX} ${pageHeight - marginTop} Tm`,
+      `${lineHeight} TL`,
+      ...pageLines.map((line, lineIndex) =>
+        lineIndex === 0 ? `(${escapePdfText(line)}) Tj` : `T* (${escapePdfText(line)}) Tj`
+      ),
+      "ET"
+    ].join("\n");
+
+    objects[contentObjectNumber] = `${contentObjectNumber} 0 obj\n<< /Length ${Buffer.byteLength(
+      content,
+      "utf8"
+    )} >>\nstream\n${content}\nendstream\nendobj\n`;
+    objects[pageObjectNumber] = `${pageObjectNumber} 0 obj\n<< /Type /Page /Parent ${pagesObjectNumber} 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${fontObjectNumber} 0 R >> >> /Contents ${contentObjectNumber} 0 R >>\nendobj\n`;
+  }
+
+  objects[catalogObjectNumber] = `${catalogObjectNumber} 0 obj\n<< /Type /Catalog /Pages ${pagesObjectNumber} 0 R >>\nendobj\n`;
+  objects[pagesObjectNumber] = `${pagesObjectNumber} 0 obj\n<< /Type /Pages /Kids [${pageObjectNumbers
+    .map((objectNumber) => `${objectNumber} 0 R`)
+    .join(" ")}] /Count ${pageObjectNumbers.length} >>\nendobj\n`;
+  objects[fontObjectNumber] = `${fontObjectNumber} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n`;
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+
+  for (let objectNumber = 1; objectNumber < nextObjectNumber; objectNumber += 1) {
+    offsets[objectNumber] = Buffer.byteLength(pdf, "utf8");
+    pdf += objects[objectNumber];
+  }
+
+  const xrefOffset = Buffer.byteLength(pdf, "utf8");
+  pdf += `xref\n0 ${nextObjectNumber}\n0000000000 65535 f \n`;
+
+  for (let objectNumber = 1; objectNumber < nextObjectNumber; objectNumber += 1) {
+    pdf += `${String(offsets[objectNumber]).padStart(10, "0")} 00000 n \n`;
+  }
+
+  pdf += `trailer\n<< /Size ${nextObjectNumber} /Root ${catalogObjectNumber} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+
+  return `data:application/pdf;base64,${Buffer.from(pdf, "utf8").toString("base64")}`;
+}
+
+async function loadLuaScriptingGuideMarkdown() {
+  let response: Response;
+
+  try {
+    response = await fetch(LUA_SCRIPTING_GUIDE_SOURCE_URL, {
+      headers: {
+        accept: "text/markdown,text/plain;q=0.9,*/*;q=0.8"
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    throw new Error(`Could not load Lua scripting guide: ${message}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Could not load Lua scripting guide (${response.status}).`);
+  }
+
+  return response.text();
+}
+
 function getPersonalityProfileImageUrl(characterSlug: string) {
   const normalizedCharacterSlug = assertPersonalitySlug(characterSlug);
   const bucketRoot = getR2Bucket();
@@ -3987,6 +4215,91 @@ export async function randomizePersonalityThroughOpenRouter(characterSlug: strin
   const generatedUpdates = buildGeneratedPersonalityUpdates(parsedResponse, personality);
 
   return updatePersonalityRecord(personality.character_slug, generatedUpdates);
+}
+
+export async function fixLuaScriptThroughOpenRouter(input: {
+  luaScript: string;
+  toolDefinition: unknown;
+}) {
+  const luaScript = typeof input.luaScript === "string" ? input.luaScript : "";
+  const toolDefinitionJson = JSON.stringify(input.toolDefinition ?? {}, null, 2);
+  const apiKey = getOpenRouterApiKey();
+
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY is not configured.");
+  }
+
+  const scriptingGuideMarkdown = await loadLuaScriptingGuideMarkdown();
+  const scriptingGuideDataUrl = createSimpleTextPdfDataUrl(scriptingGuideMarkdown);
+  const prompt = `Review the programming guide at http://localhost:5173/__lua/scripting-guide and fix the lua script here.  Output only the revised lua script.  Here is the Tool Definition: ${toolDefinitionJson} Here is the existing Lua: ${luaScript}.  Remember to output only fixed LUA Script.`;
+  let response: Response;
+
+  try {
+    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      body: JSON.stringify({
+        max_tokens: 4096,
+        messages: [
+          {
+            content: [
+              {
+                text: prompt,
+                type: "text"
+              },
+              {
+                file: {
+                  file_data: scriptingGuideDataUrl,
+                  filename: "lua_scripting_guide.pdf"
+                },
+                type: "file"
+              }
+            ],
+            role: "user"
+          }
+        ],
+        model: AI_LUA_OPENROUTER_MODEL,
+        temperature: 0.1
+      }),
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      method: "POST"
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "fetch failed";
+    throw new Error(`Request to OpenRouter failed: ${message}`);
+  }
+
+  const responseText = await response.text().catch(() => "");
+  let responseBody: Record<string, unknown> = {};
+
+  if (responseText.trim()) {
+    try {
+      responseBody = JSON.parse(responseText) as Record<string, unknown>;
+    } catch {
+      responseBody = {};
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(buildOpenRouterErrorMessage(responseBody, responseText, response.status));
+  }
+
+  const choices = Array.isArray(responseBody.choices) ? responseBody.choices : [];
+  const firstChoice = choices[0];
+  const messageContent =
+    firstChoice && typeof firstChoice === "object" && "message" in firstChoice && firstChoice.message
+      ? (firstChoice.message as Record<string, unknown>).content
+      : "";
+  const generatedText = stripMarkdownCodeFence(extractOpenRouterResponseText(messageContent));
+
+  if (!generatedText) {
+    throw new Error("OpenRouter returned an empty Lua script.");
+  }
+
+  return {
+    luaScript: generatedText
+  };
 }
 
 export async function uploadPersonalityProfileImage(characterSlug: string, file: File) {
@@ -5276,6 +5589,7 @@ export async function readMapRecords() {
         "placements.asset_type",
         "placements.tile_asset_id",
         "placements.sprite_asset_id",
+        "placements.sprite_instance_id",
         "placements.slot_num",
         "placements.color_enabled",
         "placements.color_value",
