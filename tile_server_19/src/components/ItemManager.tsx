@@ -586,7 +586,7 @@ export function ItemManager() {
           throw new Error(responseBody.error ?? "Could not update item.");
         }
 
-        const updatedItem = responseBody as ItemRecord;
+        const updatedItem = { ...activeItem, ...responseBody } as ItemRecord;
         upsertItem(updatedItem);
         setBaseValueDraft(updatedItem.base_value == null ? "" : String(updatedItem.base_value));
         setDescriptionDraft(updatedItem.description ?? "");
