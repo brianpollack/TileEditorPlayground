@@ -220,6 +220,8 @@ interface StoredItemRow {
   layer: number | null;
   level: number | null;
   long_description: string | null;
+  max_qty: number | null;
+  max_stack: number | null;
   model: string | null;
   mount_point: string | null;
   name: string;
@@ -1057,6 +1059,8 @@ function mapRowToItemRecord(row: StoredItemRow): ItemRecord {
     layer: normalizeOptionalNumber(row.layer),
     level: normalizeOptionalNumber(row.level),
     long_description: normalizeOptionalText(row.long_description),
+    max_qty: normalizeOptionalNumber(row.max_qty),
+    max_stack: normalizeOptionalNumber(row.max_stack),
     model: normalizeOptionalText(row.model),
     mount_point: normalizeOptionalText(row.mount_point),
     name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : `Item ${row.id}`,
@@ -4759,6 +4763,8 @@ function mapApiItemToItemRecord(item: Partial<StoredItemRow>) {
     layer: normalizeOptionalNumber(item.layer),
     level: normalizeOptionalNumber(item.level),
     long_description: normalizeOptionalText(item.long_description),
+    max_qty: normalizeOptionalNumber(item.max_qty),
+    max_stack: normalizeOptionalNumber(item.max_stack),
     model: normalizeOptionalText(item.model),
     mount_point: normalizeOptionalText(item.mount_point),
     name: normalizedName,

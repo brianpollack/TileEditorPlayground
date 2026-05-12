@@ -202,6 +202,8 @@ export interface ItemRecord {
   layer: number | null;
   level: number | null;
   long_description: string | null;
+  max_qty: number | null;
+  max_stack: number | null;
   model: string | null;
   mount_point: string | null;
   name: string;
