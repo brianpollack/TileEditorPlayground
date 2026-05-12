@@ -1067,7 +1067,7 @@ export function ItemManager() {
           <div className="min-h-[calc(100vh-12rem)] overflow-auto theme-surface-canvas-viewport p-4 md:p-6">
             {activeItem ? (
               <div className="grid gap-5">
-                <div className="grid gap-6 xl:grid-cols-[minmax(26rem,calc(33.333%+100px))_minmax(0,1fr)_minmax(0,1fr)] xl:items-start">
+                <div className="grid gap-6 xl:grid-cols-[26rem_minmax(0,1fr)] xl:items-start">
                   <div className="grid content-start gap-6">
                     <div className={flatSectionClass}>
                       <ItemSectionTitle>Gameplay</ItemSectionTitle>

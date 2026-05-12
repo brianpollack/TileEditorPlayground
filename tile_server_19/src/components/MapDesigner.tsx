@@ -1235,11 +1235,21 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     });
 
     return placements.sort(
-      (left, right) =>
-        left.sprite.name.localeCompare(right.sprite.name) ||
-        left.tileY - right.tileY ||
-        left.tileX - right.tileX ||
-        left.instanceId.localeCompare(right.instanceId)
+      (left, right) => {
+        const leftHasScript = hasLuaScriptContent(left.record?.lua_script);
+        const rightHasScript = hasLuaScriptContent(right.record?.lua_script);
+
+        if (leftHasScript !== rightHasScript) {
+          return leftHasScript ? -1 : 1;
+        }
+
+        return (
+          left.sprite.name.localeCompare(right.sprite.name) ||
+          left.tileY - right.tileY ||
+          left.tileX - right.tileX ||
+          left.instanceId.localeCompare(right.instanceId)
+        );
+      }
     );
   }, [draftLayers, spriteInstanceEvents, spritesByKey]);
   const activeSpriteEventPlacement = useMemo(
