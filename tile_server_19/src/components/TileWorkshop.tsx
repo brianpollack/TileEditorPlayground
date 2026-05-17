@@ -928,16 +928,18 @@ export function TileWorkshop() {
   }
 
   function updateSpriteNumberField(
-    field: "item_id" | "mount_x" | "mount_y" | "offset_x" | "offset_y" | "tile_h" | "tile_w",
+    field: "activation_distance" | "item_id" | "mount_x" | "mount_y" | "offset_x" | "offset_y" | "tile_h" | "tile_w",
     value: string
   ) {
     const nextValue = Number(value);
     const normalizedValue =
       field === "mount_x" || field === "mount_y"
         ? truncateMountValue(nextValue)
-        : Number.isFinite(nextValue)
-          ? nextValue
-          : 0;
+        : field === "activation_distance"
+          ? Math.max(1, Math.round(Number.isFinite(nextValue) ? nextValue : 1))
+          : Number.isFinite(nextValue)
+            ? nextValue
+            : 0;
 
     setSpriteDraft((currentSprite) =>
       currentSprite

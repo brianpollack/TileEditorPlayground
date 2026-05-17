@@ -50,7 +50,7 @@ interface SpriteEditorWorkspaceProps {
   onSourceCanvasMouseUp(): void;
   onSpriteBooleanChange(field: "casts_shadow" | "impassible" | "is_flat" | "is_locked", value: boolean): void;
   onSpriteNumberChange(
-    field: "item_id" | "mount_x" | "mount_y" | "offset_x" | "offset_y" | "tile_h" | "tile_w",
+    field: "activation_distance" | "item_id" | "mount_x" | "mount_y" | "offset_x" | "offset_y" | "tile_h" | "tile_w",
     value: string
   ): void;
   onSpriteTextChange(field: "mouseover_cursor" | "name", value: string): void;
@@ -194,6 +194,13 @@ function SpriteEditorWorkspaceImpl({
       <Panel
         actions={
           <div className="flex flex-wrap items-center gap-3">
+            <button
+              className={actionButtonClass}
+              onClick={onEditEvents}
+              type="button"
+            >
+              Add / Edit Events
+            </button>
             <button
               className={actionButtonClass}
               onClick={onBrowseImage}
@@ -380,20 +387,39 @@ function SpriteEditorWorkspaceImpl({
 
               <div className="grid content-start gap-3">
                 <SectionEyebrow>Editable</SectionEyebrow>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="grid gap-1 text-sm theme-text-muted">
-                    <span>Item ID</span>
-                    <input
-                      className={metadataFieldClass}
-                      onChange={(event) => {
-                        onSpriteNumberChange("item_id", event.currentTarget.value);
-                      }}
-                      type="number"
-                      value={String(spriteRecord.item_id)}
-                    />
-                  </label>
-                  <div />
-                  <div className="grid gap-3 sm:col-span-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+                <div className="grid gap-3">
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+                    <label className="grid gap-1 text-sm theme-text-muted">
+                      <span>Item ID</span>
+                      <input
+                        className={metadataFieldClass}
+                        onChange={(event) => {
+                          onSpriteNumberChange("item_id", event.currentTarget.value);
+                        }}
+                        type="number"
+                        value={String(spriteRecord.item_id)}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-sm theme-text-muted">
+                      <span>Activation Distance</span>
+                      <input
+                        className={metadataFieldClass}
+                        min={1}
+                        onChange={(event) => {
+                          onSpriteNumberChange("activation_distance", event.currentTarget.value);
+                        }}
+                        type="number"
+                        value={String(spriteRecord.activation_distance)}
+                      />
+                    </label>
+                    <span
+                      aria-hidden="true"
+                      className={`${actionButtonClass} invisible w-fit`}
+                    >
+                      Auto Layout
+                    </span>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
                     <label className="grid gap-1 text-sm theme-text-muted">
                       <span>Offset X</span>
                       <input
@@ -423,7 +449,7 @@ function SpriteEditorWorkspaceImpl({
                       Auto Layout
                     </span>
                   </div>
-                  <div className="grid gap-3 sm:col-span-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
                     <label className="grid gap-1 text-sm theme-text-muted">
                       <span>Mount X</span>
                       <input
@@ -540,23 +566,10 @@ function SpriteEditorWorkspaceImpl({
                 </div>
               </div>
             </div>
-
-            <div className="grid gap-3">
-              <SectionEyebrow>Events</SectionEyebrow>
-              <div className="flex justify-end">
-                <button
-                  className={actionButtonClass}
-                  onClick={onEditEvents}
-                  type="button"
-                >
-                  Add / Edit Events
-                </button>
-              </div>
-            </div>
           </div>
         ) : null}
-        </div>
-      </Panel>
+      </div>
+    </Panel>
       {isNewStateDialogOpen ? (
         <ConfirmationDialog
           actions={

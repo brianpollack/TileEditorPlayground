@@ -3,7 +3,7 @@
 var doc = app.activeDocument;
 var scriptFile = new File($.fileName);
 var scriptFolder = scriptFile.parent;
-var outputFolder = new Folder(scriptFolder + "/output");
+var outputFolder = new Folder(scriptFolder.parent + "/output");
 if (!outputFolder.exists) {
     outputFolder.create();
 }

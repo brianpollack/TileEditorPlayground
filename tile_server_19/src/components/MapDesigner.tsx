@@ -147,6 +147,7 @@ import {
   gridVisibilitySwitchLabelClass,
   gridVisibilitySwitchTrackClass,
   iconButtonClass,
+  modalBackdropClass,
   modalSurfaceClass,
   panelTabButtonClass,
   previewSelectionButtonClass,
@@ -1045,6 +1046,9 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [spriteEventLuaAnnotations, setSpriteEventLuaAnnotations] = useState<Ace.Annotation[]>([]);
   const [isAiLuaFixing, setAiLuaFixing] = useState(false);
   const [aiLuaReview, setAiLuaReview] = useState<AiLuaReviewState | null>(null);
+  const [isAiLuaPromptOpen, setAiLuaPromptOpen] = useState(false);
+  const [aiLuaUserDescription, setAiLuaUserDescription] = useState("");
+  const aiLuaPromptTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [saveConfirmationMessage, setSaveConfirmationMessage] = useState("");
   const [showCoordinateLabels, setShowCoordinateLabels] = useState(false);
   const [mapAboutPromptDrafts, setMapAboutPromptDrafts] = useState<Record<string, string>>(() =>
@@ -3646,6 +3650,16 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       return;
     }
 
+    setAiLuaUserDescription("");
+    setAiLuaPromptOpen(true);
+  }
+
+  function submitAiLuaFix() {
+    if (!activeEventName || isAiLuaFixing) {
+      return;
+    }
+
+    setAiLuaPromptOpen(false);
     setAiLuaFixing(true);
     if (isEditingSpriteEvent) {
       setSpriteEventLuaAnnotations([]);
@@ -3661,7 +3675,8 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         context: isEditingSpriteEvent ? "sprite" : "zone",
         event: activeEventName,
         definition: activeEventDefinition
-      }
+      },
+      userDescription: aiLuaUserDescription
     })
       .then((result) => {
         setAiLuaReview({
@@ -5610,6 +5625,40 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                   type="button"
                 >
                   Create
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {isAiLuaPromptOpen ? (
+        <div className={modalBackdropClass}>
+          <div className={`${modalSurfaceClass} max-w-lg p-5`}>
+            <div className="grid gap-4">
+              <strong className="font-serif text-[1.45rem] theme-text-primary">AI Lua</strong>
+              <textarea
+                className="min-h-[8rem] w-full border theme-border-panel theme-bg-input p-3 text-sm theme-text-primary outline-none transition theme-focus-border-accent"
+                onChange={(event) => {
+                  setAiLuaUserDescription(event.currentTarget.value);
+                }}
+                placeholder="Describe what you want the AI to do..."
+                ref={aiLuaPromptTextareaRef}
+                value={aiLuaUserDescription}
+              />
+              <div className="flex justify-end gap-3">
+                <button
+                  className={secondaryButtonClass}
+                  onClick={() => { setAiLuaPromptOpen(false); }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className={actionButtonClass}
+                  onClick={submitAiLuaFix}
+                  type="button"
+                >
+                  Submit
                 </button>
               </div>
             </div>

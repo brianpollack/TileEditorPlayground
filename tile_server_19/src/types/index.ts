@@ -83,6 +83,7 @@ export interface TileRecord {
 }
 
 export interface SpriteRecord {
+  activation_distance: number;
   bounding_h: number;
   bounding_w: number;
   bounding_x: number;
