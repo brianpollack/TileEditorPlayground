@@ -42,7 +42,11 @@ interface TileEditorWorkspaceProps {
   onSourceCanvasClick(event: React.MouseEvent<HTMLCanvasElement>): void;
   onSourceCanvasMouseMove(event: React.MouseEvent<HTMLCanvasElement>): void;
   tileImpassible: boolean;
-  onTileBooleanChange(field: "impassible", value: boolean): void;
+  tileIsWall: boolean;
+  tileShowClouds: boolean;
+  tileShowPerlin: boolean;
+  tileSuperTile: boolean;
+  onTileBooleanChange(field: "impassible" | "is_wall" | "show_clouds" | "show_perlin" | "super_tile", value: boolean): void;
   previewCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   selectedSlotKey: SlotKey;
   slotPendingClear: SlotKey | null;
@@ -75,7 +79,11 @@ function TileEditorWorkspaceImpl({
   selectedSlotKey,
   slotPendingClear,
   sourceCanvasRef,
-  sourceImage
+  sourceImage,
+  tileIsWall,
+  tileShowClouds,
+  tileShowPerlin,
+  tileSuperTile
 }: TileEditorWorkspaceProps) {
   return (
     <div className="grid min-h-0 gap-4 xl:grid-cols-2">
@@ -145,6 +153,46 @@ function TileEditorWorkspaceImpl({
               type="checkbox"
             />
             Impassible
+          </label>
+          <label className="flex items-center gap-2 text-sm theme-text-muted">
+            <input
+              checked={tileSuperTile}
+              onChange={(event) => {
+                onTileBooleanChange("super_tile", event.currentTarget.checked);
+              }}
+              type="checkbox"
+            />
+            Super Tile
+          </label>
+          <label className="flex items-center gap-2 text-sm theme-text-muted">
+            <input
+              checked={tileIsWall}
+              onChange={(event) => {
+                onTileBooleanChange("is_wall", event.currentTarget.checked);
+              }}
+              type="checkbox"
+            />
+            Wall
+          </label>
+          <label className="flex items-center gap-2 text-sm theme-text-muted">
+            <input
+              checked={tileShowClouds}
+              onChange={(event) => {
+                onTileBooleanChange("show_clouds", event.currentTarget.checked);
+              }}
+              type="checkbox"
+            />
+            Show Clouds
+          </label>
+          <label className="flex items-center gap-2 text-sm theme-text-muted">
+            <input
+              checked={tileShowPerlin}
+              onChange={(event) => {
+                onTileBooleanChange("show_perlin", event.currentTarget.checked);
+              }}
+              type="checkbox"
+            />
+            Show Perlin
           </label>
         </div>
 
@@ -249,29 +297,31 @@ function TileEditorWorkspaceImpl({
                       </span>
                     </div>
                   </button>
-                  <div className="flex items-center gap-1">
-                    <button
-                      className="grid h-6 w-6 place-items-center border theme-border-inverse-soft bg-white/8 theme-text-inverse-soft transition theme-hover-border-info hover:text-[var(--info)]"
-                      onClick={() => {
-                        onOpenPaintEditor(slotKey as SlotKey);
-                      }}
-                      title={`Edit ${describeSlot(slotKey as SlotKey)}`}
-                      type="button"
-                    >
-                      <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
-                    </button>
-                    <button
-                      className="grid h-6 w-6 place-items-center border theme-border-inverse-soft bg-white/8 theme-text-inverse-soft transition theme-hover-border-accent theme-hover-text-accent disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={!slotRecord}
-                      onClick={() => {
-                        onRequestClearSlot(slotKey as SlotKey);
-                      }}
-                      title={`Clear ${describeSlot(slotKey as SlotKey)}`}
-                      type="button"
-                    >
-                      <FontAwesomeIcon className="h-3.5 w-3.5" icon={faTrashCan} />
-                    </button>
-                  </div>
+                  {!tileSuperTile ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="grid h-6 w-6 place-items-center border theme-border-inverse-soft bg-white/8 theme-text-inverse-soft transition theme-hover-border-info hover:text-[var(--info)]"
+                        onClick={() => {
+                          onOpenPaintEditor(slotKey as SlotKey);
+                        }}
+                        title={`Edit ${describeSlot(slotKey as SlotKey)}`}
+                        type="button"
+                      >
+                        <FontAwesomeIcon className="h-3.5 w-3.5" icon={faPenToSquare} />
+                      </button>
+                      <button
+                        className="grid h-6 w-6 place-items-center border theme-border-inverse-soft bg-white/8 theme-text-inverse-soft transition theme-hover-border-accent theme-hover-text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={!slotRecord}
+                        onClick={() => {
+                          onRequestClearSlot(slotKey as SlotKey);
+                        }}
+                        title={`Clear ${describeSlot(slotKey as SlotKey)}`}
+                        type="button"
+                      >
+                        <FontAwesomeIcon className="h-3.5 w-3.5" icon={faTrashCan} />
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -328,5 +378,9 @@ export const TileEditorWorkspace = memo(
     prev.selectedSlotKey === next.selectedSlotKey &&
     prev.slotPendingClear === next.slotPendingClear &&
     prev.sourceImage === next.sourceImage &&
-    prev.tileImpassible === next.tileImpassible
+    prev.tileImpassible === next.tileImpassible &&
+    prev.tileIsWall === next.tileIsWall &&
+    prev.tileShowClouds === next.tileShowClouds &&
+    prev.tileShowPerlin === next.tileShowPerlin &&
+    prev.tileSuperTile === next.tileSuperTile
 );

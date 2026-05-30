@@ -139,9 +139,13 @@ interface StoredAssetRow {
   id: string;
   image_data: Buffer | null;
   impassible: boolean | null;
+  is_wall: boolean | null;
+  show_clouds: boolean | null;
+  show_perlin: boolean | null;
   source_path: string | null;
   sprite_metadata: unknown;
   sub_folder: string;
+  super_tile: boolean | null;
   tile_slots: unknown;
   updated_at: Date | string;
 }
@@ -850,9 +854,13 @@ async function upsertTileAsset(
       id: randomUUID(),
       image_data: getTileThumbnailBuffer(normalizedTile),
       impassible: normalizedTile.impassible,
+      is_wall: normalizedTile.is_wall,
+      show_clouds: normalizedTile.show_clouds,
+      show_perlin: normalizedTile.show_perlin,
       source_path: normalizedTile.source,
       sprite_metadata: null,
       sub_folder: normalizedTile.path,
+      super_tile: normalizedTile.super_tile,
       tile_slots: serializedSlots,
       updated_at: now
     } satisfies Partial<StoredAssetRow>)
@@ -863,8 +871,12 @@ async function upsertTileAsset(
       deleted: false,
       image_data: getTileThumbnailBuffer(normalizedTile),
       impassible: normalizedTile.impassible,
+      is_wall: normalizedTile.is_wall,
+      show_clouds: normalizedTile.show_clouds,
+      show_perlin: normalizedTile.show_perlin,
       source_path: normalizedTile.source,
       sub_folder: normalizedTile.path,
+      super_tile: normalizedTile.super_tile,
       tile_slots: serializedSlots,
       updated_at: now
     });
@@ -913,7 +925,10 @@ async function upsertSpriteAsset(
 }
 
 function mapRowToTileRecord(row: StoredAssetRow): TileRecord {
-  const slots = normalizeSlotRecords(Array.isArray(row.tile_slots) ? (row.tile_slots as Array<SlotRecord | null>) : undefined);
+  const rawSlots = normalizeSlotRecords(
+    Array.isArray(row.tile_slots) ? (row.tile_slots as Array<SlotRecord | null>) : undefined
+  );
+  const slots = row.super_tile ? expandSuperTileSlots(rawSlots) : rawSlots;
 
   return normalizeTilePayload(
     row.asset_name,
@@ -922,7 +937,11 @@ function mapRowToTileRecord(row: StoredAssetRow): TileRecord {
     row.source_path ?? "",
     slots,
     bufferToPngDataUrl(row.image_data) || createTileThumbnail(slots),
-    row.impassible ?? true
+    row.impassible ?? true,
+    row.super_tile ?? false,
+    row.is_wall ?? false,
+    row.show_clouds ?? false,
+    row.show_perlin ?? false
   );
 }
 
@@ -1732,6 +1751,10 @@ function isTileRecord(candidate: unknown): candidate is TileRecord {
 
   return (
     (typeof record.impassible === "boolean" || typeof record.impassible === "undefined") &&
+    (typeof record.is_wall === "boolean" || typeof record.is_wall === "undefined") &&
+    (typeof record.show_clouds === "boolean" || typeof record.show_clouds === "undefined") &&
+    (typeof record.show_perlin === "boolean" || typeof record.show_perlin === "undefined") &&
+    (typeof record.super_tile === "boolean" || typeof record.super_tile === "undefined") &&
     typeof record.name === "string" &&
     typeof record.slug === "string" &&
     typeof record.source === "string" &&
@@ -1742,11 +1765,15 @@ function isTileRecord(candidate: unknown): candidate is TileRecord {
 function normalizeTileRecord(record: TileRecord): TileRecord {
   return {
     impassible: typeof record.impassible === "boolean" ? record.impassible : true,
+    is_wall: Boolean(record.is_wall),
     name: record.name.trim(),
     path: normalizeTileRecordPath(record.path),
+    show_clouds: Boolean(record.show_clouds),
+    show_perlin: Boolean(record.show_perlin),
     slug: record.slug.trim(),
     source: record.source.trim(),
     slots: normalizeSlotRecords(record.slots),
+    super_tile: Boolean(record.super_tile),
     thumbnail: typeof record.thumbnail === "string" ? record.thumbnail.trim() : ""
   };
 }
@@ -5274,7 +5301,11 @@ export async function duplicateTileRecord(input: { name: string; slug: string })
     currentTile.source,
     currentTile.slots,
     currentTile.thumbnail || createTileThumbnail(currentTile.slots),
-    currentTile.impassible
+    currentTile.impassible,
+    currentTile.super_tile,
+    currentTile.is_wall,
+    currentTile.show_clouds,
+    currentTile.show_perlin
   );
 
   await upsertTileAsset(db, nextTile);
@@ -5369,7 +5400,11 @@ export async function importTileFile(file: File, tilePath: string) {
     file.name,
     slots,
     "",
-    existingTile?.impassible ?? false
+    existingTile?.impassible ?? false,
+    existingTile?.super_tile ?? false,
+    existingTile?.is_wall ?? false,
+    existingTile?.show_clouds ?? false,
+    existingTile?.show_perlin ?? false
   );
   const db = await getDatabase();
 
@@ -5438,9 +5473,13 @@ export async function saveSpriteRecord(input: SpriteRecord, replacementFile?: Fi
 
 export async function saveTileRecord(input: {
   impassible: boolean;
+  is_wall: boolean;
+  show_clouds: boolean;
+  show_perlin: boolean;
   slots: Array<SlotRecord | null>;
   slug: string;
   source: string;
+  super_tile: boolean;
 }) {
   await ensureAssetDatabaseReady();
   const db = await getDatabase();
@@ -5461,7 +5500,11 @@ export async function saveTileRecord(input: {
     input.source,
     input.slots,
     createTileThumbnail(input.slots),
-    input.impassible
+    input.impassible,
+    input.super_tile,
+    input.is_wall,
+    input.show_clouds,
+    input.show_perlin
   );
 
   await upsertTileAsset(db, nextTile);
@@ -5711,6 +5754,93 @@ function extractPngBuffer(dataUrl: string) {
   return Buffer.from(match[1], "base64");
 }
 
+function hasVisiblePixelInPngTile(sourcePng: PNG, sourceX: number, sourceY: number) {
+  const tileWidth = Math.min(TILE_SIZE, sourcePng.width - sourceX);
+  const tileHeight = Math.min(TILE_SIZE, sourcePng.height - sourceY);
+
+  for (let y = 0; y < tileHeight; y += 1) {
+    for (let x = 0; x < tileWidth; x += 1) {
+      const sourceIndex = (sourcePng.width * (sourceY + y) + sourceX + x) << 2;
+
+      if ((sourcePng.data[sourceIndex + 3] ?? 0) > 0) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function createSlotRecordFromPngTile(sourcePng: PNG, sourceX: number, sourceY: number): SlotRecord {
+  const tilePng = new PNG({
+    height: TILE_SIZE,
+    width: TILE_SIZE
+  });
+
+  PNG.bitblt(sourcePng, tilePng, sourceX, sourceY, TILE_SIZE, TILE_SIZE, 0, 0);
+
+  const pixels = `data:image/png;base64,${PNG.sync.write(tilePng).toString("base64")}`;
+
+  return {
+    layers: [pixels],
+    pixels,
+    size: TILE_SIZE,
+    source_x: sourceX,
+    source_y: sourceY
+  };
+}
+
+function createSuperTileSlotsFromPng(sourcePng: PNG) {
+  const slots: Array<SlotRecord | null> = [];
+  const columns = Math.floor(sourcePng.width / TILE_SIZE);
+  const rows = Math.floor(sourcePng.height / TILE_SIZE);
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const sourceX = column * TILE_SIZE;
+      const sourceY = row * TILE_SIZE;
+
+      if (!hasVisiblePixelInPngTile(sourcePng, sourceX, sourceY)) {
+        continue;
+      }
+
+      slots.push(createSlotRecordFromPngTile(sourcePng, sourceX, sourceY));
+    }
+  }
+
+  return normalizeSlotRecords(slots);
+}
+
+function expandSuperTileSlots(slots: Array<SlotRecord | null>) {
+  const normalizedSlots = normalizeSlotRecords(slots);
+  const filledSlots = normalizedSlots.filter((slotRecord) => Boolean(slotRecord?.pixels));
+
+  if (filledSlots.length !== 1) {
+    return normalizedSlots;
+  }
+
+  const sourcePixels = filledSlots[0]?.pixels;
+
+  if (!sourcePixels) {
+    return normalizedSlots;
+  }
+
+  try {
+    const sourcePng = PNG.sync.read(extractPngBuffer(sourcePixels));
+
+    if (sourcePng.width <= TILE_SIZE && sourcePng.height <= TILE_SIZE) {
+      return normalizedSlots;
+    }
+
+    const expandedSlots = createSuperTileSlotsFromPng(sourcePng);
+    const expandedFilledSlots = expandedSlots.filter((slotRecord) => Boolean(slotRecord?.pixels));
+
+    return expandedFilledSlots.length > 1 ? expandedSlots : normalizedSlots;
+  } catch {
+    return normalizedSlots;
+  }
+}
+
 function scaleTileIntoStrip(sourcePng: PNG, targetPng: PNG, tileIndex: number, targetTileSize: number) {
   const destinationX = tileIndex * targetTileSize;
 
@@ -5737,12 +5867,13 @@ function scaleTileIntoStrip(sourcePng: PNG, targetPng: PNG, tileIndex: number, t
 }
 
 export function createTileThumbnail(slots: Array<SlotRecord | null>) {
+  const normalizedSlots = normalizeSlotRecords(slots);
   const png = new PNG({
     height: THUMBNAIL_TILE_SIZE,
-    width: SLOT_COUNT * THUMBNAIL_TILE_SIZE
+    width: Math.max(SLOT_COUNT, normalizedSlots.length) * THUMBNAIL_TILE_SIZE
   });
 
-  normalizeSlotRecords(slots).forEach((slotRecord, index) => {
+  normalizedSlots.forEach((slotRecord, index) => {
     if (!slotRecord?.pixels) {
       return;
     }
@@ -5761,13 +5892,14 @@ export async function exportTileStrip(
   slots: Array<SlotRecord | null>
 ): Promise<ExportArtifact> {
   await mkdir(EXPORTS_DIR, { recursive: true });
+  const normalizedSlots = normalizeSlotRecords(slots);
 
   const png = new PNG({
     height: TILE_SIZE,
-    width: SLOT_COUNT * TILE_SIZE
+    width: Math.max(SLOT_COUNT, normalizedSlots.length) * TILE_SIZE
   });
 
-  normalizeSlotRecords(slots).forEach((slotRecord, index) => {
+  normalizedSlots.forEach((slotRecord, index) => {
     if (!slotRecord?.pixels) {
       return;
     }
@@ -5820,15 +5952,26 @@ export function normalizeTilePayload(
   source: string,
   slots: Array<SlotRecord | null>,
   thumbnail = "",
-  impassible = true
+  impassible = true,
+  superTile = false,
+  isWall = false,
+  showClouds = false,
+  showPerlin = false
 ): TileRecord {
+  const normalizedSuperTile = Boolean(superTile);
+  const normalizedSlots = normalizeSlotRecords(slots);
+
   return {
     impassible: Boolean(impassible),
+    is_wall: Boolean(isWall),
     name: name.trim(),
     path: normalizeTileRecordPath(path),
+    show_clouds: Boolean(showClouds),
+    show_perlin: Boolean(showPerlin),
     slug: slug.trim(),
     source: source.trim(),
-    slots: normalizeSlotRecords(slots),
+    slots: normalizedSuperTile ? expandSuperTileSlots(normalizedSlots) : normalizedSlots,
+    super_tile: normalizedSuperTile,
     thumbnail: thumbnail.trim()
   };
 }

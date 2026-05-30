@@ -61,7 +61,7 @@ const DEFAULT_SIDEBAR_EXPANDED = true;
 const STUDIO_STATE_STORAGE_KEY = "tile-server-19:studio-state";
 
 function isSlotKey(value: string): value is SlotKey {
-  return value === "main" || value === "0" || value === "1" || value === "2" || value === "3";
+  return value === "main" || (/^\d+$/.test(value) && Number.isSafeInteger(Number(value)));
 }
 
 function createPaintEditorId(tileSlug: string, slotKey: SlotKey) {

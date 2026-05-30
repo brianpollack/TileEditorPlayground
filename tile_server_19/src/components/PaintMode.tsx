@@ -1861,9 +1861,13 @@ export function PaintMode({ session }: PaintModeProps) {
 
           const savedTile = await saveTileAction({
             impassible: tileRecord.impassible,
+            is_wall: tileRecord.is_wall,
+            show_clouds: tileRecord.show_clouds,
+            show_perlin: tileRecord.show_perlin,
             slots: nextDraftSlots,
             slug: session.tileSlug,
-            source: tileRecord.source
+            source: tileRecord.source,
+            super_tile: tileRecord.super_tile
           });
 
           upsertTile(savedTile);

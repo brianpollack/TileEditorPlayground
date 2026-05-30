@@ -17,9 +17,13 @@ export async function createTileAction(name: string, tilePath: string, impassibl
 
 export async function saveTileAction(input: {
   impassible: boolean;
+  is_wall: boolean;
+  show_clouds: boolean;
+  show_perlin: boolean;
   slots: Array<SlotRecord | null>;
   slug: string;
   source: string;
+  super_tile: boolean;
 }) {
   return saveTileRecord(input);
 }

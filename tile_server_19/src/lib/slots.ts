@@ -9,7 +9,7 @@ import {
 import { theme } from "../styles/theme";
 import type { PreviewPlacement, SelectedRegion, SlotRecord } from "../types";
 
-export type SlotKey = "main" | "0" | "1" | "2" | "3";
+export type SlotKey = "main" | `${number}`;
 
 export function describeSlot(slotKey: SlotKey) {
   return slotKey === "main" ? "Main" : `Accent ${Number(slotKey) + 1}`;
@@ -81,7 +81,7 @@ export function sanitizeSlotRecord(slotRecord: unknown): SlotRecord | null {
 }
 
 export function normalizeSlotRecords(slotRecords: Array<SlotRecord | null> | undefined) {
-  const normalized = Array.isArray(slotRecords) ? slotRecords.slice(0, SLOT_COUNT) : [];
+  const normalized = Array.isArray(slotRecords) ? slotRecords.slice() : [];
 
   while (normalized.length < SLOT_COUNT) {
     normalized.push(null);
@@ -159,6 +159,35 @@ export function createPaddedSlotRecord(
   };
 }
 
+export function createTileRegionSlotRecord(
+  sourceImage: CanvasImageSource,
+  sourceX: number,
+  sourceY: number
+): SlotRecord {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  canvas.width = TILE_SIZE;
+  canvas.height = TILE_SIZE;
+
+  if (!context) {
+    throw new Error("Could not create a tile canvas.");
+  }
+
+  context.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+  context.drawImage(sourceImage, sourceX, sourceY, TILE_SIZE, TILE_SIZE, 0, 0, TILE_SIZE, TILE_SIZE);
+
+  const pixels = canvas.toDataURL("image/png");
+
+  return {
+    layers: normalizeSlotLayers([pixels]),
+    pixels,
+    size: TILE_SIZE,
+    source_x: sourceX,
+    source_y: sourceY
+  };
+}
+
 export function drawPlaceholderCell(
   context: CanvasRenderingContext2D,
   x: number,
@@ -197,7 +226,7 @@ function createRandom(seedValue: string) {
   };
 }
 
-export function buildPreviewPlacements(seedValue: string): PreviewPlacement[] {
+export function buildPreviewPlacements(seedValue: string, slotCount = SLOT_COUNT): PreviewPlacement[] {
   const availableCells: Array<{ tileX: number; tileY: number }> = [];
 
   for (let tileY = 0; tileY < PREVIEW_GRID_TILES; tileY += 1) {
@@ -209,7 +238,7 @@ export function buildPreviewPlacements(seedValue: string): PreviewPlacement[] {
   const nextRandom = createRandom(seedValue);
   const placements: PreviewPlacement[] = [];
 
-  for (let slotIndex = 0; slotIndex < SLOT_COUNT - 1; slotIndex += 1) {
+  for (let slotIndex = 0; slotIndex < Math.max(0, slotCount - 1); slotIndex += 1) {
     const placementCount = 1 + Math.floor(nextRandom() * 4);
 
     for (let count = 0; count < placementCount && availableCells.length > 0; count += 1) {

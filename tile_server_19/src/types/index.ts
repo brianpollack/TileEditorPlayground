@@ -9,7 +9,7 @@ export interface SlotRecord {
 export interface PaintEditorSession {
   backupSlot: SlotRecord | null;
   id: string;
-  slotKey: "main" | "0" | "1" | "2" | "3";
+  slotKey: "main" | `${number}`;
   title: string;
   tileSlug: string;
 }
@@ -74,11 +74,15 @@ export type MapSpecialGrid = number[][];
 
 export interface TileRecord {
   impassible: boolean;
+  is_wall: boolean;
   name: string;
   path: string;
+  show_clouds: boolean;
+  show_perlin: boolean;
   slug: string;
   source: string;
   slots: Array<SlotRecord | null>;
+  super_tile: boolean;
   thumbnail: string;
 }
 

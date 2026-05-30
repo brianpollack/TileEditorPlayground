@@ -141,6 +141,10 @@ export async function ensureDatabaseSchema(db: Knex) {
       table.text("asset_name").notNullable();
       table.text("asset_type").notNullable();
       table.boolean("impassible").notNullable().defaultTo(true);
+      table.boolean("super_tile").notNullable().defaultTo(false);
+      table.boolean("is_wall").notNullable().defaultTo(false);
+      table.boolean("show_clouds").notNullable().defaultTo(false);
+      table.boolean("show_perlin").notNullable().defaultTo(false);
       table.boolean("deleted").notNullable().defaultTo(false);
       table.text("sub_folder").notNullable();
       table.text("asset_slug");
@@ -169,6 +173,27 @@ export async function ensureDatabaseSchema(db: Knex) {
       table.boolean("impassible").defaultTo(true);
     });
     await db(DATABASE_TABLE_NAME).whereNull("impassible").update({ impassible: true });
+  }
+
+  const hasSuperTileColumn = await db.schema.hasColumn(DATABASE_TABLE_NAME, "super_tile");
+
+  if (!hasSuperTileColumn) {
+    await db.schema.alterTable(DATABASE_TABLE_NAME, (table) => {
+      table.boolean("super_tile").defaultTo(false);
+    });
+    await db(DATABASE_TABLE_NAME).whereNull("super_tile").update({ super_tile: false });
+  }
+
+  for (const columnName of ["is_wall", "show_clouds", "show_perlin"]) {
+    const hasColumn = await db.schema.hasColumn(DATABASE_TABLE_NAME, columnName);
+
+    if (!hasColumn) {
+      await db.schema.alterTable(DATABASE_TABLE_NAME, (table) => {
+        table.boolean(columnName).defaultTo(false);
+      });
+    }
+
+    await db(DATABASE_TABLE_NAME).whereNull(columnName).update({ [columnName]: false });
   }
 
   await db.raw(

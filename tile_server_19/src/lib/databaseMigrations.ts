@@ -4,6 +4,7 @@ import type { Knex } from "knex";
 const MAP_ASSETS_TABLE_NAME = "map_map_assets";
 const MAPS_TABLE_NAME = "map_maps";
 const MAP_PATHS_TABLE_NAME = "map_paths";
+const MAP_TILES_TABLE_NAME = "map_tiles";
 const MIGRATIONS_TABLE_NAME = "tile_server_schema_migrations";
 const PERSONALITIES_TABLE_NAME = "personalities";
 const SPRITE_EVENTS_TABLE_NAME = "sprite_events";
@@ -167,6 +168,20 @@ const migrations: DatabaseMigration[] = [
       await db.raw(
         "create unique index if not exists sprite_events_instance_event_idx on sprite_events (sprite_id, sprite_instance_id, event_id) where sprite_instance_id is not null"
       );
+    }
+  },
+  {
+    id: "20260516_01_add_tile_super_tile",
+    async run(db) {
+      const hasSuperTileColumn = await db.schema.hasColumn(MAP_TILES_TABLE_NAME, "super_tile");
+
+      if (!hasSuperTileColumn) {
+        await db.schema.alterTable(MAP_TILES_TABLE_NAME, (table) => {
+          table.boolean("super_tile").defaultTo(false);
+        });
+      }
+
+      await db(MAP_TILES_TABLE_NAME).whereNull("super_tile").update({ super_tile: false });
     }
   }
 ];

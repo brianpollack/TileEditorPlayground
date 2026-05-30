@@ -22,6 +22,7 @@ import {
   faEye,
   faEyeDropper,
   faEyeSlash,
+  faFillDrip,
   faFolder,
   faPenToSquare,
   faTrashCan
@@ -293,6 +294,7 @@ interface MapWorkspaceProps {
   canZoomIn: boolean;
   canZoomOut: boolean;
   hoverCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  isBrushSuperTile: boolean;
   isGridVisible: boolean;
   layerPreviewCanvasRefs: React.MutableRefObject<Array<HTMLCanvasElement | null>>;
   layerVisibilities: number[];
@@ -336,6 +338,7 @@ const MapWorkspace = memo(function MapWorkspace({
   canZoomIn,
   canZoomOut,
   hoverCanvasRef,
+  isBrushSuperTile,
   isGridVisible,
   layerPreviewCanvasRefs,
   layerVisibilities,
@@ -494,31 +497,42 @@ const MapWorkspace = memo(function MapWorkspace({
         {activeSidebarTab === "brushes" && activeLayerIndex !== MAP_SPECIAL_LAYER_INDEX && brushSlotOptions.length ? (
           <div className={`${sectionCardClass} grid gap-3`}>
             <SectionEyebrow>Tile Variant</SectionEyebrow>
-            <div className="flex flex-wrap gap-2">
+            <div className={isBrushSuperTile ? "grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-2" : "flex flex-wrap gap-2"}>
               {brushSlotOptions.map((option) => {
                 const selected = option.slotNum === activeBrushSlotNum;
 
                 return (
                   <button
-                    className={`flex min-h-11 items-center gap-2 border px-2 py-2 text-left transition ${
-                      selected
-                        ? "theme-border-accent theme-bg-accent-soft theme-text-primary"
-                        : "theme-border-panel theme-bg-panel theme-text-muted theme-hover-border-accent theme-hover-text-primary"
-                    }`}
+                    className={
+                      isBrushSuperTile
+                        ? `grid aspect-square w-full place-items-center border p-0 transition ${
+                            selected
+                              ? "theme-border-accent theme-bg-accent-soft"
+                              : "theme-border-panel theme-bg-panel theme-hover-border-accent"
+                          }`
+                        : `flex min-h-11 items-center gap-2 border px-2 py-2 text-left transition ${
+                            selected
+                              ? "theme-border-accent theme-bg-accent-soft theme-text-primary"
+                              : "theme-border-panel theme-bg-panel theme-text-muted theme-hover-border-accent theme-hover-text-primary"
+                          }`
+                    }
                     key={option.slotNum}
                     onClick={() => {
                       onSelectBrushSlot(option.slotNum);
                     }}
+                    title={option.label}
                     type="button"
                   >
-                    <CheckerboardFrame className="h-9 w-9 border theme-border-panel-faint">
+                    <CheckerboardFrame
+                      className={isBrushSuperTile ? "h-32 w-32 border theme-border-panel-faint" : "h-9 w-9 border theme-border-panel-faint"}
+                    >
                       <img
                         alt={option.label}
-                        className="h-8 w-8 object-contain [image-rendering:pixelated]"
+                        className={isBrushSuperTile ? "h-32 w-32 object-contain [image-rendering:pixelated]" : "h-8 w-8 object-contain [image-rendering:pixelated]"}
                         src={option.previewUrl}
                       />
                     </CheckerboardFrame>
-                    <span className="text-sm font-medium">{option.label}</span>
+                    {isBrushSuperTile ? null : <span className="text-sm font-medium">{option.label}</span>}
                   </button>
                 );
               })}
@@ -678,6 +692,26 @@ function cloneMapLayers(layers: MapLayerStack): MapLayerStack {
 
 function cloneMapSpecialGrid(specialGrid: number[][]) {
   return specialGrid.map((row) => row.slice());
+}
+
+function isSameFillPlacement(left: MapAssetPlacement | null, right: MapAssetPlacement | null) {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  if (isMapTilePlacement(left) && isMapTilePlacement(right)) {
+    return (
+      left.tileSlug === right.tileSlug &&
+      left.slotNum === right.slotNum &&
+      serializeMapTileOptionsKey(left.options) === serializeMapTileOptionsKey(right.options)
+    );
+  }
+
+  if (isMapSpritePlacement(left) && isMapSpritePlacement(right)) {
+    return left.spriteKey === right.spriteKey;
+  }
+
+  return false;
 }
 
 function getCellsInLine(startCell: TileCell, endCell: TileCell) {
@@ -940,7 +974,7 @@ function getSlotLabel(slotNum: number) {
     return describeSlot("main");
   }
 
-  const normalizedSlotNum = Math.min(4, Math.max(1, Math.round(slotNum)));
+  const normalizedSlotNum = Math.max(1, Math.round(slotNum));
   return describeSlot(String(normalizedSlotNum - 1) as SlotKey);
 }
 
@@ -1054,6 +1088,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   const [brushOptions, setBrushOptions] = useState(DEFAULT_MAP_BRUSH_OPTIONS);
   const [brushLibraryPath, setBrushLibraryPath] = useState("");
   const [isBrushEyedropperActive, setBrushEyedropperActive] = useState(false);
+  const [isBrushFillActive, setBrushFillActive] = useState(false);
   const [isBrushMoveActive, setBrushMoveActive] = useState(false);
   const [, startTransition] = useTransition();
   const drawingRef = useRef(false);
@@ -1378,6 +1413,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     setAiLuaFixing(false);
     setAiLuaReview(null);
     setBrushEyedropperActive(false);
+    setBrushFillActive(false);
     setBrushMoveActive(false);
     isCanvasEditUndoCapturedRef.current = false;
     mapCanvasUndoRef.current = null;
@@ -1613,6 +1649,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
   useEffect(() => {
     if (activeLayerIndex === MAP_SPECIAL_LAYER_INDEX) {
       setBrushEyedropperActive(false);
+      setBrushFillActive(false);
       setBrushMoveActive(false);
       movePlacementRef.current = null;
     }
@@ -2922,6 +2959,108 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     }
   }
 
+  function fillConnectedCells(startCell: TileCell) {
+    if (!activeMapSlug || activeLayerIndex === MAP_SPECIAL_LAYER_INDEX) {
+      return;
+    }
+
+    const sourceLayer = draftLayers[activeLayerIndex];
+    const sourceRow = sourceLayer?.[startCell.tileY];
+    const targetPlacement = sourceRow?.[startCell.tileX] ?? null;
+    const fillPlacement = getActiveBrushPlacement();
+
+    if (!sourceLayer || !sourceRow) {
+      return;
+    }
+
+    if (isSameFillPlacement(targetPlacement, fillPlacement)) {
+      setMapStatus(`Fill found matching cells at ${startCell.tileX},${startCell.tileY}, but the brush is already the same.`);
+      return;
+    }
+
+    const nextLayers = draftLayers.map((layerCells) => layerCells.map((row) => row.slice()));
+    const nextLayer = nextLayers[activeLayerIndex];
+    const visitedCells = new Set<string>();
+    const pendingCells: TileCell[] = [startCell];
+    const cellsToFill: TileCell[] = [];
+
+    while (pendingCells.length) {
+      const currentCell = pendingCells.pop();
+
+      if (!currentCell) {
+        continue;
+      }
+
+      if (
+        currentCell.tileX < 0 ||
+        currentCell.tileY < 0 ||
+        currentCell.tileX >= mapWidth ||
+        currentCell.tileY >= mapHeight
+      ) {
+        continue;
+      }
+
+      const cellKey = getMapCellKey(currentCell.tileX, currentCell.tileY);
+
+      if (visitedCells.has(cellKey)) {
+        continue;
+      }
+
+      visitedCells.add(cellKey);
+
+      const currentPlacement = sourceLayer[currentCell.tileY]?.[currentCell.tileX] ?? null;
+
+      if (!isSameFillPlacement(currentPlacement, targetPlacement)) {
+        continue;
+      }
+
+      cellsToFill.push(currentCell);
+      pendingCells.push(
+        { tileX: currentCell.tileX + 1, tileY: currentCell.tileY },
+        { tileX: currentCell.tileX - 1, tileY: currentCell.tileY },
+        { tileX: currentCell.tileX, tileY: currentCell.tileY + 1 },
+        { tileX: currentCell.tileX, tileY: currentCell.tileY - 1 }
+      );
+    }
+
+    if (!cellsToFill.length || !nextLayer) {
+      return;
+    }
+
+    captureMapCanvasUndoSnapshot();
+    cellsToFill.forEach((cell) => {
+      const nextRow = nextLayer[cell.tileY];
+
+      if (nextRow) {
+        nextRow[cell.tileX] = fillPlacement
+          ? cloneMapPlacement(fillPlacement, { freshSpriteInstance: true })
+          : null;
+      }
+    });
+    draftLayersRef.current = nextLayers;
+    setMapDraftLayers(activeMapSlug, nextLayers, mapWidth, mapHeight);
+
+    if (fillPlacement) {
+      lastPlacedPlacementRef.current = {
+        cell: startCell,
+        placement: cloneMapPlacement(fillPlacement, { freshSpriteInstance: true }) as MapAssetPlacement
+      };
+    }
+
+    const targetLabel = targetPlacement
+      ? isMapTilePlacement(targetPlacement)
+        ? targetPlacement.tileSlug
+        : "sprite"
+      : "empty cells";
+    const fillLabel = fillPlacement
+      ? isMapTilePlacement(fillPlacement)
+        ? fillPlacement.tileSlug
+        : "sprite"
+      : "eraser";
+
+    setMapStatus(`Filled ${cellsToFill.length} connected ${targetLabel} with ${fillLabel}.`);
+  }
+
   function paintLineFromLastPlacement(targetCell: TileCell) {
     if (activeLayerIndex === MAP_SPECIAL_LAYER_INDEX) {
       return false;
@@ -3072,6 +3211,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
           : `Sampled empty Special cell at ${nextCell.tileX},${nextCell.tileY}.`
       );
       setBrushEyedropperActive(false);
+      setBrushFillActive(false);
       setBrushMoveActive(false);
       return;
     }
@@ -3095,6 +3235,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
     }
 
     setBrushEyedropperActive(false);
+    setBrushFillActive(false);
     setBrushMoveActive(false);
   }
 
@@ -3227,6 +3368,10 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         movePlacementToCell(nextCell);
       }
 
+      return;
+    }
+
+    if (isBrushFillActive) {
       return;
     }
 
@@ -3919,8 +4064,10 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         ? `Special: ${selectedSpecialLabel}`
       : isBrushMoveActive
         ? "Brush: move"
+      : isBrushFillActive
+        ? "Brush: fill"
       : isBrushEyedropperActive
-        ? "Brush: eyedropper"
+        ? "Brush: picker"
       : activeBrushTile || activeBrushSprite
         ? `Brush: ${selectedBrushLabel}`
         : "Brush: eraser";
@@ -3932,11 +4079,13 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
       : isSpecialLayerActive
         ? `Paint Special codes on the ${mapWidth}x${mapHeight} map canvas. Special display colors are editor-only.`
       : isBrushEyedropperActive
-        ? `Click a cell on the ${mapWidth}x${mapHeight} layered map canvas to sample its brush and return to painting.`
+        ? `Click a cell on the ${mapWidth}x${mapHeight} layered map canvas to pick its brush and return to painting.`
       : isBrushMoveActive
         ? `Drag a painted cell on the active layer to move that tile or sprite around the ${mapWidth}x${mapHeight} map canvas.`
+      : isBrushFillActive
+        ? `Click a cell on the active layer to fill its connected matching cells with the current brush.`
       : `Paint directly on the ${mapWidth}x${mapHeight} layered map canvas. The scale controls only change the viewing size.`;
-  const mapCursorClassName = activeSidebarTab === "ai" || activeSidebarTab === "paths" || isBrushEyedropperActive
+  const mapCursorClassName = activeSidebarTab === "ai" || activeSidebarTab === "paths" || isBrushEyedropperActive || isBrushFillActive
     ? "cursor-crosshair"
     : isBrushMoveActive
       ? "cursor-move"
@@ -4269,6 +4418,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
         canZoomIn={currentScale > MAP_MIN_SCALE_PERCENT}
         canZoomOut={currentScale < MAP_MAX_SCALE_PERCENT}
         hoverCanvasRef={hoverCanvasRef}
+        isBrushSuperTile={Boolean(activeBrushTile?.super_tile)}
         isGridVisible={isGridVisible}
         layerPreviewCanvasRefs={layerPreviewCanvasRefs}
         layerVisibilities={layerVisibilities}
@@ -4319,6 +4469,12 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
           if (isBrushEyedropperActive) {
             sampleBrushFromCell(nextCell);
+            return;
+          }
+
+          if (isBrushFillActive) {
+            fillConnectedCells(nextCell);
+            finishPaint();
             return;
           }
 
@@ -4379,6 +4535,7 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
           setBrushMoveActive(false);
           setBrushEyedropperActive(false);
+          setBrushFillActive(false);
           setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(activeBrushTile.slug, slotNum));
         }}
         onSelectLayer={setActiveLayerIndex}
@@ -4845,57 +5002,76 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                         {formatTileLibraryPath(currentBrushLibraryPath)}
                       </div>
                       <div className={scrollableAssetListClass}>
-                        <button
-                          className={assetListRowClass(mapBrushAssetKey === "" && !isBrushMoveActive && !isBrushEyedropperActive)}
-                          onClick={() => {
-                            setBrushEyedropperActive(false);
-                            setBrushMoveActive(false);
-                            setMapBrushAssetKey("");
-                          }}
-                          type="button"
-                        >
-                          <div className={`${assetListThumbClass} theme-bg-brand theme-text-inverse-soft`}>
-                            <FontAwesomeIcon className="h-5 w-5" icon={faEraser} title="Erase" />
-                          </div>
-                          <div className={assetListMetaClass}>
-                            <span className={assetListTitleClass}>Eraser</span>
-                            <span className={assetListSubtitleClass}>Clear painted cells</span>
-                          </div>
-                        </button>
-                        <button
-                          className={assetListRowClass(isBrushEyedropperActive)}
-                          onClick={() => {
-                            setBrushMoveActive(false);
-                            setBrushEyedropperActive(true);
-                            setMapStatus("Eyedropper ready. Click a map cell to sample its tile, sprite, and tile effects.");
-                          }}
-                          type="button"
-                        >
-                          <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
-                            <FontAwesomeIcon className="h-5 w-5" icon={faEyeDropper} title="Eyedropper" />
-                          </div>
-                          <div className={assetListMetaClass}>
-                            <span className={assetListTitleClass}>Eye Dropper</span>
-                            <span className={assetListSubtitleClass}>Sample the next clicked map cell</span>
-                          </div>
-                        </button>
-                        <button
-                          className={assetListRowClass(isBrushMoveActive)}
-                          onClick={() => {
-                            setBrushEyedropperActive(false);
-                            setBrushMoveActive(true);
-                            setMapStatus("Move ready. Drag a painted cell on the active layer to reposition it.");
-                          }}
-                          type="button"
-                        >
-                          <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
-                            <FontAwesomeIcon className="h-5 w-5" icon={faArrowsUpDownLeftRight} title="Move" />
-                          </div>
-                          <div className={assetListMetaClass}>
-                            <span className={assetListTitleClass}>Move</span>
-                            <span className={assetListSubtitleClass}>Drag a painted cell to reposition it</span>
-                          </div>
-                        </button>
+                        <div className="grid grid-cols-2 gap-1">
+                          <button
+                            className={assetListRowClass(mapBrushAssetKey === "" && !isBrushMoveActive && !isBrushFillActive && !isBrushEyedropperActive)}
+                            onClick={() => {
+                              setBrushEyedropperActive(false);
+                              setBrushFillActive(false);
+                              setBrushMoveActive(false);
+                              setMapBrushAssetKey("");
+                            }}
+                            type="button"
+                          >
+                            <div className={`${assetListThumbClass} theme-bg-brand theme-text-inverse-soft`}>
+                              <FontAwesomeIcon className="h-5 w-5" icon={faEraser} title="Erase" />
+                            </div>
+                            <div className={assetListMetaClass}>
+                              <span className={assetListTitleClass}>Eraser</span>
+                            </div>
+                          </button>
+                          <button
+                            className={assetListRowClass(isBrushEyedropperActive)}
+                            onClick={() => {
+                              setBrushFillActive(false);
+                              setBrushMoveActive(false);
+                              setBrushEyedropperActive(true);
+                              setMapStatus("Picker ready. Click a map cell to sample its tile, sprite, and tile effects.");
+                            }}
+                            type="button"
+                          >
+                            <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
+                              <FontAwesomeIcon className="h-5 w-5" icon={faEyeDropper} title="Picker" />
+                            </div>
+                            <div className={assetListMetaClass}>
+                              <span className={assetListTitleClass}>Picker</span>
+                            </div>
+                          </button>
+                          <button
+                            className={assetListRowClass(isBrushMoveActive)}
+                            onClick={() => {
+                              setBrushEyedropperActive(false);
+                              setBrushFillActive(false);
+                              setBrushMoveActive(true);
+                              setMapStatus("Move ready. Drag a painted cell on the active layer to reposition it.");
+                            }}
+                            type="button"
+                          >
+                            <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
+                              <FontAwesomeIcon className="h-5 w-5" icon={faArrowsUpDownLeftRight} title="Move" />
+                            </div>
+                            <div className={assetListMetaClass}>
+                              <span className={assetListTitleClass}>Move</span>
+                            </div>
+                          </button>
+                          <button
+                            className={assetListRowClass(isBrushFillActive)}
+                            onClick={() => {
+                              setBrushEyedropperActive(false);
+                              setBrushMoveActive(false);
+                              setBrushFillActive(true);
+                              setMapStatus("Fill ready. Click a map cell to fill its connected matching cells with the current brush.");
+                            }}
+                            type="button"
+                          >
+                            <div className={`${assetListThumbClass} theme-bg-panel theme-text-primary`}>
+                              <FontAwesomeIcon className="h-5 w-5" icon={faFillDrip} title="Fill" />
+                            </div>
+                            <div className={assetListMetaClass}>
+                              <span className={assetListTitleClass}>Fill</span>
+                            </div>
+                          </button>
+                        </div>
 
                         {!isAtBrushLayerRoot ? (
                           <button
@@ -4951,9 +5127,10 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
                           return (
                             <div className="relative" key={tileRecord.slug}>
                               <button
-                                className={`${assetListRowClass(!isBrushMoveActive && !isBrushEyedropperActive && activeBrushTileSlug === tileRecord.slug)} pr-10`}
+                                className={`${assetListRowClass(!isBrushMoveActive && !isBrushFillActive && !isBrushEyedropperActive && activeBrushTileSlug === tileRecord.slug)} pr-10`}
                                 onClick={() => {
                                   setBrushEyedropperActive(false);
+                                  setBrushFillActive(false);
                                   setBrushMoveActive(false);
                                   setMapBrushAssetKey(getTileBrushAssetKeyWithSlot(tileRecord.slug, 0));
                                 }}
@@ -4994,10 +5171,11 @@ export function MapDesigner({ initialMode = "" }: MapDesignerProps) {
 
                           return (
                             <button
-                              className={assetListRowClass(!isBrushMoveActive && !isBrushEyedropperActive && getSpriteBrushAssetKey(spriteKey) === mapBrushAssetKey)}
+                              className={assetListRowClass(!isBrushMoveActive && !isBrushFillActive && !isBrushEyedropperActive && getSpriteBrushAssetKey(spriteKey) === mapBrushAssetKey)}
                               key={spriteKey}
                               onClick={() => {
                                 setBrushEyedropperActive(false);
+                                setBrushFillActive(false);
                                 setBrushMoveActive(false);
                                 setMapBrushAssetKey(getSpriteBrushAssetKey(spriteKey));
                               }}

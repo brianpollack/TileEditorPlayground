@@ -39,6 +39,7 @@ import {
   buildPreviewPlacements,
   clampSelection,
   createPaddedSlotRecord,
+  createTileRegionSlotRecord,
   drawPlaceholderCell,
   getSlotIndex,
   normalizeSlotRecords,
@@ -49,10 +50,17 @@ import { useImageCache } from "../lib/useImageCache";
 import { SpriteEditorWorkspace } from "./SpriteEditorWorkspace";
 import { TileEditorWorkspace } from "./TileEditorWorkspace";
 import { TileLibraryPanel } from "./TileLibraryPanel";
-import type { LoadedImagePayload, SelectedRegion, SpriteRecord, SpriteStateRecord } from "../types";
+import type { LoadedImagePayload, SelectedRegion, SlotRecord, SpriteRecord, SpriteStateRecord } from "../types";
 
 const SPRITE_GRID_MARGIN_TILES = 1;
 type SpriteCanvasLayout = ReturnType<typeof getSpriteCanvasLayout>;
+type TileBooleanDraft = {
+  impassible: boolean;
+  isWall: boolean;
+  showClouds: boolean;
+  showPerlin: boolean;
+  superTile: boolean;
+};
 
 function sortSpriteStates(spriteStates: SpriteStateRecord[]) {
   return spriteStates
@@ -186,6 +194,89 @@ function getSpriteSaveSnapshot(spriteRecord: SpriteRecord | null) {
   return JSON.stringify(persistedSpriteRecord);
 }
 
+function hasVisiblePixelInTile(sourceImage: HTMLImageElement, sourceX: number, sourceY: number) {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+
+  canvas.width = TILE_SIZE;
+  canvas.height = TILE_SIZE;
+
+  if (!context) {
+    return false;
+  }
+
+  context.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+  context.drawImage(sourceImage, sourceX, sourceY, TILE_SIZE, TILE_SIZE, 0, 0, TILE_SIZE, TILE_SIZE);
+
+  const imageData = context.getImageData(0, 0, TILE_SIZE, TILE_SIZE).data;
+
+  for (let index = 3; index < imageData.length; index += 4) {
+    if (imageData[index] > 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function createSuperTileSlots(sourceImage: HTMLImageElement) {
+  const slots: Array<ReturnType<typeof createTileRegionSlotRecord> | null> = [];
+  const columns = Math.floor(sourceImage.width / TILE_SIZE);
+  const rows = Math.floor(sourceImage.height / TILE_SIZE);
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const sourceX = column * TILE_SIZE;
+      const sourceY = row * TILE_SIZE;
+
+      if (!hasVisiblePixelInTile(sourceImage, sourceX, sourceY)) {
+        continue;
+      }
+
+      slots.push(createTileRegionSlotRecord(sourceImage, sourceX, sourceY));
+    }
+  }
+
+  return normalizeSlotRecords(slots);
+}
+
+function getStoredTileSourceCandidate(tileSlots: Array<SlotRecord | null> | undefined) {
+  return normalizeSlotRecords(tileSlots).find((slotRecord) => slotRecord?.pixels)?.pixels ?? "";
+}
+
+function countFilledSlots(tileSlots: Array<SlotRecord | null>) {
+  return tileSlots.filter((slotRecord) => Boolean(slotRecord?.pixels)).length;
+}
+
+function isImageDataUrl(value: string | null) {
+  return Boolean(value?.startsWith("data:image/"));
+}
+
+function shouldLoadProjectImagePath(value: string) {
+  const trimmedValue = value.trim();
+
+  return Boolean(trimmedValue && /[\\/]/u.test(trimmedValue));
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Could not read image."));
+    };
+    reader.onerror = () => {
+      reject(reader.error ?? new Error("Could not read image."));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export function TileWorkshop() {
   const {
     activeSprite,
@@ -208,6 +299,10 @@ export function TileWorkshop() {
   const [sourceImageUrl, setSourceImageUrl] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectedRegion | null>(null);
   const [tileImpassible, setTileImpassible] = useState(true);
+  const [tileIsWall, setTileIsWall] = useState(false);
+  const [tileShowClouds, setTileShowClouds] = useState(false);
+  const [tileShowPerlin, setTileShowPerlin] = useState(false);
+  const [tileSuperTile, setTileSuperTile] = useState(false);
   const [spriteDraft, setSpriteDraft] = useState<SpriteRecord | null>(null);
   const [spriteImage, setSpriteImage] = useState<HTMLImageElement | null>(null);
   const [spriteImageUrl, setSpriteImageUrl] = useState<string | null>(null);
@@ -234,6 +329,11 @@ export function TileWorkshop() {
   const spriteImageUrlRef = useRef<string | null>(null);
   const spriteReplacementFileRef = useRef<File | null>(null);
   const skipNextImpassibleAutosaveRef = useRef(false);
+  const skipNextIsWallAutosaveRef = useRef(false);
+  const skipNextShowCloudsAutosaveRef = useRef(false);
+  const skipNextShowPerlinAutosaveRef = useRef(false);
+  const skipNextSuperTileAutosaveRef = useRef(false);
+  const lastSuperTileParseKeyRef = useRef("");
   const isSpriteSavingRef = useRef(false);
   const pendingSpriteSaveRef = useRef(false);
   const lastSavedSpriteSnapshotRef = useRef("");
@@ -245,10 +345,16 @@ export function TileWorkshop() {
   const draftSlotsSnapshot = JSON.stringify(normalizeSlotRecords(draftSlots));
   const hasUnsavedTileChanges =
     Boolean(activeTileSlug) &&
-    (loadedSlotsSnapshot !== draftSlotsSnapshot || tileImpassible !== (activeTile?.impassible ?? true));
+    (loadedSlotsSnapshot !== draftSlotsSnapshot ||
+      tileImpassible !== (activeTile?.impassible ?? true) ||
+      tileIsWall !== (activeTile?.is_wall ?? false) ||
+      tileShowClouds !== (activeTile?.show_clouds ?? false) ||
+      tileShowPerlin !== (activeTile?.show_perlin ?? false) ||
+      tileSuperTile !== (activeTile?.super_tile ?? false));
   const activeSelectorSize = selectedSlotKey === "main" ? TILE_SIZE : selectorSize;
   const previewPlacements = buildPreviewPlacements(
-    `${activeTile?.slug ?? "empty"}:${draftSlots.map((slotRecord) => slotRecord?.pixels.length ?? 0).join("-")}`
+    `${activeTile?.slug ?? "empty"}:${draftSlots.map((slotRecord) => slotRecord?.pixels.length ?? 0).join("-")}`,
+    draftSlots.length
   );
 
   useEffect(() => {
@@ -284,17 +390,50 @@ export function TileWorkshop() {
     setTileImpassible(activeTile?.impassible ?? true);
   }, [activeTile?.impassible, activeTileSlug]);
 
-  const saveTileDraft = useEffectEvent((nextImpassible = tileImpassible) => {
+  useEffect(() => {
+    skipNextSuperTileAutosaveRef.current = true;
+    setTileSuperTile(activeTile?.super_tile ?? false);
+  }, [activeTile?.super_tile, activeTileSlug]);
+
+  useEffect(() => {
+    skipNextIsWallAutosaveRef.current = true;
+    setTileIsWall(activeTile?.is_wall ?? false);
+  }, [activeTile?.is_wall, activeTileSlug]);
+
+  useEffect(() => {
+    skipNextShowCloudsAutosaveRef.current = true;
+    setTileShowClouds(activeTile?.show_clouds ?? false);
+  }, [activeTile?.show_clouds, activeTileSlug]);
+
+  useEffect(() => {
+    skipNextShowPerlinAutosaveRef.current = true;
+    setTileShowPerlin(activeTile?.show_perlin ?? false);
+  }, [activeTile?.show_perlin, activeTileSlug]);
+
+  const saveTileDraft = useEffectEvent((nextBooleans: Partial<TileBooleanDraft> = {}) => {
     if (!activeTileSlug) {
       return;
     }
 
+    const booleanDraft: TileBooleanDraft = {
+      impassible: tileImpassible,
+      isWall: tileIsWall,
+      showClouds: tileShowClouds,
+      showPerlin: tileShowPerlin,
+      superTile: tileSuperTile,
+      ...nextBooleans
+    };
+
     startTransition(() => {
       void saveTileAction({
-        impassible: nextImpassible,
+        impassible: booleanDraft.impassible,
+        is_wall: booleanDraft.isWall,
+        show_clouds: booleanDraft.showClouds,
+        show_perlin: booleanDraft.showPerlin,
         slots: draftSlots,
         slug: activeTileSlug,
-        source: sourceImageName || activeTile?.source || ""
+        source: isImageDataUrl(sourceImageUrl) ? sourceImageUrl ?? "" : sourceImageName || activeTile?.source || "",
+        super_tile: booleanDraft.superTile
       })
         .then((savedTile) => {
           upsertTile(savedTile);
@@ -318,8 +457,127 @@ export function TileWorkshop() {
       return;
     }
 
-    saveTileDraft(tileImpassible);
+    saveTileDraft({ impassible: tileImpassible });
   }, [activeTile, activeTileSlug, saveTileDraft, tileImpassible]);
+
+  useEffect(() => {
+    if (skipNextSuperTileAutosaveRef.current) {
+      skipNextSuperTileAutosaveRef.current = false;
+      return;
+    }
+
+    if (!activeTileSlug || !activeTile) {
+      return;
+    }
+
+    if (tileSuperTile === (activeTile.super_tile ?? false)) {
+      return;
+    }
+
+    saveTileDraft({
+      impassible: tileImpassible,
+      isWall: tileIsWall,
+      showClouds: tileShowClouds,
+      showPerlin: tileShowPerlin,
+      superTile: tileSuperTile
+    });
+  }, [
+    activeTile,
+    activeTileSlug,
+    saveTileDraft,
+    tileImpassible,
+    tileIsWall,
+    tileShowClouds,
+    tileShowPerlin,
+    tileSuperTile
+  ]);
+
+  useEffect(() => {
+    if (skipNextIsWallAutosaveRef.current) {
+      skipNextIsWallAutosaveRef.current = false;
+      return;
+    }
+
+    if (!activeTileSlug || !activeTile) {
+      return;
+    }
+
+    if (tileIsWall === (activeTile.is_wall ?? false)) {
+      return;
+    }
+
+    saveTileDraft({
+      impassible: tileImpassible,
+      isWall: tileIsWall,
+      showClouds: tileShowClouds,
+      showPerlin: tileShowPerlin,
+      superTile: tileSuperTile
+    });
+  }, [
+    activeTile,
+    activeTileSlug,
+    saveTileDraft,
+    tileImpassible,
+    tileIsWall,
+    tileShowClouds,
+    tileShowPerlin,
+    tileSuperTile
+  ]);
+
+  useEffect(() => {
+    if (skipNextShowCloudsAutosaveRef.current) {
+      skipNextShowCloudsAutosaveRef.current = false;
+      return;
+    }
+
+    if (!activeTileSlug || !activeTile) {
+      return;
+    }
+
+    if (tileShowClouds === (activeTile.show_clouds ?? false)) {
+      return;
+    }
+
+    saveTileDraft({
+      impassible: tileImpassible,
+      isWall: tileIsWall,
+      showClouds: tileShowClouds,
+      showPerlin: tileShowPerlin,
+      superTile: tileSuperTile
+    });
+  }, [
+    activeTile,
+    activeTileSlug,
+    saveTileDraft,
+    tileImpassible,
+    tileIsWall,
+    tileShowClouds,
+    tileShowPerlin,
+    tileSuperTile
+  ]);
+
+  useEffect(() => {
+    if (skipNextShowPerlinAutosaveRef.current) {
+      skipNextShowPerlinAutosaveRef.current = false;
+      return;
+    }
+
+    if (!activeTileSlug || !activeTile) {
+      return;
+    }
+
+    if (tileShowPerlin === (activeTile.show_perlin ?? false)) {
+      return;
+    }
+
+    saveTileDraft({
+      impassible: tileImpassible,
+      isWall: tileIsWall,
+      showClouds: tileShowClouds,
+      showPerlin: tileShowPerlin,
+      superTile: tileSuperTile
+    });
+  }, [activeTile, activeTileSlug, saveTileDraft, tileImpassible, tileIsWall, tileShowClouds, tileShowPerlin, tileSuperTile]);
 
   useEffect(() => {
     if (!selection) {
@@ -450,6 +708,34 @@ export function TileWorkshop() {
   useEffect(() => {
     void renderPreviewCanvas();
   }, [draftSlots, previewPlacements, renderPreviewCanvas]);
+
+  useEffect(() => {
+    if (!activeTileSlug || !sourceImage || !tileSuperTile) {
+      return;
+    }
+
+    const parseKey = `${activeTileSlug}:${sourceImageUrl ?? sourceImageName}:${sourceImage.width}x${sourceImage.height}`;
+
+    if (lastSuperTileParseKeyRef.current === parseKey) {
+      return;
+    }
+
+    lastSuperTileParseKeyRef.current = parseKey;
+    const nextSlots = createSuperTileSlots(sourceImage);
+    const existingFilledSlotCount = countFilledSlots(normalizeSlotRecords(draftSlots));
+    const nextFilledSlotCount = countFilledSlots(nextSlots);
+
+    if (
+      sourceImage.width <= TILE_SIZE &&
+      sourceImage.height <= TILE_SIZE &&
+      existingFilledSlotCount > nextFilledSlotCount
+    ) {
+      return;
+    }
+
+    setTileDraftSlots(activeTileSlug, nextSlots);
+    setSelectedSlotKey("main");
+  }, [activeTileSlug, draftSlots, sourceImage, sourceImageName, sourceImageUrl, tileSuperTile]);
 
   useEffect(() => {
     if (!activeSprite) {
@@ -728,15 +1014,160 @@ export function TileWorkshop() {
     clearPendingTileSourceImage();
   }, [activeTileSlug, applyLoadedImage, clearPendingTileSourceImage, pendingTileSourceImage]);
 
+  useEffect(() => {
+    if (!activeTile) {
+      setSourceImage(null);
+      setSourceImageName("");
+      setSourceImageUrl(null);
+      setSelection(null);
+      lastSuperTileParseKeyRef.current = "";
+      return;
+    }
+
+    if (pendingTileSourceImage?.tileSlug === activeTile.slug) {
+      return;
+    }
+
+    const selectedTile = activeTile;
+    let isCancelled = false;
+
+    async function loadSelectedTileSource() {
+      const previousSourceImageUrl = sourceImageUrl;
+
+      if (isImageDataUrl(selectedTile.source)) {
+        try {
+          const nextImage = await loadImageFromUrl(selectedTile.source);
+
+          if (isCancelled) {
+            return;
+          }
+
+          const sourceCanvas = sourceCanvasRef.current;
+
+          if (sourceCanvas) {
+            sourceCanvas.width = nextImage.width;
+            sourceCanvas.height = nextImage.height;
+          }
+
+          revokeObjectUrl(previousSourceImageUrl);
+          setSourceImage(nextImage);
+          setSourceImageName(selectedTile.name);
+          setSourceImageUrl(selectedTile.source);
+          setSelection({
+            size: TILE_SIZE,
+            x: 0,
+            y: 0
+          });
+          lastSuperTileParseKeyRef.current = "";
+          return;
+        } catch {
+          // Fall back to persisted slot image data below.
+        }
+      }
+
+      if (shouldLoadProjectImagePath(selectedTile.source)) {
+        try {
+          const payload = await loadProjectImageAction(selectedTile.source);
+
+          if (isCancelled) {
+            return;
+          }
+
+          const nextImage = await loadImageFromUrl(payload.dataUrl);
+
+          if (isCancelled) {
+            return;
+          }
+
+          const sourceCanvas = sourceCanvasRef.current;
+
+          if (sourceCanvas) {
+            sourceCanvas.width = nextImage.width;
+            sourceCanvas.height = nextImage.height;
+          }
+
+          revokeObjectUrl(previousSourceImageUrl);
+          setSourceImage(nextImage);
+          setSourceImageName(payload.sourcePath || payload.name);
+          setSourceImageUrl(payload.dataUrl);
+          setSelection({
+            size: TILE_SIZE,
+            x: 0,
+            y: 0
+          });
+          lastSuperTileParseKeyRef.current = "";
+          return;
+        } catch {
+          // Fall back to persisted slot image data below.
+        }
+      }
+
+      const storedSource = getStoredTileSourceCandidate(selectedTile.slots);
+
+      if (!storedSource) {
+        if (!isCancelled) {
+          revokeObjectUrl(previousSourceImageUrl);
+          setSourceImage(null);
+          setSourceImageName("");
+          setSourceImageUrl(null);
+          setSelection(null);
+          lastSuperTileParseKeyRef.current = "";
+        }
+        return;
+      }
+
+      try {
+        const nextImage = await loadImageFromUrl(storedSource);
+
+        if (isCancelled) {
+          return;
+        }
+
+        const sourceCanvas = sourceCanvasRef.current;
+
+        if (sourceCanvas) {
+          sourceCanvas.width = nextImage.width;
+          sourceCanvas.height = nextImage.height;
+        }
+
+        revokeObjectUrl(previousSourceImageUrl);
+        setSourceImage(nextImage);
+        setSourceImageName(selectedTile.source || selectedTile.name);
+        setSourceImageUrl(storedSource);
+        setSelection({
+          size: TILE_SIZE,
+          x: 0,
+          y: 0
+        });
+        lastSuperTileParseKeyRef.current = "";
+      } catch {
+        if (!isCancelled) {
+          revokeObjectUrl(previousSourceImageUrl);
+          setSourceImage(null);
+          setSourceImageName("");
+          setSourceImageUrl(null);
+          setSelection(null);
+          lastSuperTileParseKeyRef.current = "";
+        }
+      }
+    }
+
+    void loadSelectedTileSource();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeTile, pendingTileSourceImage?.tileSlug]);
+
   async function loadSelectedFile(file: File) {
     if (!file.type.startsWith("image/")) {
       return;
     }
 
-    const objectUrl = URL.createObjectURL(file);
+    const dataUrl = await readFileAsDataUrl(file);
 
     try {
-      const nextImage = await loadImageFromUrl(objectUrl);
+      const nextImage = await loadImageFromUrl(dataUrl);
       revokeObjectUrl(sourceImageUrl);
 
       const sourceCanvas = sourceCanvasRef.current;
@@ -748,14 +1179,14 @@ export function TileWorkshop() {
 
       setSourceImage(nextImage);
       setSourceImageName(file.name);
-      setSourceImageUrl(objectUrl);
+      setSourceImageUrl(dataUrl);
       setSelection({
         size: activeSelectorSize,
         x: 0,
         y: 0
       });
     } catch {
-      URL.revokeObjectURL(objectUrl);
+      // Ignore decode failure and leave the previous source image in place.
     }
   }
 
@@ -907,7 +1338,13 @@ export function TileWorkshop() {
       return;
     }
 
-    saveTileDraft(tileImpassible);
+    saveTileDraft({
+      impassible: tileImpassible,
+      isWall: tileIsWall,
+      showClouds: tileShowClouds,
+      showPerlin: tileShowPerlin,
+      superTile: tileSuperTile
+    });
   }
 
   function handleExport() {
@@ -1286,8 +1723,33 @@ export function TileWorkshop() {
               }}
               onSourceCanvasMouseMove={updateSelectionFromPointer}
               tileImpassible={tileImpassible}
-              onTileBooleanChange={(_field, value) => {
-                setTileImpassible(value);
+              tileIsWall={tileIsWall}
+              tileShowClouds={tileShowClouds}
+              tileShowPerlin={tileShowPerlin}
+              tileSuperTile={tileSuperTile}
+              onTileBooleanChange={(field, value) => {
+                if (field === "impassible") {
+                  setTileImpassible(value);
+                  return;
+                }
+
+                if (field === "is_wall") {
+                  setTileIsWall(value);
+                  return;
+                }
+
+                if (field === "show_clouds") {
+                  setTileShowClouds(value);
+                  return;
+                }
+
+                if (field === "show_perlin") {
+                  setTileShowPerlin(value);
+                  return;
+                }
+
+                lastSuperTileParseKeyRef.current = "";
+                setTileSuperTile(value);
               }}
               previewCanvasRef={previewCanvasRef}
               selectedSlotKey={selectedSlotKey}
