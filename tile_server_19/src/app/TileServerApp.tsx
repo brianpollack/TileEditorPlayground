@@ -1795,9 +1795,6 @@ export function TileServerApp({
       activeItemId,
       activeMapSlug,
       activePersonalitySlug,
-      clipboardSlots: clipboardSlotsState,
-      draftLayersByMapSlug,
-      draftSpecialByMapSlug,
       isClipboardManagerOpen,
       isSidebarExpanded,
       mapDesignerUiStateByMapSlug,
@@ -1806,14 +1803,15 @@ export function TileServerApp({
       selectedClipboardSlotIndex
     };
 
-    window.sessionStorage.setItem(STUDIO_STATE_STORAGE_KEY, JSON.stringify(nextState));
+    try {
+      window.sessionStorage.setItem(STUDIO_STATE_STORAGE_KEY, JSON.stringify(nextState));
+    } catch {
+      window.sessionStorage.removeItem(STUDIO_STATE_STORAGE_KEY);
+    }
   }, [
     activeItemId,
     activeMapSlug,
     activePersonalitySlug,
-    clipboardSlotsState,
-    draftLayersByMapSlug,
-    draftSpecialByMapSlug,
     isClipboardManagerOpen,
     isSidebarExpanded,
     isStudioStateRestored,
