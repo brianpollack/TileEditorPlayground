@@ -1,7 +1,7 @@
 "use client";
 
 import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
 import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-lua";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
@@ -11,13 +11,15 @@ import {
   readCharacterEventsAction,
   saveCharacterEventAction
 } from "../actions/characterEventActions";
+import { fixLuaScriptWithAiAction } from "../actions/luaActions";
 import { useStudio } from "../app/StudioContext";
-import { openLuaScriptingGuide } from "../lib/luaEditor";
+import { openLuaScriptingGuide, createLuaErrorAnnotations, validateLuaScript } from "../lib/luaEditor";
 import {
   useLuaAceSupport,
   useLuaEventDefinitions
 } from "../lib/luaApiHelper";
 import type { CharacterEventRecord } from "../types";
+import { AiLuaDiffReview } from "./AiLuaDiffReview";
 import { actionButtonClass } from "./buttonStyles";
 import { FontAwesomeIcon } from "./FontAwesomeIcon";
 import { LuaEventDefinitionHelp } from "./LuaEventDefinitionHelp";
@@ -30,9 +32,16 @@ import {
   assetListSubtitleClass,
   assetListTitleClass,
   emptyStateCardClass,
+  modalBackdropClass,
+  modalSurfaceClass,
   secondaryButtonClass,
   statusChipClass
 } from "./uiStyles";
+
+interface AiLuaReviewState {
+  originalLua: string;
+  revisedLua: string;
+}
 
 export function CharacterEventsManager() {
   const { activePersonality } = useStudio();
@@ -101,6 +110,76 @@ export function CharacterEventsManager() {
     saveEvent: saveCharacterEvent,
     subjectKey: characterSlug
   });
+
+  const [isAiLuaFixing, setAiLuaFixing] = useState(false);
+  const [aiLuaReview, setAiLuaReview] = useState<AiLuaReviewState | null>(null);
+  const [isAiLuaPromptOpen, setAiLuaPromptOpen] = useState(false);
+  const [aiLuaUserDescription, setAiLuaUserDescription] = useState("");
+  const aiLuaPromptTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  function handleAiLuaFix() {
+    if (!activeEventOption || isAiLuaFixing) {
+      return;
+    }
+
+    setAiLuaUserDescription("");
+    setAiLuaPromptOpen(true);
+  }
+
+  function submitAiLuaFix() {
+    if (!activeEventOption || isAiLuaFixing) {
+      return;
+    }
+
+    setAiLuaPromptOpen(false);
+    setAiLuaFixing(true);
+    setLuaAnnotations([]);
+    setStatus("");
+
+    void fixLuaScriptWithAiAction({
+      luaScript: draft.luaScript,
+      toolDefinition: {
+        context: "character",
+        event: activeEventOption.eventName,
+        definition: activeEventOption.definition
+      },
+      userDescription: aiLuaUserDescription
+    })
+      .then((result) => {
+        setAiLuaReview({
+          originalLua: draft.luaScript,
+          revisedLua: result.luaScript
+        });
+        setStatus("Review AI Lua changes.");
+      })
+      .catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : "Could not fix Lua with AI.");
+      })
+      .finally(() => {
+        setAiLuaFixing(false);
+      });
+  }
+
+  function handleKeepAiLuaChanges() {
+    if (!aiLuaReview) {
+      return;
+    }
+
+    const validationResult = validateLuaScript(aiLuaReview.revisedLua);
+
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      luaScript: aiLuaReview.revisedLua
+    }));
+    setLuaAnnotations(createLuaErrorAnnotations(validationResult));
+    setStatus(validationResult.ok ? "AI Lua updated." : validationResult.error.message);
+    setAiLuaReview(null);
+  }
+
+  function handleDeclineAiLuaChanges() {
+    setAiLuaReview(null);
+    setStatus("AI Lua changes declined.");
+  }
 
   return (
     <div className="min-h-0">
@@ -201,11 +280,19 @@ export function CharacterEventsManager() {
                 </button>
                 <button
                   className={secondaryButtonClass}
-                  disabled={!activeEventOption || isSavingEvent || isFormattingLua}
+                  disabled={!activeEventOption || isSavingEvent || isFormattingLua || isAiLuaFixing}
                   onClick={handleFormatLua}
                   type="button"
                 >
                   {isFormattingLua ? "Formatting..." : "Format Lua"}
+                </button>
+                <button
+                  className={secondaryButtonClass}
+                  disabled={!activeEventOption || isSavingEvent || isFormattingLua || isAiLuaFixing}
+                  onClick={handleAiLuaFix}
+                  type="button"
+                >
+                  {isAiLuaFixing ? "AI Lua..." : "AI Lua"}
                 </button>
                 <button
                   className={actionButtonClass}
@@ -300,6 +387,48 @@ export function CharacterEventsManager() {
           )}
         </Panel>
       </div>
+      {isAiLuaPromptOpen ? (
+        <div className={modalBackdropClass}>
+          <div className={`${modalSurfaceClass} max-w-lg p-5`}>
+            <div className="grid gap-4">
+              <strong className="font-serif text-[1.45rem] theme-text-primary">AI Lua</strong>
+              <textarea
+                className="min-h-[8rem] w-full border theme-border-panel theme-bg-input p-3 text-sm theme-text-primary outline-none transition theme-focus-border-accent"
+                onChange={(event) => {
+                  setAiLuaUserDescription(event.currentTarget.value);
+                }}
+                placeholder="Describe what you want the AI to do..."
+                ref={aiLuaPromptTextareaRef}
+                value={aiLuaUserDescription}
+              />
+              <div className="flex justify-end gap-3">
+                <button
+                  className={secondaryButtonClass}
+                  onClick={() => { setAiLuaPromptOpen(false); }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className={actionButtonClass}
+                  onClick={submitAiLuaFix}
+                  type="button"
+                >
+                  Submit
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {aiLuaReview ? (
+        <AiLuaDiffReview
+          onDecline={handleDeclineAiLuaChanges}
+          onKeep={handleKeepAiLuaChanges}
+          originalLua={aiLuaReview.originalLua}
+          revisedLua={aiLuaReview.revisedLua}
+        />
+      ) : null}
     </div>
   );
 }

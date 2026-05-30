@@ -59,6 +59,8 @@ type EditableItemField =
   | "is_container"
   | "level"
   | "long_description"
+  | "max_qty"
+  | "max_stack"
   | "mount_point"
   | "quality"
   | "rarity"
@@ -198,6 +200,8 @@ export function ItemManager() {
   const [givesLightDraft, setGivesLightDraft] = useState("");
   const [levelDraft, setLevelDraft] = useState("");
   const [longDescriptionDraft, setLongDescriptionDraft] = useState("");
+  const [maxQtyDraft, setMaxQtyDraft] = useState("");
+  const [maxStackDraft, setMaxStackDraft] = useState("");
   const [savingItemField, setSavingItemField] = useState<EditableItemField | null>(null);
   const [storageCapacityDraft, setStorageCapacityDraft] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -290,6 +294,8 @@ export function ItemManager() {
     setImageUploadStatus("");
     setLevelDraft(activeItem?.level == null ? "" : String(activeItem.level));
     setLongDescriptionDraft(activeItem?.long_description ?? "");
+    setMaxQtyDraft(activeItem?.max_qty == null ? "" : String(activeItem.max_qty));
+    setMaxStackDraft(activeItem?.max_stack == null ? "" : String(activeItem.max_stack));
     setReplacingModel(false);
     setModelUploadStatus("");
     setStorageCapacityDraft(activeItem?.storage_capacity == null ? "" : String(activeItem.storage_capacity));
@@ -580,7 +586,7 @@ export function ItemManager() {
           throw new Error(responseBody.error ?? "Could not update item.");
         }
 
-        const updatedItem = responseBody as ItemRecord;
+        const updatedItem = { ...activeItem, ...responseBody } as ItemRecord;
         upsertItem(updatedItem);
         setBaseValueDraft(updatedItem.base_value == null ? "" : String(updatedItem.base_value));
         setDescriptionDraft(updatedItem.description ?? "");
@@ -588,6 +594,8 @@ export function ItemManager() {
         setGivesLightDraft(updatedItem.gives_light == null ? "" : String(updatedItem.gives_light));
         setLevelDraft(updatedItem.level == null ? "" : String(updatedItem.level));
         setLongDescriptionDraft(updatedItem.long_description ?? "");
+        setMaxQtyDraft(updatedItem.max_qty == null ? "" : String(updatedItem.max_qty));
+        setMaxStackDraft(updatedItem.max_stack == null ? "" : String(updatedItem.max_stack));
         setStorageCapacityDraft(updatedItem.storage_capacity == null ? "" : String(updatedItem.storage_capacity));
       } catch (error) {
         setItemFieldErrors((currentErrors) => ({
@@ -731,7 +739,7 @@ export function ItemManager() {
   }
 
   function renderItemShortNumberField(
-    field: "base_value" | "durability" | "gives_light" | "level" | "storage_capacity",
+    field: "base_value" | "durability" | "gives_light" | "level" | "max_qty" | "max_stack" | "storage_capacity",
     label: string,
     draft: string,
     onDraftChange: (nextValue: string) => void,
@@ -750,7 +758,13 @@ export function ItemManager() {
       let normalizedValue: number | null;
 
       if (!trimmedValue) {
-        normalizedValue = field === "storage_capacity" && activeItem.is_container ? 10 : null;
+        if (field === "storage_capacity" && activeItem.is_container) {
+          normalizedValue = 10;
+        } else if (field === "max_qty" || field === "max_stack") {
+          normalizedValue = 9999;
+        } else {
+          normalizedValue = null;
+        }
       } else {
         const parsedValue = Number(trimmedValue);
 
@@ -1053,7 +1067,7 @@ export function ItemManager() {
           <div className="min-h-[calc(100vh-12rem)] overflow-auto theme-surface-canvas-viewport p-4 md:p-6">
             {activeItem ? (
               <div className="grid gap-5">
-                <div className="grid gap-6 xl:grid-cols-[minmax(26rem,calc(33.333%+100px))_minmax(0,1fr)_minmax(0,1fr)] xl:items-start">
+                <div className="grid gap-6 xl:grid-cols-[26rem_minmax(0,1fr)] xl:items-start">
                   <div className="grid content-start gap-6">
                     <div className={flatSectionClass}>
                       <ItemSectionTitle>Gameplay</ItemSectionTitle>
@@ -1073,6 +1087,8 @@ export function ItemManager() {
                           setStorageCapacityDraft,
                           !activeItem.is_container
                         )}
+                        {renderItemShortNumberField("max_qty", "Max Qty", maxQtyDraft, setMaxQtyDraft)}
+                        {renderItemShortNumberField("max_stack", "Max Stack", maxStackDraft, setMaxStackDraft)}
                       </div>
 
                       <ItemSectionTitle>Placement</ItemSectionTitle>

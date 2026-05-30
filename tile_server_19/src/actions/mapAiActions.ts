@@ -274,7 +274,7 @@ export async function runMapAiModelAction(input: {
           return;
         }
 
-        update.logs.forEach((log) => {
+        update.logs?.forEach((log) => {
           logMessages.push(log.message);
         });
       }

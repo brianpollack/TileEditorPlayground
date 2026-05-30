@@ -966,6 +966,32 @@ export function PersonalityManager() {
         </div>
 
         <Panel
+          actions={
+            activePersonality ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  className={actionButtonClass}
+                  disabled={!activePersonality}
+                  onClick={() => {
+                    window.location.hash = "#/character-events";
+                  }}
+                  type="button"
+                >
+                  View / Edit Events
+                </button>
+                <button
+                  className={secondaryButtonClass}
+                  disabled={!activePersonality}
+                  onClick={() => {
+                    window.location.hash = "#/personality-events";
+                  }}
+                  type="button"
+                >
+                  View / Edit LLM Chat Tools
+                </button>
+              </div>
+            ) : null
+          }
           className="xl:h-[calc(100vh-7rem)]"
           description={
             activePersonality
@@ -993,26 +1019,6 @@ export function PersonalityManager() {
                     : isSubmittingRandomizePrompt
                       ? "Randomizing..."
                       : "Randomize through OpenRouter"}
-                </button>
-                <button
-                  className={secondaryButtonClass}
-                  disabled={!activePersonality}
-                  onClick={() => {
-                    window.location.hash = "#/personality-events";
-                  }}
-                  type="button"
-                >
-                  View / Edit LLM Chat Tools
-                </button>
-                <button
-                  className={secondaryButtonClass}
-                  disabled={!activePersonality}
-                  onClick={() => {
-                    window.location.hash = "#/character-events";
-                  }}
-                  type="button"
-                >
-                  View / Edit Events
                 </button>
                 {randomizeStatus ? <div className="text-sm text-[#b42318]">{randomizeStatus}</div> : null}
               </div>

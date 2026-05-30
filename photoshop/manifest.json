@@ -1,0 +1,64 @@
+{
+  "id": "vax.game.tools",
+  "name": "Vax Game Tools",
+  "version": "1.0.0",
+  "main": "index.html",
+  "manifestVersion": 5,
+  "host": [
+    {
+      "app": "PS",
+      "minVersion": "24.0.0"
+    }
+  ],
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "vax.game.tools.panel",
+      "label": {
+        "default": "Vax Game Tools"
+      }
+    }
+  ],
+  "requiredPermissions": [
+    {
+      "name": "launchProcess",
+      "reason": "Execute ExtendScript files"
+    },
+    {
+      "name": "allowCodeGenerationFromStrings",
+      "reason": "Execute ExtendScript"
+    },
+    {
+      "name": "localFileSystem",
+      "reason": "Read and write files"
+    }
+  ],
+  "icons": [
+    {
+      "width": 23,
+      "height": 23,
+      "path": "icons/icon-light.png",
+      "scale": [
+        1,
+        2
+      ],
+      "theme": [
+        "lightest",
+        "light"
+      ]
+    },
+    {
+      "width": 23,
+      "height": 23,
+      "path": "icons/icon-dark.png",
+      "scale": [
+        1,
+        2
+      ],
+      "theme": [
+        "dark",
+        "darkest"
+      ]
+    }
+  ]
+}

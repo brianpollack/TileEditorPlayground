@@ -5,6 +5,8 @@ export const ITEM_NUMBER_FIELDS = [
   "durability",
   "gives_light",
   "level",
+  "max_qty",
+  "max_stack",
   "storage_capacity"
 ] as const;
 export const ITEM_TEXT_FIELDS = [

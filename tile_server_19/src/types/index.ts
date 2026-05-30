@@ -87,6 +87,7 @@ export interface TileRecord {
 }
 
 export interface SpriteRecord {
+  activation_distance: number;
   bounding_h: number;
   bounding_w: number;
   bounding_x: number;
@@ -206,6 +207,8 @@ export interface ItemRecord {
   layer: number | null;
   level: number | null;
   long_description: string | null;
+  max_qty: number | null;
+  max_stack: number | null;
   model: string | null;
   mount_point: string | null;
   name: string;

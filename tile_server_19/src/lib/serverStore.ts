@@ -224,6 +224,8 @@ interface StoredItemRow {
   layer: number | null;
   level: number | null;
   long_description: string | null;
+  max_qty: number | null;
+  max_stack: number | null;
   model: string | null;
   mount_point: string | null;
   name: string;
@@ -1076,6 +1078,8 @@ function mapRowToItemRecord(row: StoredItemRow): ItemRecord {
     layer: normalizeOptionalNumber(row.layer),
     level: normalizeOptionalNumber(row.level),
     long_description: normalizeOptionalText(row.long_description),
+    max_qty: normalizeOptionalNumber(row.max_qty),
+    max_stack: normalizeOptionalNumber(row.max_stack),
     model: normalizeOptionalText(row.model),
     mount_point: normalizeOptionalText(row.mount_point),
     name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : `Item ${row.id}`,
@@ -1414,6 +1418,7 @@ function createInitialSpriteRecord(relativePath: string, fileName: string, image
 
   return applySpriteImageMetrics(
     {
+      activation_distance: 1,
       bounding_h: height,
       bounding_w: width,
       bounding_x: -defaultMount.mount_x,
@@ -1461,6 +1466,7 @@ function normalizeSpriteRecord(record: SpriteRecord): SpriteRecord {
       : "";
 
   return {
+    activation_distance: Math.max(1, Math.round(normalizeFiniteNumber(record.activation_distance, 1))),
     bounding_h: Math.max(0, normalizeFiniteNumber(record.bounding_h, imageHeight)),
     bounding_w: Math.max(0, normalizeFiniteNumber(record.bounding_w, imageWidth)),
     bounding_x: normalizeFiniteNumber(record.bounding_x, -mountX),
@@ -1503,6 +1509,7 @@ function parseSpriteRecord(relativePath: string, jsonFileName: string, candidate
 
   try {
     return normalizeSpriteRecord({
+      activation_distance: normalizeFiniteNumber(record.activation_distance, 1),
       bounding_h: normalizeFiniteNumber(record.bounding_h, fallbackImageHeight),
       bounding_w: normalizeFiniteNumber(record.bounding_w, fallbackImageWidth),
       bounding_x: normalizeFiniteNumber(record.bounding_x, -defaultMount.mount_x),
@@ -1537,6 +1544,7 @@ function serializeStoredSpriteRecord(spriteRecord: SpriteRecord): StoredSpriteRe
   const normalized = normalizeSpriteRecord(spriteRecord);
 
   return {
+    activation_distance: normalized.activation_distance,
     bounding_h: normalized.bounding_h,
     bounding_w: normalized.bounding_w,
     bounding_x: normalized.bounding_x,
@@ -4247,9 +4255,11 @@ export async function randomizePersonalityThroughOpenRouter(characterSlug: strin
 export async function fixLuaScriptThroughOpenRouter(input: {
   luaScript: string;
   toolDefinition: unknown;
+  userDescription?: string;
 }) {
   const luaScript = typeof input.luaScript === "string" ? input.luaScript : "";
   const toolDefinitionJson = JSON.stringify(input.toolDefinition ?? {}, null, 2);
+  const userDescription = typeof input.userDescription === "string" ? input.userDescription.trim() : "";
   const apiKey = getOpenRouterApiKey();
 
   if (!apiKey) {
@@ -4258,7 +4268,10 @@ export async function fixLuaScriptThroughOpenRouter(input: {
 
   const scriptingGuideMarkdown = await loadLuaScriptingGuideMarkdown();
   const scriptingGuideDataUrl = createSimpleTextPdfDataUrl(scriptingGuideMarkdown);
-  const prompt = `Review the programming guide at http://localhost:5173/__lua/scripting-guide and fix the lua script here.  Output only the revised lua script.  Here is the Tool Definition: ${toolDefinitionJson} Here is the existing Lua: ${luaScript}.  Remember to output only fixed LUA Script.`;
+  const userDescriptionSection = userDescription
+    ? `The user has the following request: ${userDescription}\n\n`
+    : "";
+  const prompt = `Review the programming guide at http://localhost:5173/__lua/scripting-guide and fix the lua script here.  Output only the revised lua script.  ${userDescriptionSection}Here is the Tool Definition: ${toolDefinitionJson} Here is the existing Lua: ${luaScript}.  Remember to output only fixed LUA Script.`;
   let response: Response;
 
   try {
@@ -4786,6 +4799,8 @@ function mapApiItemToItemRecord(item: Partial<StoredItemRow>) {
     layer: normalizeOptionalNumber(item.layer),
     level: normalizeOptionalNumber(item.level),
     long_description: normalizeOptionalText(item.long_description),
+    max_qty: normalizeOptionalNumber(item.max_qty),
+    max_stack: normalizeOptionalNumber(item.max_stack),
     model: normalizeOptionalText(item.model),
     mount_point: normalizeOptionalText(item.mount_point),
     name: normalizedName,

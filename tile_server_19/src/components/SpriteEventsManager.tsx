@@ -1,7 +1,7 @@
 "use client";
 
 import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-lua";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
@@ -37,6 +37,8 @@ import {
   assetListSubtitleClass,
   assetListTitleClass,
   emptyStateCardClass,
+  modalBackdropClass,
+  modalSurfaceClass,
   secondaryButtonClass,
   statusChipClass
 } from "./uiStyles";
@@ -58,6 +60,9 @@ export function SpriteEventsManager() {
   const { activeSprite } = useStudio();
   const [isAiLuaFixing, setAiLuaFixing] = useState(false);
   const [aiLuaReview, setAiLuaReview] = useState<AiLuaReviewState | null>(null);
+  const [isAiLuaPromptOpen, setAiLuaPromptOpen] = useState(false);
+  const [aiLuaUserDescription, setAiLuaUserDescription] = useState("");
+  const aiLuaPromptTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const {
     enableBasicAutocompletion,
     enableLiveAutocompletion,
@@ -154,6 +159,16 @@ export function SpriteEventsManager() {
       return;
     }
 
+    setAiLuaUserDescription("");
+    setAiLuaPromptOpen(true);
+  }
+
+  function submitAiLuaFix() {
+    if (!activeEventOption || isAiLuaFixing) {
+      return;
+    }
+
+    setAiLuaPromptOpen(false);
     setAiLuaFixing(true);
     setLuaAnnotations([]);
     setStatus("");
@@ -164,7 +179,8 @@ export function SpriteEventsManager() {
         context: "sprite",
         event: activeEventOption.eventName,
         definition: activeEventOption.definition
-      }
+      },
+      userDescription: aiLuaUserDescription
     })
       .then((result) => {
         setAiLuaReview({
@@ -404,6 +420,40 @@ export function SpriteEventsManager() {
           )}
         </Panel>
       </div>
+      {isAiLuaPromptOpen ? (
+        <div className={modalBackdropClass}>
+          <div className={`${modalSurfaceClass} max-w-lg p-5`}>
+            <div className="grid gap-4">
+              <strong className="font-serif text-[1.45rem] theme-text-primary">AI Lua</strong>
+              <textarea
+                className="min-h-[8rem] w-full border theme-border-panel theme-bg-input p-3 text-sm theme-text-primary outline-none transition theme-focus-border-accent"
+                onChange={(event) => {
+                  setAiLuaUserDescription(event.currentTarget.value);
+                }}
+                placeholder="Describe what you want the AI to do..."
+                ref={aiLuaPromptTextareaRef}
+                value={aiLuaUserDescription}
+              />
+              <div className="flex justify-end gap-3">
+                <button
+                  className={secondaryButtonClass}
+                  onClick={() => { setAiLuaPromptOpen(false); }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className={actionButtonClass}
+                  onClick={submitAiLuaFix}
+                  type="button"
+                >
+                  Submit
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {aiLuaReview ? (
         <AiLuaDiffReview
           onDecline={handleDeclineAiLuaChanges}

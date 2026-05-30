@@ -1,7 +1,7 @@
 "use client";
 
 import { faChevronLeft } from "@awesome.me/kit-a62459359b/icons/classic/solid";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Ace } from "ace-builds";
 import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-json";
@@ -36,6 +36,8 @@ import {
   assetListTitleClass,
   compactTextInputClass,
   emptyStateCardClass,
+  modalBackdropClass,
+  modalSurfaceClass,
   secondaryButtonClass,
   statusChipClass,
   textInputClass
@@ -93,6 +95,9 @@ export function PersonalityEventsManager() {
   const [isFormattingToolJson, setFormattingToolJson] = useState(false);
   const [isAiLuaFixing, setAiLuaFixing] = useState(false);
   const [aiLuaReview, setAiLuaReview] = useState<AiLuaReviewState | null>(null);
+  const [isAiLuaPromptOpen, setAiLuaPromptOpen] = useState(false);
+  const [aiLuaUserDescription, setAiLuaUserDescription] = useState("");
+  const aiLuaPromptTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [luaAnnotations, setLuaAnnotations] = useState<Ace.Annotation[]>([]);
   const [status, setStatus] = useState("");
 
@@ -321,6 +326,15 @@ export function PersonalityEventsManager() {
       return;
     }
 
+    setAiLuaUserDescription("");
+    setAiLuaPromptOpen(true);
+  }
+
+  function submitAiLuaFix() {
+    if (!activeEvent || isAiLuaFixing) {
+      return;
+    }
+
     let eventDetails: Record<string, unknown>;
 
     try {
@@ -330,13 +344,15 @@ export function PersonalityEventsManager() {
       return;
     }
 
+    setAiLuaPromptOpen(false);
     setAiLuaFixing(true);
     setLuaAnnotations([]);
     setStatus("");
 
     void fixLuaScriptWithAiAction({
       luaScript: draft.luaScript,
-      toolDefinition: eventDetails
+      toolDefinition: eventDetails,
+      userDescription: aiLuaUserDescription
     })
       .then((result) => {
         setAiLuaReview({
@@ -721,6 +737,40 @@ export function PersonalityEventsManager() {
           )}
         </Panel>
       </div>
+      {isAiLuaPromptOpen ? (
+        <div className={modalBackdropClass}>
+          <div className={`${modalSurfaceClass} max-w-lg p-5`}>
+            <div className="grid gap-4">
+              <strong className="font-serif text-[1.45rem] theme-text-primary">AI Lua</strong>
+              <textarea
+                className="min-h-[8rem] w-full border theme-border-panel theme-bg-input p-3 text-sm theme-text-primary outline-none transition theme-focus-border-accent"
+                onChange={(event) => {
+                  setAiLuaUserDescription(event.currentTarget.value);
+                }}
+                placeholder="Describe what you want the AI to do..."
+                ref={aiLuaPromptTextareaRef}
+                value={aiLuaUserDescription}
+              />
+              <div className="flex justify-end gap-3">
+                <button
+                  className={secondaryButtonClass}
+                  onClick={() => { setAiLuaPromptOpen(false); }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className={actionButtonClass}
+                  onClick={submitAiLuaFix}
+                  type="button"
+                >
+                  Submit
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {aiLuaReview ? (
         <AiLuaDiffReview
           onDecline={handleDeclineAiLuaChanges}
