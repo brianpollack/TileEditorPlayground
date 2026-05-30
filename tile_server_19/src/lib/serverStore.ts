@@ -5681,38 +5681,51 @@ export async function readMapRecords() {
   }
 
   return storedMaps.map((storedMap) => {
-    const layers = createEmptyMapLayers(storedMap.width, storedMap.height);
+    const width = normalizeMapDimension(storedMap.width);
+    const height = normalizeMapDimension(storedMap.height);
+    const layers = createEmptyMapLayers(width, height);
     const placements = placementsByMapId.get(storedMap.id) ?? [];
 
     for (const placement of placements) {
+      const layerIndex = Number(placement.layer_index);
+      const tileX = Number(placement.tile_x);
+      const tileY = Number(placement.tile_y);
+
       if (
-        placement.layer_index < 0 ||
-        placement.layer_index >= layers.length ||
-        placement.tile_y < 0 ||
-        placement.tile_y >= storedMap.height ||
-        placement.tile_x < 0 ||
-        placement.tile_x >= storedMap.width
+        !Number.isInteger(layerIndex) ||
+        !Number.isInteger(tileX) ||
+        !Number.isInteger(tileY) ||
+        layerIndex < 0 ||
+        layerIndex >= layers.length ||
+        tileY < 0 ||
+        tileY >= height ||
+        tileX < 0 ||
+        tileX >= width
       ) {
         continue;
       }
 
-      layers[placement.layer_index][placement.tile_y][placement.tile_x] = createMapPlacementFromRow(
-        placement
-      );
+      const row = layers[layerIndex]?.[tileY];
+
+      if (!row) {
+        continue;
+      }
+
+      row[tileX] = createMapPlacementFromRow(placement);
     }
 
     return normalizeMapRecord({
       aboutPrompt: storedMap.about_prompt ?? "",
-      cells: flattenMapLayers(layers, storedMap.width, storedMap.height),
-      height: storedMap.height,
+      cells: flattenMapLayers(layers, width, height),
+      height,
       isInstance: storedMap.is_instance,
       layers,
       miniMap: bufferToPngDataUrl(storedMap.mini_map),
       name: storedMap.name,
-      special: normalizeMapSpecialGrid(decodeStoredMapSpecialGrid(storedMap.special_grid), storedMap.width, storedMap.height),
+      special: normalizeMapSpecialGrid(decodeStoredMapSpecialGrid(storedMap.special_grid), width, height),
       slug: storedMap.slug,
       updatedAt: serializeStoredTimestamp(storedMap.updated_at),
-      width: storedMap.width
+      width
     });
   });
 }
